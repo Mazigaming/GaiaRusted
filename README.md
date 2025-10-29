@@ -227,7 +227,6 @@ cargo fmt && cargo clippy -- -D warnings
 | Platform | Status | Requirements |
 | --- | --- | --- |
 | Linux (x86-64) | ✅ Stable | gcc, binutils |
-| macOS (x86-64) | ⚠️ Partial | Xcode command line tools |
 | Windows (x86-64) | ⚠️ Partial | MSVC or MinGW |
 
 * * *
