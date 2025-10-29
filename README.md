@@ -1,3 +1,5 @@
+**GaiaRusted**
+------------
 A complete Rust compiler implementation built from scratch in pure Rust with zero external dependencies. Converts Rust source code to multiple output formats including Assembly, Object files, Executables, and Libraries.
 
 **v0.0.1** | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture)
