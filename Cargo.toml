@@ -1,0 +1,42 @@
+[package]
+name = "gaiarusted"
+version = "0.0.1"
+edition = "2021"
+description = "A complete Rust compiler implementation built from scratch"
+license = "MIT"
+repository = "https://github.com/Mazigaming/GaiaRusted"
+readme = "README.md"
+keywords = ["compiler", "rust", "codegen", "llvm-alternative"]
+categories = ["development-tools::compiler"]
+
+[lib]
+name = "gaiarusted"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gaiarusted"
+path = "src/bin/gaiarusted.rs"
+
+[dependencies]
+
+[dev-dependencies]
+
+[[test]]
+name = "config_tests"
+path = "tests/config_tests.rs"
+
+[[test]]
+name = "borrowchecker_tests"
+path = "tests/borrowchecker_tests.rs"
+
+[[test]]
+name = "mir_tests"
+path = "tests/mir_tests.rs"
+
+[[test]]
+name = "codegen_tests"
+path = "tests/codegen_tests.rs"
+
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests.rs"
