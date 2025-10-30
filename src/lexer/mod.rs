@@ -24,7 +24,7 @@
 //!
 //! ## The Lexer Algorithm
 //!
-//! ```
+//! ```text
 //! function lex(source):
 //!     tokens = []
 //!     position = 0

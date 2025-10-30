@@ -133,7 +133,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     match mir::lower_to_mir(&all_hir_items) {
         Ok(mir_items) => {
             let mut optimized_mir = mir_items.clone();
-            if let Err(e) = mir::optimize_mir(&mut optimized_mir) {
+            if let Err(e) = mir::optimize_mir(&mut optimized_mir, config.opt_level) {
                 errors.push(CompileError {
                     phase: "MIR Optimization".to_string(),
                     message: e.to_string(),

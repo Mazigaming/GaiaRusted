@@ -6,7 +6,7 @@
 //!
 //! The parser uses **recursive descent** with **precedence climbing** for expressions:
 //!
-//! ```
+//! ```text
 //! program        → item*
 //! item           → fn_def | struct_def
 //! fn_def         → FN IDENT ( params? ) ( -> type )? block

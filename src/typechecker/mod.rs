@@ -136,9 +136,37 @@ pub struct TypeChecker {
 impl TypeChecker {
     /// Create a new type checker
     pub fn new() -> Self {
-        TypeChecker {
+        let mut checker = TypeChecker {
             context: TypeContext::new(),
-        }
+        };
+        checker.register_builtin_functions();
+        checker
+    }
+
+    /// Register all built-in functions
+    fn register_builtin_functions(&mut self) {
+        // Math functions
+        self.context.register_function("abs".to_string(), vec![HirType::Int32], HirType::Int32);
+        self.context.register_function("min".to_string(), vec![HirType::Int32, HirType::Int32], HirType::Int32);
+        self.context.register_function("max".to_string(), vec![HirType::Int32, HirType::Int32], HirType::Int32);
+        self.context.register_function("pow".to_string(), vec![HirType::Int64, HirType::Int64], HirType::Int64);
+        self.context.register_function("sqrt".to_string(), vec![HirType::Float64], HirType::Float64);
+        self.context.register_function("floor".to_string(), vec![HirType::Float64], HirType::Float64);
+        self.context.register_function("ceil".to_string(), vec![HirType::Float64], HirType::Float64);
+        self.context.register_function("round".to_string(), vec![HirType::Float64], HirType::Float64);
+
+        // String/Array functions
+        self.context.register_function("len".to_string(), vec![HirType::String], HirType::Int32);
+
+        // I/O functions
+        self.context.register_function("print".to_string(), vec![HirType::String], HirType::Unknown);
+        self.context.register_function("println".to_string(), vec![HirType::String], HirType::Unknown);
+        self.context.register_function("eprintln".to_string(), vec![HirType::String], HirType::Unknown);
+
+        // Type conversions
+        self.context.register_function("as_i32".to_string(), vec![HirType::Float64], HirType::Int32);
+        self.context.register_function("as_i64".to_string(), vec![HirType::Float64], HirType::Int64);
+        self.context.register_function("as_f64".to_string(), vec![HirType::Int32], HirType::Float64);
     }
 
     /// Collect all type definitions (first pass)

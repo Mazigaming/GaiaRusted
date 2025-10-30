@@ -47,9 +47,17 @@ pub mod mir;
 pub mod codegen;
 pub mod config;
 pub mod compiler;
+pub mod error_reporting;
+pub mod builtins;
+pub mod profiling;
+pub mod colors;  // v0.0.3: Color support for CLI output
 
 pub use config::{CompilationConfig, OutputFormat};
 pub use compiler::{compile_files, CompilationResult, CompileError};
+pub use error_reporting::{Diagnostic, ErrorReporter, SourceLocation, Severity};
+pub use builtins::BuiltinFunction;
+pub use profiling::{Profiler, CompilationStats as ProfileStats};
+pub use colors::{Color, Colored};  // v0.0.3: Export color types
 
 /// Compilation statistics
 #[derive(Debug, Clone)]

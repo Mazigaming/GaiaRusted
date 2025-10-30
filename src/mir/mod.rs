@@ -740,19 +740,402 @@ impl MirLowerer {
     }
 }
 
-/// Simple MIR optimizer
+use std::collections::{HashMap, HashSet};
+
+/// Simple MIR optimizer with multiple passes based on optimization level
 pub struct MirOptimizer;
 
 impl MirOptimizer {
-    /// Optimize MIR (currently does constant folding)
-    pub fn optimize(mir: &mut Mir) -> MirResult<()> {
+    /// Optimize MIR with passes based on optimization level (1-3)
+    pub fn optimize(mir: &mut Mir, opt_level: u32) -> MirResult<()> {
+        if opt_level == 0 {
+            return Ok(()); // No optimizations
+        }
+
         for func in &mut mir.functions {
-            for block in &mut func.basic_blocks {
-                // Remove dead assignments (simplified)
-                block.statements.retain(|_| true); // In full version, would analyze usage
+            // O1+ passes
+            Self::constant_fold(&mut func.basic_blocks)?;
+            Self::dead_code_elimination(&mut func.basic_blocks)?;
+
+            // O2+ passes
+            if opt_level >= 2 {
+                Self::simplify_control_flow(&mut func.basic_blocks)?;
+            }
+
+            // O3 passes
+            if opt_level >= 3 {
+                Self::copy_propagation(&mut func.basic_blocks)?;
             }
         }
         Ok(())
+    }
+
+    /// O1 Pass: Constant Folding - Evaluate constant expressions at compile time
+    fn constant_fold(blocks: &mut [BasicBlock]) -> MirResult<()> {
+        for block in blocks {
+            for stmt in &mut block.statements {
+                if let Rvalue::BinaryOp(op, left, right) = &stmt.rvalue {
+                    // Only fold if both operands are constants
+                    if let (Operand::Constant(l), Operand::Constant(r)) = (left, right) {
+                        if let Some(result) = Self::fold_binary_op(op, l, r) {
+                            stmt.rvalue = Rvalue::Use(Operand::Constant(result));
+                        }
+                    }
+                } else if let Rvalue::UnaryOp(op, operand) = &stmt.rvalue {
+                    if let Operand::Constant(val) = operand {
+                        if let Some(result) = Self::fold_unary_op(op, val) {
+                            stmt.rvalue = Rvalue::Use(Operand::Constant(result));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fold binary operations with constant operands
+    fn fold_binary_op(op: &BinaryOp, left: &Constant, right: &Constant) -> Option<Constant> {
+        match (left, right) {
+            (Constant::Integer(l), Constant::Integer(r)) => {
+                Some(match op {
+                    BinaryOp::Add => Constant::Integer(l + r),
+                    BinaryOp::Subtract => Constant::Integer(l - r),
+                    BinaryOp::Multiply => Constant::Integer(l * r),
+                    BinaryOp::Divide => {
+                        if *r != 0 {
+                            Constant::Integer(l / r)
+                        } else {
+                            return None;
+                        }
+                    }
+                    BinaryOp::Modulo => {
+                        if *r != 0 {
+                            Constant::Integer(l % r)
+                        } else {
+                            return None;
+                        }
+                    }
+                    BinaryOp::Equal => Constant::Bool(l == r),
+                    BinaryOp::NotEqual => Constant::Bool(l != r),
+                    BinaryOp::Less => Constant::Bool(l < r),
+                    BinaryOp::LessEqual => Constant::Bool(l <= r),
+                    BinaryOp::Greater => Constant::Bool(l > r),
+                    BinaryOp::GreaterEqual => Constant::Bool(l >= r),
+                    BinaryOp::And => Constant::Bool(*l != 0 && *r != 0),
+                    BinaryOp::Or => Constant::Bool(*l != 0 || *r != 0),
+                    BinaryOp::BitwiseXor => Constant::Integer(l ^ r),
+                    BinaryOp::BitwiseAnd => Constant::Integer(l & r),
+                    BinaryOp::BitwiseOr => Constant::Integer(l | r),
+                    BinaryOp::LeftShift => Constant::Integer(l << r),
+                    BinaryOp::RightShift => Constant::Integer(l >> r),
+                })
+            }
+            (Constant::Float(l), Constant::Float(r)) => {
+                Some(match op {
+                    BinaryOp::Add => Constant::Float(l + r),
+                    BinaryOp::Subtract => Constant::Float(l - r),
+                    BinaryOp::Multiply => Constant::Float(l * r),
+                    BinaryOp::Divide => {
+                        if *r != 0.0 {
+                            Constant::Float(l / r)
+                        } else {
+                            return None;
+                        }
+                    }
+                    BinaryOp::Equal => Constant::Bool((l - r).abs() < f64::EPSILON),
+                    BinaryOp::NotEqual => Constant::Bool((l - r).abs() >= f64::EPSILON),
+                    BinaryOp::Less => Constant::Bool(l < r),
+                    BinaryOp::LessEqual => Constant::Bool(l <= r),
+                    BinaryOp::Greater => Constant::Bool(l > r),
+                    BinaryOp::GreaterEqual => Constant::Bool(l >= r),
+                    _ => return None, // Other ops don't apply to floats
+                })
+            }
+            (Constant::String(l), Constant::String(r)) => {
+                match op {
+                    BinaryOp::Add => Some(Constant::String(format!("{}{}", l, r))),
+                    BinaryOp::Equal => Some(Constant::Bool(l == r)),
+                    BinaryOp::NotEqual => Some(Constant::Bool(l != r)),
+                    _ => None,
+                }
+            }
+            (Constant::Bool(l), Constant::Bool(r)) => {
+                match op {
+                    BinaryOp::And => Some(Constant::Bool(*l && *r)),
+                    BinaryOp::Or => Some(Constant::Bool(*l || *r)),
+                    BinaryOp::Equal => Some(Constant::Bool(l == r)),
+                    BinaryOp::NotEqual => Some(Constant::Bool(l != r)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Fold unary operations with constant operands
+    fn fold_unary_op(op: &UnaryOp, val: &Constant) -> Option<Constant> {
+        match (op, val) {
+            (UnaryOp::Negate, Constant::Integer(n)) => Some(Constant::Integer(-n)),
+            (UnaryOp::Negate, Constant::Float(f)) => Some(Constant::Float(-f)),
+            (UnaryOp::Not, Constant::Bool(b)) => Some(Constant::Bool(!b)),
+            (UnaryOp::BitwiseNot, Constant::Integer(n)) => Some(Constant::Integer(!n)),
+            _ => None,
+        }
+    }
+
+    /// O1 Pass: Dead Code Elimination - Remove unused variable assignments
+    fn dead_code_elimination(blocks: &mut [BasicBlock]) -> MirResult<()> {
+        // First pass: collect all used places
+        let mut used_places = HashSet::new();
+
+        // Mark all operands in terminators as used
+        for block in blocks.iter() {
+            match &block.terminator {
+                Terminator::If(cond, _, _) => {
+                    Self::collect_places_from_operand(cond, &mut used_places);
+                }
+                Terminator::Return(Some(operand)) => {
+                    Self::collect_places_from_operand(operand, &mut used_places);
+                }
+                _ => {}
+            }
+        }
+
+        // Mark all operands in statements (right-hand side)
+        for block in blocks.iter() {
+            for stmt in &block.statements {
+                Self::collect_places_from_rvalue(&stmt.rvalue, &mut used_places);
+            }
+        }
+
+        // Second pass: remove statements that assign to unused places
+        for block in blocks {
+            block.statements.retain(|stmt| {
+                // Keep statement if its target is used, or if it has side effects
+                used_places.contains(&stmt.place) || Self::has_side_effects(&stmt.rvalue)
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Collect places from an operand
+    fn collect_places_from_operand(operand: &Operand, places: &mut HashSet<Place>) {
+        match operand {
+            Operand::Move(place) | Operand::Copy(place) => {
+                places.insert(place.clone());
+            }
+            Operand::Constant(_) => {}
+        }
+    }
+
+    /// Collect places from an rvalue
+    fn collect_places_from_rvalue(rvalue: &Rvalue, places: &mut HashSet<Place>) {
+        match rvalue {
+            Rvalue::Use(op) => Self::collect_places_from_operand(op, places),
+            Rvalue::BinaryOp(_, l, r) => {
+                Self::collect_places_from_operand(l, places);
+                Self::collect_places_from_operand(r, places);
+            }
+            Rvalue::UnaryOp(_, op) => Self::collect_places_from_operand(op, places),
+            Rvalue::Call(_, args) => {
+                for arg in args {
+                    Self::collect_places_from_operand(arg, places);
+                }
+            }
+            Rvalue::Aggregate(_, operands) | Rvalue::Array(operands) => {
+                for operand in operands {
+                    Self::collect_places_from_operand(operand, places);
+                }
+            }
+            Rvalue::Ref(place) | Rvalue::Deref(place) | Rvalue::Field(place, _) | Rvalue::Index(place, _) => {
+                places.insert(place.clone());
+            }
+        }
+    }
+
+    /// Check if an rvalue has side effects (function calls, memory operations)
+    fn has_side_effects(rvalue: &Rvalue) -> bool {
+        match rvalue {
+            Rvalue::Call(_, _) => true, // Function calls always have potential side effects
+            Rvalue::Ref(_) => true,     // Creating references has side effects
+            _ => false,
+        }
+    }
+
+    /// O2 Pass: Simplify Control Flow - Remove redundant gotos and merge blocks
+    fn simplify_control_flow(blocks: &mut Vec<BasicBlock>) -> MirResult<()> {
+        let mut changed = true;
+        while changed {
+            changed = false;
+
+            // Remove chains of gotos (goto -> goto -> dest becomes goto -> dest)
+            for i in 0..blocks.len() {
+                if let Terminator::Goto(target) = blocks[i].terminator {
+                    if target < blocks.len() {
+                        let final_target = Self::follow_goto_chain(blocks, target);
+                        if final_target != target {
+                            blocks[i].terminator = Terminator::Goto(final_target);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // Merge consecutive blocks when possible
+            let mut to_merge = Vec::new();
+            for i in 0..blocks.len() {
+                if let Terminator::Goto(target) = blocks[i].terminator {
+                    if target == i + 1 && i + 1 < blocks.len() {
+                        // Check if only this block jumps to the next one
+                        let only_predecessor = blocks.iter().enumerate().all(|(j, b)| {
+                            if j == i {
+                                true
+                            } else {
+                                match &b.terminator {
+                                    Terminator::Goto(t) => *t != i + 1,
+                                    Terminator::If(_, t, e) => *t != i + 1 && *e != i + 1,
+                                    _ => true,
+                                }
+                            }
+                        });
+
+                        if only_predecessor && blocks[i].statements.iter().all(|s| !Self::has_side_effects(&s.rvalue)) {
+                            to_merge.push(i);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            // Perform merges in reverse order to maintain indices
+            for i in to_merge.iter().rev() {
+                if *i + 1 < blocks.len() {
+                    let mut next_block = blocks.remove(*i + 1);
+                    blocks[*i].statements.append(&mut next_block.statements);
+                    blocks[*i].terminator = next_block.terminator;
+                }
+            }
+
+            // Update references after merging
+            Self::update_block_references(blocks);
+        }
+
+        Ok(())
+    }
+
+    /// Follow a chain of goto statements to find the final target
+    fn follow_goto_chain(blocks: &[BasicBlock], mut target: usize) -> usize {
+        loop {
+            if target >= blocks.len() {
+                break;
+            }
+            if let Terminator::Goto(next) = blocks[target].terminator {
+                if next == target {
+                    // Infinite loop, stop
+                    break;
+                }
+                target = next;
+            } else {
+                break;
+            }
+        }
+        target
+    }
+
+    /// Update block reference indices after removing blocks
+    fn update_block_references(blocks: &mut [BasicBlock]) {
+        // This is a simplified version - in practice would need to track removed blocks
+        let max_idx = blocks.len().saturating_sub(1);
+        for block in blocks.iter_mut() {
+            match &mut block.terminator {
+                Terminator::Goto(ref mut t) => {
+                    *t = (*t).min(max_idx);
+                }
+                Terminator::If(_, ref mut then_bb, ref mut else_bb) => {
+                    *then_bb = (*then_bb).min(max_idx);
+                    *else_bb = (*else_bb).min(max_idx);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// O3 Pass: Copy Propagation - Replace variables with their definitions
+    fn copy_propagation(blocks: &mut [BasicBlock]) -> MirResult<()> {
+        // Build a map of: place -> place it was assigned from (for simple copies)
+        let mut copy_map: HashMap<Place, Operand> = HashMap::new();
+
+        // First pass: identify copy assignments
+        for block in blocks.iter() {
+            for stmt in &block.statements {
+                match &stmt.rvalue {
+                    Rvalue::Use(op @ (Operand::Copy(_) | Operand::Move(_))) => {
+                        copy_map.insert(stmt.place.clone(), op.clone());
+                    }
+                    _ => {} // Not a simple copy
+                }
+            }
+        }
+
+        // Second pass: replace uses of copied variables
+        for block in blocks {
+            for stmt in &mut block.statements {
+                Self::substitute_operands(&mut stmt.rvalue, &copy_map);
+            }
+
+            match &mut block.terminator {
+                Terminator::If(op, _, _) => {
+                    if let Operand::Move(ref mut place) | Operand::Copy(ref mut place) = op {
+                        if let Some(Operand::Copy(orig) | Operand::Move(orig)) = copy_map.get(place) {
+                            *place = orig.clone();
+                        }
+                    }
+                }
+                Terminator::Return(Some(op)) => {
+                    if let Operand::Move(ref mut place) | Operand::Copy(ref mut place) = op {
+                        if let Some(Operand::Copy(orig) | Operand::Move(orig)) = copy_map.get(place) {
+                            *place = orig.clone();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Substitute operands in an rvalue using the copy map
+    fn substitute_operands(rvalue: &mut Rvalue, copy_map: &HashMap<Place, Operand>) {
+        match rvalue {
+            Rvalue::Use(op) => Self::substitute_operand(op, copy_map),
+            Rvalue::BinaryOp(_, l, r) => {
+                Self::substitute_operand(l, copy_map);
+                Self::substitute_operand(r, copy_map);
+            }
+            Rvalue::UnaryOp(_, op) => Self::substitute_operand(op, copy_map),
+            Rvalue::Call(_, args) => {
+                for arg in args {
+                    Self::substitute_operand(arg, copy_map);
+                }
+            }
+            Rvalue::Aggregate(_, operands) | Rvalue::Array(operands) => {
+                for operand in operands {
+                    Self::substitute_operand(operand, copy_map);
+                }
+            }
+            _ => {} // No operand substitution needed for Ref, Deref, Field, Index
+        }
+    }
+
+    /// Substitute an operand if it's a copied variable
+    fn substitute_operand(operand: &mut Operand, copy_map: &HashMap<Place, Operand>) {
+        if let Operand::Copy(place) | Operand::Move(place) = operand {
+            if let Some(replacement) = copy_map.get(place) {
+                *operand = replacement.clone();
+            }
+        }
     }
 }
 
@@ -762,7 +1145,7 @@ pub fn lower_to_mir(items: &[HirItem]) -> MirResult<Mir> {
     lowerer.lower_items(items)
 }
 
-/// Public API: Optimize MIR
-pub fn optimize_mir(mir: &mut Mir) -> MirResult<()> {
-    MirOptimizer::optimize(mir)
+/// Public API: Optimize MIR with specified optimization level (1-3)
+pub fn optimize_mir(mir: &mut Mir, opt_level: u32) -> MirResult<()> {
+    MirOptimizer::optimize(mir, opt_level)
 }
