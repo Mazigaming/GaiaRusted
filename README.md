@@ -698,7 +698,8 @@ Supported Language Features
 
 ### ✅ Implemented
 
-*   Primitive types: i32, i64, f64, bool, str
+**Core Language:**
+*   Primitive types: i32, i64, f64, bool, str, usize, isize
 *   Variables and assignments
 *   Arithmetic operators: +, -, *, /, %
 *   Comparison operators: ==, !=, <, <=, >, >=
@@ -710,22 +711,33 @@ Supported Language Features
 *   Function calls
 *   Comments
 
+**Advanced Features:**
+*   ✅ Pattern matching (literals, bindings, tuples, structs, ranges, or patterns, guards)
+*   ✅ Lifetimes (full lifetime inference and checking)
+*   ✅ Borrow checking (ownership, move semantics, immutable/mutable borrows)
+*   ✅ Module system with visibility control (pub, pub(crate), pub(super))
+*   ✅ Option<T> and Result<T, E> types
+*   ✅ Iterator combinators (map, filter, fold, take, skip, find, etc.)
+*   ✅ String methods (13 methods including split_whitespace, strip_prefix, etc.)
+*   ✅ Type inference (Hindley-Milner algorithm)
+*   ✅ Generics (partial support)
+*   ✅ Multiple output formats (ASM, Object, Executable, Library, Bash)
+
 ### 🚧 In Progress
 
-*   Pattern matching
-*   Trait definitions
-*   Generics
-*   Advanced type inference
-*   Lifetimes
+*   Full trait definitions and implementations
+*   Closures and lambda expressions
+*   Associated types and where clauses
+*   Macros and procedural macros
+*   Collections (Vec, HashMap, HashSet)
 
 ### 📋 Planned
 
-*   Modules and visibility
-*   Error handling (Option/Result)
-*   Closures
+*   Error propagation operator (?)
 *   Async/await
-*   Macro system
-*   Standard library
+*   Full generic constraints
+*   Smart pointers (Box, Rc, Arc, Mutex)
+*   Custom derive macros
 
 * * *
 
