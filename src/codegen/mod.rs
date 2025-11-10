@@ -20,8 +20,12 @@
 //! - RSP must be 16-byte aligned before call instruction
 
 pub mod object;
+pub mod monomorphization;
+pub mod backend;
+pub mod optimization;
 
 use crate::mir::{Mir, MirFunction, Statement, Terminator};
+use crate::runtime;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -100,12 +104,14 @@ impl fmt::Display for X86Operand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             X86Operand::Register(reg) => write!(f, "{}", reg),
-            X86Operand::Immediate(val) => write!(f, "${}", val),
+            X86Operand::Immediate(val) => write!(f, "{}", val),
             X86Operand::Memory { base, offset } => {
                 if *offset == 0 {
-                    write!(f, "({})", base)
+                    write!(f, "[{}]", base)
+                } else if *offset > 0 {
+                    write!(f, "[{} + {}]", base, offset)
                 } else {
-                    write!(f, "{}({})", offset, base)
+                    write!(f, "[{} - {}]", base, -offset)
                 }
             }
         }
@@ -243,7 +249,9 @@ impl Codegen {
         let mut asm = String::new();
         
         // Assembly header
+        asm.push_str(".intel_syntax noprefix\n");
         asm.push_str(".text\n");
+        asm.push_str(".globl gaia_main\n");
         asm.push_str(".globl main\n\n");
         
         // Generate code for each function
@@ -256,14 +264,27 @@ impl Codegen {
             asm.push_str(&format!("{}\n", instr));
         }
         
+        // Include runtime support
+        asm.push_str("\n");
+        asm.push_str(&runtime::generate_main_wrapper());
+        asm.push_str("\n");
+        asm.push_str(&runtime::generate_runtime_assembly());
+        
         Ok(asm)
     }
 
     /// Generate code for a function
     fn generate_function(&mut self, func: &MirFunction) -> CodegenResult<()> {
+        // Rename main to gaia_main for runtime wrapper
+        let func_name = if func.name == "main" {
+            "gaia_main".to_string()
+        } else {
+            func.name.clone()
+        };
+        
         // Function label
         self.instructions.push(X86Instruction::Label {
-            name: func.name.clone(),
+            name: func_name.clone(),
         });
         
         // Function prologue
@@ -284,7 +305,7 @@ impl Codegen {
         for (block_idx, block) in func.basic_blocks.iter().enumerate() {
             if block_idx > 0 {
                 self.instructions.push(X86Instruction::Label {
-                    name: format!("{}_bb{}", func.name, block_idx),
+                    name: format!("{}_bb{}", func_name, block_idx),
                 });
             }
             
@@ -311,17 +332,41 @@ impl Codegen {
                 }
                 Terminator::Goto(target) => {
                     self.instructions.push(X86Instruction::Jmp {
-                        label: format!("{}_bb{}", func.name, target),
+                        label: format!("{}_bb{}", func_name, target),
                     });
                 }
-                Terminator::If(_cond, then_target, else_target) => {
-                    // TODO: Implement conditional jump with condition evaluation
-                    self.instructions.push(X86Instruction::Jne {
-                        label: format!("{}_bb{}", func.name, then_target),
-                    });
-                    self.instructions.push(X86Instruction::Jmp {
-                        label: format!("{}_bb{}", func.name, else_target),
-                    });
+                Terminator::If(cond, then_target, else_target) => {
+                    match cond {
+                        crate::mir::Operand::Constant(crate::mir::Constant::Bool(b)) => {
+                            if *b {
+                                self.instructions.push(X86Instruction::Jmp {
+                                    label: format!("{}_bb{}", func_name, then_target),
+                                });
+                            } else {
+                                self.instructions.push(X86Instruction::Jmp {
+                                    label: format!("{}_bb{}", func_name, else_target),
+                                });
+                            }
+                        }
+                        _ => {
+                            if let Ok(cond_operand) = self.operand_to_x86(cond) {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RAX),
+                                    src: cond_operand,
+                                });
+                                self.instructions.push(X86Instruction::Cmp {
+                                    dst: X86Operand::Register(Register::RAX),
+                                    src: X86Operand::Immediate(0),
+                                });
+                                self.instructions.push(X86Instruction::Jne {
+                                    label: format!("{}_bb{}", func_name, then_target),
+                                });
+                                self.instructions.push(X86Instruction::Jmp {
+                                    label: format!("{}_bb{}", func_name, else_target),
+                                });
+                            }
+                        }
+                    }
                 }
                 Terminator::Unreachable => {
                     self.instructions.push(X86Instruction::Nop);
@@ -333,11 +378,106 @@ impl Codegen {
     }
 
     /// Generate code for a statement
-    fn generate_statement(&mut self, _stmt: &Statement, _allocator: &RegisterAllocator) -> CodegenResult<()> {
-        // TODO: Implement statement codegen
-        // For now, just emit a nop for each statement
-        self.instructions.push(X86Instruction::Nop);
+    fn generate_statement(&mut self, stmt: &Statement, _allocator: &RegisterAllocator) -> CodegenResult<()> {
+        match &stmt.rvalue {
+            crate::mir::Rvalue::Use(operand) => {
+                let src = self.operand_to_x86(operand)?;
+                self.instructions.push(X86Instruction::Mov {
+                    dst: X86Operand::Register(Register::RAX),
+                    src,
+                });
+            }
+            crate::mir::Rvalue::BinaryOp(op, left, right) => {
+                let left_val = self.operand_to_x86(left)?;
+                let right_val = self.operand_to_x86(right)?;
+                
+                self.instructions.push(X86Instruction::Mov {
+                    dst: X86Operand::Register(Register::RAX),
+                    src: left_val,
+                });
+                
+                match op {
+                    crate::lowering::BinaryOp::Add => {
+                        self.instructions.push(X86Instruction::Add {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                    }
+                    crate::lowering::BinaryOp::Subtract => {
+                        self.instructions.push(X86Instruction::Sub {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                    }
+                    crate::lowering::BinaryOp::Multiply => {
+                        self.instructions.push(X86Instruction::IMul {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                    }
+                    crate::lowering::BinaryOp::Divide => {
+                        self.instructions.push(X86Instruction::IDiv {
+                            src: right_val,
+                        });
+                    }
+                    crate::lowering::BinaryOp::Equal | crate::lowering::BinaryOp::NotEqual |
+                    crate::lowering::BinaryOp::Less | crate::lowering::BinaryOp::LessEqual |
+                    crate::lowering::BinaryOp::Greater | crate::lowering::BinaryOp::GreaterEqual => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                    }
+                    _ => {
+                        self.instructions.push(X86Instruction::Nop);
+                    }
+                }
+            }
+            crate::mir::Rvalue::UnaryOp(op, operand) => {
+                let src = self.operand_to_x86(operand)?;
+                self.instructions.push(X86Instruction::Mov {
+                    dst: X86Operand::Register(Register::RAX),
+                    src,
+                });
+                match op {
+                    crate::lowering::UnaryOp::Negate => {
+                        self.instructions.push(X86Instruction::Sub {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Immediate(0),
+                        });
+                    }
+                    crate::lowering::UnaryOp::Not => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Immediate(0),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                self.instructions.push(X86Instruction::Nop);
+            }
+        }
         Ok(())
+    }
+    
+    /// Convert an operand to x86 operand
+    fn operand_to_x86(&self, operand: &crate::mir::Operand) -> CodegenResult<X86Operand> {
+        match operand {
+            crate::mir::Operand::Constant(crate::mir::Constant::Integer(n)) => {
+                Ok(X86Operand::Immediate(*n))
+            }
+            crate::mir::Operand::Constant(crate::mir::Constant::Bool(b)) => {
+                Ok(X86Operand::Immediate(if *b { 1 } else { 0 }))
+            }
+            crate::mir::Operand::Copy(_place) | crate::mir::Operand::Move(_place) => {
+                Ok(X86Operand::Register(Register::RAX))
+            }
+            _ => Err(CodegenError {
+                message: "Unsupported operand type".to_string(),
+            })
+        }
     }
 
     /// Generate a new label

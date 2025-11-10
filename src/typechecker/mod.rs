@@ -17,6 +17,7 @@
 use crate::lowering::{
     HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp,
 };
+use crate::iterators::IteratorMethodHandler;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -333,46 +334,93 @@ impl TypeChecker {
             }
 
             HirExpression::Call { func, args } => {
-                let func_name = match &**func {
-                    HirExpression::Variable(name) => name.clone(),
+                match &**func {
+                    HirExpression::Variable(name) => {
+                        let (param_types, ret_type) = self.context.lookup_function(name)
+                            .ok_or_else(|| TypeCheckError {
+                                message: format!("Undefined function: {}", name),
+                            })?;
+
+                        // Check argument count
+                        if args.len() != param_types.len() {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Function {} expects {} arguments, got {}",
+                                    name,
+                                    param_types.len(),
+                                    args.len()
+                                ),
+                            });
+                        }
+
+                        // Check argument types
+                        for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                            let arg_ty = self.infer_type(arg)?;
+                            if arg_ty != *param_ty && *param_ty != HirType::Unknown {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument {} has type {}, expected {}",
+                                        i, arg_ty, param_ty
+                                    ),
+                                });
+                            }
+                        }
+
+                        Ok(ret_type)
+                    }
+                    HirExpression::FieldAccess { object, field } => {
+                        let obj_ty = self.infer_type(object)?;
+                        
+                        if IteratorMethodHandler::is_iterator_method(field) {
+                            if let Some((_params, ret_ty)) = IteratorMethodHandler::get_method_signature(&obj_ty, field) {
+                                Ok(ret_ty)
+                            } else {
+                                Err(TypeCheckError {
+                                    message: format!(
+                                        "Method {} not supported on type {}",
+                                        field, obj_ty
+                                    ),
+                                })
+                            }
+                        } else {
+                            Err(TypeCheckError {
+                                message: format!("Unknown method: {}", field),
+                            })
+                        }
+                    }
+                    HirExpression::Closure { params, return_type, .. } => {
+                        // Check argument count matches closure parameters
+                        if args.len() != params.len() {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Closure expects {} arguments, got {}",
+                                    params.len(),
+                                    args.len()
+                                ),
+                            });
+                        }
+
+                        // Check argument types against closure parameters
+                        for (i, (arg, (_, param_ty))) in args.iter().zip(params.iter()).enumerate() {
+                            let arg_ty = self.infer_type(arg)?;
+                            if arg_ty != *param_ty && *param_ty != HirType::Unknown {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument {} has type {}, expected {}",
+                                        i, arg_ty, param_ty
+                                    ),
+                                });
+                            }
+                        }
+
+                        Ok(return_type.as_ref().clone())
+                    }
                     _ => {
-                        return Err(TypeCheckError {
+                        Err(TypeCheckError {
                             message: "Indirect function calls not yet supported".to_string(),
                         })
                     }
-                };
-
-                let (param_types, ret_type) = self.context.lookup_function(&func_name)
-                    .ok_or_else(|| TypeCheckError {
-                        message: format!("Undefined function: {}", func_name),
-                    })?;
-
-                // Check argument count
-                if args.len() != param_types.len() {
-                    return Err(TypeCheckError {
-                        message: format!(
-                            "Function {} expects {} arguments, got {}",
-                            func_name,
-                            param_types.len(),
-                            args.len()
-                        ),
-                    });
                 }
-
-                // Check argument types
-                for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
-                    let arg_ty = self.infer_type(arg)?;
-                    if arg_ty != *param_ty && *param_ty != HirType::Unknown {
-                        return Err(TypeCheckError {
-                            message: format!(
-                                "Argument {} has type {}, expected {}",
-                                i, arg_ty, param_ty
-                            ),
-                        });
-                    }
-                }
-
-                Ok(ret_type)
             }
 
             HirExpression::FieldAccess { object, field } => {
@@ -511,6 +559,18 @@ impl TypeChecker {
 
                 Ok(block_type)
             }
+
+            HirExpression::Closure {
+                params,
+                return_type,
+                ..
+            } => {
+                let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                Ok(HirType::Closure {
+                    params: param_types,
+                    return_type: return_type.clone(),
+                })
+            }
         }
     }
 
@@ -639,6 +699,19 @@ impl TypeChecker {
                 
                 Ok(())
             }
+
+            HirStatement::UnsafeBlock(stmts) => {
+                // Type check statements inside unsafe block
+                // Unsafe blocks bypass borrow checking but still need type checking
+                self.check_statements(stmts)?;
+                Ok(())
+            }
+
+            HirStatement::Item(_) => {
+                // Nested items (functions, structs, etc.) are type checked separately
+                // For now, just allow them to pass
+                Ok(())
+            }
         }
     }
 
@@ -752,5 +825,108 @@ mod tests {
         };
         let mut checker = TypeChecker::new();
         assert!(checker.infer_type(&expr).is_err());
+    }
+
+    #[test]
+    fn test_closure_type_inference() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![("x".to_string(), HirType::Int32)],
+            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+            return_type: Box::new(HirType::Int32),
+            is_move: false,
+        };
+
+        let mut checker = TypeChecker::new();
+        match checker.infer_type(&closure_expr) {
+            Ok(ty) => {
+                match ty {
+                    HirType::Closure { params, return_type } => {
+                        assert_eq!(params.len(), 1);
+                        assert_eq!(params[0], HirType::Int32);
+                        assert_eq!(*return_type, HirType::Int32);
+                    }
+                    _ => panic!("Expected closure type"),
+                }
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_closure_call_with_matching_args() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![("x".to_string(), HirType::Int32), ("y".to_string(), HirType::Bool)],
+            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+            return_type: Box::new(HirType::Int32),
+            is_move: false,
+        };
+
+        let call_expr = HirExpression::Call {
+            func: Box::new(closure_expr),
+            args: vec![HirExpression::Integer(5), HirExpression::Bool(true)],
+        };
+
+        let mut checker = TypeChecker::new();
+        match checker.infer_type(&call_expr) {
+            Ok(ty) => assert_eq!(ty, HirType::Int32),
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_closure_call_with_mismatched_arg_count() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![("x".to_string(), HirType::Int32)],
+            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+            return_type: Box::new(HirType::Int32),
+            is_move: false,
+        };
+
+        let call_expr = HirExpression::Call {
+            func: Box::new(closure_expr),
+            args: vec![HirExpression::Integer(5), HirExpression::Integer(10)],
+        };
+
+        let mut checker = TypeChecker::new();
+        assert!(checker.infer_type(&call_expr).is_err());
+    }
+
+    #[test]
+    fn test_closure_call_with_mismatched_arg_types() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![("x".to_string(), HirType::Int32)],
+            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+            return_type: Box::new(HirType::Int32),
+            is_move: false,
+        };
+
+        let call_expr = HirExpression::Call {
+            func: Box::new(closure_expr),
+            args: vec![HirExpression::String("hello".to_string())],
+        };
+
+        let mut checker = TypeChecker::new();
+        assert!(checker.infer_type(&call_expr).is_err());
+    }
+
+    #[test]
+    fn test_closure_with_no_args() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![],
+            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+            return_type: Box::new(HirType::Int32),
+            is_move: false,
+        };
+
+        let call_expr = HirExpression::Call {
+            func: Box::new(closure_expr),
+            args: vec![],
+        };
+
+        let mut checker = TypeChecker::new();
+        match checker.infer_type(&call_expr) {
+            Ok(ty) => assert_eq!(ty, HirType::Int32),
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
     }
 }

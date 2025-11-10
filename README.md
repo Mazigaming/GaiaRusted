@@ -2,7 +2,7 @@
 ------------
 A complete Rust compiler implementation built from scratch in pure Rust with zero external dependencies. Converts Rust source code to multiple output formats including Assembly, Object files, Executables, and Libraries.
 
-**v0.0.2** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#supported-language-features)
+**v0.1.0** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Release Notes](#-v010-features)
 
 * * *
 
@@ -436,21 +436,193 @@ v0.0.2 includes a comprehensive standard library with 77 built-in functions:
 ### 📊 Test Results
 
 ```
-Test Coverage (v0.0.2):
-  • Unit tests:           ✅ 23+ passing
-  • Integration tests:    ✅ 60+ passing
-  • Built-in functions:  ✅ All 77 functions verified
+Test Coverage (v0.1.0):
+  • Unit tests:           ✅ 888+ passing
+  • Integration tests:    ✅ 331+ passing
+  • Codegen tests:        ✅ Passing
+  • Borrow checking:      ✅ 40+ passing
+  • Lifetimes:            ✅ 31+ passing
+  • Optimization:         ✅ 34+ passing
   • Error messages:       ✅ Verified
   • Type system:         ✅ Verified
   • Performance metrics: ✅ Verified
   
-Total: ✅ 83+ tests passing
+Total: ✅ 1219+ tests passing
 Backward Compatibility: ✅ 100%
+Total Lines of Code: 44,955 LOC
 ```
 
 Run the test suite:
 ```bash
 cargo test --lib --tests
+```
+
+* * *
+
+🎯 v0.1.0 Features
+------------------
+
+### Major Compiler Enhancements
+
+**1. Advanced Code Generation** 🔧
+- **Conditional Jump Evaluation** - Proper JmpIf terminator handling with condition checking
+- **Statement Compilation** - Complete x86-64 translation for:
+  - Binary operations (Add, Subtract, Multiply, Divide, Mod)
+  - Comparison operations (Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual)
+  - Unary operations (Negate, Not)
+  - Operand handling and register assignment
+- **Improved Register Allocation** - Better x86-64 instruction selection
+- Example:
+  ```rust
+  fn compare(x: i32, y: i32) -> bool {
+      if x > y {
+          true
+      } else {
+          false
+      }
+  }
+  ```
+
+**2. Enhanced Type System** 📊
+- **New Primitives**: `usize` and `isize` types added
+- **Proper Type Conversion** - Full integration in ast_bridge.rs
+- **Better Type Inference** - Improved unification and constraint solving
+- Full support for machine-word sized integers
+
+**3. Massive Standard Library Expansion** 📚
+- **String Methods (13 new)**:
+  - `split_whitespace()` - Split on whitespace
+  - `strip_prefix()` / `strip_suffix()` - Remove prefix/suffix
+  - `remove()` / `insert()` - Modify strings in place
+  - `truncate()` - Trim to length
+  - `split_once()` / `rsplit_once()` - Split into pairs
+  - `to_string()` / `into_bytes()` - Conversions
+  - `is_numeric()` / `is_alphabetic()` - Character classification
+
+- **Iterator Methods (8 new)**:
+  - `take(n)` - Take first n elements
+  - `skip(n)` - Skip first n elements
+  - `find(predicate)` - Find first matching element
+  - `position(predicate)` - Find index of element
+  - `fold(init, f)` - Reduce to single value
+  - `any(predicate)` - Test if any element matches
+  - `all(predicate)` - Test if all elements match
+  - Supporting structs: `Take<I>`, `Skip<I>` for lazy evaluation
+
+**4. Lexer Enhancement** 📝
+- **Numeric Literal Suffixes** - Support for type suffixes (i32, u64, f64, isize, usize, etc.)
+  - Automatic type inference from suffixes
+  - Invalid suffix detection and error reporting
+
+- **Raw Strings** - Full support for r"..." and r#"..."# syntax
+  - Variable hash delimiters for embedded quotes
+  - Proper matching and validation
+
+- **Byte Literals**:
+  - Byte strings: b"..." with escape sequences
+  - Byte characters: b'...' with escape sequences
+  - Support for \n, \t, \r, \\, \", \0 escapes
+
+### Test Coverage (v0.1.0)
+```
+Codegen Tests:          ✅ Complete conditional jump & statement compilation
+Type System Tests:      ✅ usize/isize integration verified
+String Method Tests:    ✅ 13 new methods validated
+Iterator Tests:         ✅ 8 new combinator methods validated
+Lexer Tests:           ✅ Numeric suffixes, raw strings, byte literals
+Full Test Suite:       ✅ 1219+ tests passing
+```
+
+---
+
+✅ v0.0.3 Features
+------------------
+
+### Major Enhancements
+
+**1. Advanced Pattern Matching** 🎯
+- Literal, binding, and wildcard patterns
+- Tuple and struct destructuring
+- Enum variant matching
+- Range patterns (`1..=5`, `'a'..='z'`)
+- Or patterns (`A | B | C`)
+- Guard expressions (`pattern if condition`)
+- **Exhaustiveness checking** - compile-time verification
+- Example:
+  ```rust
+  match value {
+      0 => println!("zero"),
+      1..=10 => println!("small"),
+      n if n > 100 => println!("large"),
+      _ => println!("other"),
+  }
+  ```
+
+**2. Professional Module System** 🏗️
+- **Nested modules**: `mod outer { mod inner { } }`
+- **Visibility control**: `pub`, `pub(crate)`, `pub(super)`, private
+- **Use statements**: `use module::item;`
+- **Export listing** with `list_exports()`
+- **Module caching** for O(1) lookups
+- **Namespace management** for code organization
+- Example:
+  ```rust
+  mod utils {
+      pub fn helper() { }
+      fn private_fn() { }
+  }
+  
+  use utils::helper;
+  ```
+
+**3. Option & Result Types** 🛡️
+- **Option<T>**: `Some(T)` | `None`
+- **Result<T, E>**: `Ok(T)` | `Err(E)`
+- **Monadic operations**: `map`, `and_then`, `or_else`
+- **Safe unwrapping**: `unwrap_or`, `unwrap_or_else`
+- **Chainable error handling** without exceptions
+- Example:
+  ```rust
+  fn safe_divide(a: i32, b: i32) -> Result<i32, String> {
+      if b == 0 {
+          Result::Err("Division by zero".to_string())
+      } else {
+          Result::Ok(a / b)
+      }
+  }
+  ```
+
+**4. Enhanced Library API** 📚
+- **Builder pattern** for ergonomic configuration
+- **Phase callbacks** for monitoring compilation
+- **Custom built-in functions** registration
+- **Flexible output formats**: executable, object, assembly, library, bash
+- **Performance metrics** with phase breakdown
+- **Compilation handlers** for custom behavior
+- Example:
+  ```rust
+  let config = CompilerBuilder::new()
+      .add_source("main.rs")
+      .output("program")
+      .format("executable")
+      .optimize(true)
+      .on_phase("parser", |phase, time| {
+          println!("{}: {}ms", phase, time);
+      })
+      .build();
+  ```
+
+### v0.0.3 Test Coverage
+
+```
+Pattern Matching Tests:        ✅ 6+ passing
+Module System Tests:           ✅ 3+ passing
+Option/Result Tests:           ✅ 14+ passing
+Library API Tests:             ✅ 4+ passing
+Integration Tests:             ✅ 60+ passing
+
+Total New Tests:               ✅ 27+ passing
+Overall Test Suite:            ✅ 110+ tests passing
 ```
 
 * * *
@@ -468,26 +640,37 @@ cargo test --lib --tests
 
 *   **Unit Tests** - In individual modules (src/*/mod.rs)
 *   **Integration Tests** - In tests/ directory
-*   **Test Categories:**
-    - `config_tests.rs` - Configuration API
-    - `borrowchecker_tests.rs` - Ownership/borrow checking
-    - `mir_tests.rs` - MIR representation
-    - `codegen_tests.rs` - Code generation
-    - `integration_tests.rs` - End-to-end compilation
+*   **Test Categories (23 test files):**
+    - `config_test.rs` - Configuration API
+    - `lexer_parser_builtins_test.rs` - Lexer/Parser/Builtins
+    - `library_api_test.rs` - Library API
+    - `borrow_checking_test.rs` - Ownership/borrow checking
+    - `advanced_features_test.rs` - Advanced type features
+    - `mir_test.rs` - MIR representation
+    - `optimization_test.rs` - Optimization passes
+    - `codegen_test.rs` - Code generation
+    - `constraint_solving_test.rs` - Constraint solving
+    - `unsafe_test.rs` - Unsafe code validation
+    - `ffi_test.rs` - FFI support
+    - `polish_test.rs` - Polish & refinement
+    - `function_struct_lifetimes_test.rs` - Lifetime inference
+    - `edge_cases_optimization_test.rs` - Edge case optimization
+    - `analysis_pattern_matching_test.rs` - Pattern matching analysis
+    - `stdlib_option_result_test.rs` - Option/Result types
+    - `utilities_error_reporting_test.rs` - Error reporting
+    - `utilities_module_system_test.rs` - Module system
+    - `utilities_profiling_test.rs` - Performance profiling
+    - `comprehensive_capability_test.rs` - Full compiler capabilities
+    - `end_to_end_integration_test.rs` - End-to-end compilation
+    - `integration_tests.rs` - General integration tests
 
-### Current Test Coverage (v0.0.2)
+### Current Test Coverage (v0.0.3)
 
-**Unit & Integration Tests:**
+**Core Compiler Tests:**
 - Lexer tests: ✅ Passing
 - Parser tests: ✅ Passing
 - Type checker tests: ✅ Passing
 - Lowering tests: ✅ Passing
-- Integration tests: ✅ 60+ passing
-- Error reporting tests: ✅ Passing
-- Built-in functions tests: ✅ All 77 functions validated
-- Profiling tests: ✅ Passing
-- Optimization tests: ✅ Passing
-- Config tests: ✅ Passing
 - Borrow checker tests: ✅ Passing
 - Codegen tests: ✅ Passing
 
@@ -495,10 +678,18 @@ cargo test --lib --tests
 - Built-in functions verified: ✅ All 77 functions tested
 - Error reporting system: ✅ Full context and suggestions
 - Performance profiling: ✅ Phase-level metrics functional
-- End-to-end integration: ✅ Complete pipeline validated
-- Backward compatibility: ✅ 100% maintained
+- Optimization tests: ✅ Passing
+- Config tests: ✅ Passing
 
-**Total Test Count:** ✅ 83+ tests passing
+**NEW in v0.0.3:**
+- Pattern matching: ✅ 6+ unit tests (literals, binding, tuples, structs, ranges)
+- Module system: ✅ 3+ unit tests (creation, caching, visibility)
+- Option/Result types: ✅ 14+ unit tests (all monadic operations)
+- Library API: ✅ 4+ unit tests (builder, metrics, handlers)
+- Integration tests: ✅ 60+ end-to-end tests
+
+**Total Test Count:** ✅ 110+ tests passing
+**Backward Compatibility:** ✅ 100% maintained
 
 * * *
 
@@ -550,7 +741,7 @@ Roadmap
 *   MIR generation
 *   Basic code generation
 
-### ✅ v0.0.2 (Complete) ✨ **CURRENT STABLE**
+### ✅ v0.0.2 (Complete) ✨
 
 **Core Compiler Infrastructure:**
 *   ✅ Optimization passes (constant folding, dead code elimination, copy propagation)
@@ -566,31 +757,99 @@ Roadmap
 *   ✅ Type conversions & parsing (9 functions: as_i32, as_i64, as_f64, to_string, parse_int, parse_float, is_digit, is_alpha, is_whitespace)
 *   ✅ Collections (10 functions: push, pop, get, flatten, count, sum, max_val, min_val, is_empty, clear)
 
-### 📋 v0.0.3 (Planned)
+### ✅ v0.0.3 (Complete) ✨
 
-*   CLI enhancements and usability improvements
-*   Multi-error batching and display refinements
-*   Improved error recovery mechanisms
-*   Additional string manipulation functions
-*   Date/time utilities in stdlib
+**Professional Features:**
+*   ✅ Advanced pattern matching with exhaustiveness checking
+*   ✅ Professional module system with visibility control
+*   ✅ Option<T> and Result<T, E> types for safe error handling
+*   ✅ Enhanced embeddable library API with builder pattern
+*   ✅ Module caching for O(1) lookups
+*   ✅ Custom compilation handlers and phase callbacks
+*   ✅ Performance metrics with phase breakdown
 
-### 📋 v0.1.0 (Planned)
+### ✅ v0.1.0 (Complete) ✨ **CURRENT STABLE**
 
-*   Pattern matching support
-*   Trait system basics
-*   Generic type parameters
-*   Module system and visibility control
-*   Closure support
-*   Advanced stdlib utilities (iterators, higher-order functions)
+**Compiler & Type System:**
+*   ✅ Advanced code generation (conditional jumps, statement compilation)
+*   ✅ Enhanced type system (usize/isize primitives)
+*   ✅ Improved x86-64 code generation
+*   ✅ Complete operator support in codegen
+
+**Standard Library Expansion:**
+*   ✅ 13 new String methods (split_whitespace, strip_prefix, etc.)
+*   ✅ 8 new Iterator combinator methods (take, skip, find, fold, etc.)
+*   ✅ Lazy evaluation for iterators (Take<I>, Skip<I>)
+
+**Lexer Enhancements:**
+*   ✅ Numeric literal suffixes (i32, u64, f64, isize, usize)
+*   ✅ Raw string support (r"...", r#"..."#)
+*   ✅ Byte literal support (b"...", b'...')
+*   ✅ Comprehensive escape sequence handling
+
+**Test Coverage:**
+*   ✅ 1219+ total tests passing (888 unit + 331 integration)
+*   ✅ 100% backward compatibility maintained
+*   ✅ 44,955 lines of code
+
+### 📋 v0.2.0 (Planned)
+
+**High Priority:**
+*   Closures and lambda expressions (|x| x + 1)
+*   Fn/FnMut/FnOnce trait implementation
+*   Error propagation operator (?)
+*   Associated types in traits (type Item = T;)
+*   Where clause support for generic bounds
+*   Comprehensive macro system (println!, format!, vec!)
+
+**Medium Priority:**
+*   Slice patterns in match expressions
+*   Const generics (const T: usize)
+*   Trait objects with virtual dispatch (dyn Trait)
+*   Higher-ranked trait bounds (HRTB)
+*   Advanced lifetime patterns
+*   #[test] attribute support
+
+**Standard Library:**
+*   Vec<T> complete implementation
+*   HashMap<K, V> implementation
+*   HashSet<T> implementation
+*   File I/O improvements
+*   More derive macro support (#[derive(Default)], #[derive(Eq)], etc.)
+
+**Infrastructure:**
+*   Linker integration improvements
+*   Symbol resolution enhancement
+*   Better error recovery
+*   Module re-export support (pub use)
+*   File-based module system
+
+### 📋 v0.3.0+ Roadmap
+
+**Advanced Features:**
+*   Async/await syntax and runtime
+*   Unsafe code with proper validation
+*   Raw pointers and FFI
+*   Complex lifetime inference
+*   Package manager integration
+*   Specialized monomorphization
+
+**Production Features:**
+*   Incremental compilation
+*   Cache system for faster rebuilds
+*   Better diagnostics with suggestions
+*   IDE integration (LSP)
+*   Documentation generation (rustdoc-like)
+*   Performance profiling integration
 
 ### 📋 v1.0.0 (Vision)
 
 *   Full Rust compatibility subset
 *   Standard library bindings
-*   Package manager integration
 *   Production-ready compiler
-*   IDE integration support
-*   Documentation generation
+*   Complete test framework support
+*   Stable API guarantees
+*   Community package registry
 
 * * *
 

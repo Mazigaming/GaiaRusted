@@ -234,3 +234,147 @@ impl Default for CompilationConfig {
         Self::new()
     }
 }
+
+/// Builder pattern for creating CompilationConfig
+#[derive(Debug, Clone)]
+pub struct CompilerBuilder {
+    verbose: bool,
+    optimize: bool,
+    output_format: String,
+    output_path: PathBuf,
+}
+
+impl CompilerBuilder {
+    /// Create a new builder with defaults
+    pub fn new() -> Self {
+        CompilerBuilder {
+            verbose: false,
+            optimize: false,
+            output_format: "executable".to_string(),
+            output_path: PathBuf::from("output"),
+        }
+    }
+
+    /// Enable or disable verbose output
+    pub fn verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+
+    /// Enable or disable optimization
+    pub fn optimize(mut self, optimize: bool) -> Self {
+        self.optimize = optimize;
+        self
+    }
+
+    /// Set output format
+    pub fn format(mut self, format: &str) -> Self {
+        self.output_format = format.to_string();
+        self
+    }
+
+    /// Set output path
+    pub fn output(mut self, path: &str) -> Self {
+        self.output_path = PathBuf::from(path);
+        self
+    }
+
+    /// Build the configuration
+    pub fn build(self) -> CompilerBuilderConfig {
+        CompilerBuilderConfig {
+            source_files: Vec::new(),
+            is_verbose: self.verbose,
+            is_optimized: self.optimize,
+            output_format: self.output_format,
+            output_path: self.output_path,
+        }
+    }
+}
+
+impl Default for CompilerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Configuration built by CompilerBuilder
+#[derive(Debug, Clone)]
+pub struct CompilerBuilderConfig {
+    pub source_files: Vec<PathBuf>,
+    pub is_verbose: bool,
+    pub is_optimized: bool,
+    pub output_format: String,
+    pub output_path: PathBuf,
+}
+
+impl CompilerBuilderConfig {
+    /// Check if verbose output is enabled
+    pub fn is_verbose(&self) -> bool {
+        self.is_verbose
+    }
+
+    /// Check if optimization is enabled
+    pub fn is_optimized(&self) -> bool {
+        self.is_optimized
+    }
+
+    /// Validate configuration
+    pub fn validate(&self) -> Result<(), String> {
+        match self.output_format.as_str() {
+            "assembly" | "object" | "executable" | "library" => {
+                if self.source_files.is_empty() {
+                    Err("No source files specified".to_string())
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Err(format!("Invalid output format: {}", self.output_format)),
+        }
+    }
+}
+
+/// Compilation metrics tracking
+#[derive(Debug, Clone, Default)]
+pub struct CompilationMetrics {
+    pub total_time_ms: u64,
+    pub lexer_time_ms: u64,
+    pub parser_time_ms: u64,
+    pub typechecker_time_ms: u64,
+    pub codegen_time_ms: u64,
+}
+
+impl CompilationMetrics {
+    /// Get phase breakdown as percentages
+    pub fn phase_breakdown(&self) -> std::collections::HashMap<String, f64> {
+        let mut breakdown = std::collections::HashMap::new();
+        if self.total_time_ms > 0 {
+            breakdown.insert("lexer".to_string(), (self.lexer_time_ms as f64 / self.total_time_ms as f64) * 100.0);
+            breakdown.insert("parser".to_string(), (self.parser_time_ms as f64 / self.total_time_ms as f64) * 100.0);
+            breakdown.insert("typechecker".to_string(), (self.typechecker_time_ms as f64 / self.total_time_ms as f64) * 100.0);
+            breakdown.insert("codegen".to_string(), (self.codegen_time_ms as f64 / self.total_time_ms as f64) * 100.0);
+        }
+        breakdown
+    }
+
+    /// Find the slowest compilation phase
+    pub fn slowest_phase(&self) -> Option<(String, u64)> {
+        let phases = vec![
+            ("lexer", self.lexer_time_ms),
+            ("parser", self.parser_time_ms),
+            ("typechecker", self.typechecker_time_ms),
+            ("codegen", self.codegen_time_ms),
+        ];
+        phases.into_iter().max_by_key(|(_, time)| *time).map(|(name, time)| (name.to_string(), time))
+    }
+}
+
+/// Default handler for compilation
+#[derive(Debug, Clone, Copy)]
+pub struct DefaultHandler;
+
+impl DefaultHandler {
+    /// Create a new default handler
+    pub fn new() -> Self {
+        DefaultHandler
+    }
+}

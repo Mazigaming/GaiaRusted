@@ -36,7 +36,7 @@ use std::fmt;
 pub use ast::*;
 
 /// Parse result type
-type ParseResult<T> = Result<T, ParseError>;
+pub type ParseResult<T> = Result<T, ParseError>;
 
 /// Errors that can occur during parsing
 #[derive(Debug, Clone)]
@@ -91,7 +91,7 @@ impl Parser {
     // ===== Helper Methods =====
 
     /// Get current token without advancing
-    fn current(&self) -> &Token {
+    pub fn current(&self) -> &Token {
         self.tokens.get(self.position).unwrap_or(&Token::Eof)
     }
 
@@ -101,7 +101,7 @@ impl Parser {
     }
 
     /// Advance to next token and return the current one
-    fn advance(&mut self) -> Token {
+    pub fn advance(&mut self) -> Token {
         let token = self.current().clone();
         if self.position < self.tokens.len() {
             self.position += 1;
@@ -110,7 +110,7 @@ impl Parser {
     }
 
     /// Check if current token matches
-    fn check(&self, token: &Token) -> bool {
+    pub fn check(&self, token: &Token) -> bool {
         match (self.current(), token) {
             // For Keyword tokens, compare the keyword variant specifically
             (Token::Keyword(kw1), Token::Keyword(kw2)) => kw1 == kw2,
@@ -120,14 +120,14 @@ impl Parser {
     }
 
     /// Consume a specific token or error
-    fn consume(&mut self, _expected: &str) -> ParseResult<Token> {
+    pub fn consume(&mut self, _expected: &str) -> ParseResult<Token> {
         let token = self.current().clone();
         self.advance();
         Ok(token)
     }
 
     /// Expect a specific token type
-    fn expect_keyword(&mut self, keyword: Keyword) -> ParseResult<()> {
+    pub fn expect_keyword(&mut self, keyword: Keyword) -> ParseResult<()> {
         match self.current() {
             Token::Keyword(kw) if *kw == keyword => {
                 self.advance();
@@ -141,7 +141,7 @@ impl Parser {
     }
 
     /// Expect an identifier
-    fn expect_identifier(&mut self) -> ParseResult<String> {
+    pub fn expect_identifier(&mut self) -> ParseResult<String> {
         match self.current() {
             Token::Identifier(name) => {
                 let name = name.clone();
@@ -194,8 +194,25 @@ impl Parser {
 
     /// Parse a function definition
     fn parse_function(&mut self) -> ParseResult<Item> {
+        let is_unsafe = if self.check(&Token::Keyword(Keyword::Unsafe)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        let is_async = if self.check(&Token::Keyword(Keyword::Async)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         self.expect_keyword(Keyword::Fn)?;
         let name = self.expect_identifier()?;
+
+        // Parse generic parameters
+        let generics = self.parse_generics()?;
 
         self.consume("(")?;
         let params = self.parse_parameters()?;
@@ -212,9 +229,14 @@ impl Parser {
 
         Ok(Item::Function {
             name,
+            generics,
             params,
             return_type,
             body,
+            is_unsafe,
+            is_async,
+            is_pub: false,
+            attributes: Vec::new(),
         })
     }
 
@@ -223,6 +245,11 @@ impl Parser {
         let mut params = Vec::new();
 
         while !self.check(&Token::RightParen) {
+            let is_ref = self.check(&Token::Ampersand);
+            if is_ref {
+                self.advance();
+            }
+
             let mutable = if self.check(&Token::Keyword(Keyword::Mut)) {
                 self.advance();
                 true
@@ -230,11 +257,40 @@ impl Parser {
                 false
             };
 
-            let name = self.expect_identifier()?;
-            self.consume(":")?;
-            let ty = self.parse_type()?;
-
-            params.push(Parameter { name, mutable, ty });
+            let name = if self.check(&Token::Keyword(Keyword::Self_)) {
+                self.advance();
+                "self".to_string()
+            } else {
+                self.expect_identifier()?
+            };
+            
+            if self.check(&Token::Colon) {
+                self.consume(":")?;
+                let mut ty = self.parse_type()?;
+                if is_ref {
+                    ty = Type::Reference {
+                        lifetime: None,
+                        mutable,
+                        inner: Box::new(ty),
+                    };
+                }
+                params.push(Parameter { name, mutable, ty });
+            } else if name == "self" {
+                let ty = if is_ref {
+                    Type::Reference {
+                        lifetime: None,
+                        mutable,
+                        inner: Box::new(Type::Named("Self".to_string())),
+                    }
+                } else {
+                    Type::Named("Self".to_string())
+                };
+                params.push(Parameter { name, mutable, ty });
+            } else {
+                return Err(ParseError::InvalidSyntax(
+                    format!("Parameter {} needs type annotation", name)
+                ));
+            }
 
             if !self.check(&Token::RightParen) {
                 self.consume(",")?;
@@ -242,6 +298,56 @@ impl Parser {
         }
 
         Ok(params)
+    }
+
+    /// Parse generic parameters: `<T>`, `<T, U>`, `<T: Trait>`, `<const N: usize>`
+    fn parse_generics(&mut self) -> ParseResult<Vec<GenericParam>> {
+        let mut generics = Vec::new();
+
+        if !self.check(&Token::Less) {
+            return Ok(generics);
+        }
+
+        self.advance();
+
+        while !self.check(&Token::Greater) {
+            if self.check(&Token::Keyword(Keyword::Const)) {
+                self.advance();
+                let name = self.expect_identifier()?;
+                self.consume(":")?;
+                let ty = self.parse_type()?;
+                generics.push(GenericParam::Const { name, ty });
+            } else {
+                let name = self.expect_identifier()?;
+                let mut bounds = Vec::new();
+
+                while self.check(&Token::Plus) {
+                    self.advance();
+                    if let Token::Identifier(bound) = self.current() {
+                        bounds.push(bound.clone());
+                        self.advance();
+                    } else {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "trait bound".to_string(),
+                            found: format!("{:?}", self.current()),
+                        });
+                    }
+                }
+
+                generics.push(GenericParam::Type {
+                    name,
+                    bounds,
+                    default: None,
+                });
+            }
+
+            if !self.check(&Token::Greater) {
+                self.consume(",")?;
+            }
+        }
+
+        self.consume(">")?;
+        Ok(generics)
     }
 
     /// Parse a type
@@ -278,7 +384,7 @@ impl Parser {
                     false
                 };
                 let inner = Box::new(self.parse_type()?);
-                Ok(Type::Reference { mutable, inner })
+                Ok(Type::Reference { lifetime: None, mutable, inner })
             }
             Token::LeftParen => {
                 self.advance();
@@ -308,6 +414,8 @@ impl Parser {
         self.expect_keyword(Keyword::Struct)?;
         let name = self.expect_identifier()?;
 
+        let generics = self.parse_generics()?;
+
         self.consume("{")?;
         let mut fields = Vec::new();
 
@@ -319,6 +427,7 @@ impl Parser {
             fields.push(StructField {
                 name: field_name,
                 ty,
+                attributes: Vec::new(),
             });
 
             if !self.check(&Token::RightBrace) {
@@ -328,7 +437,13 @@ impl Parser {
 
         self.consume("}")?;
 
-        Ok(Item::Struct { name, fields })
+        Ok(Item::Struct { 
+            name, 
+            generics,
+            fields,
+            is_pub: false,
+            attributes: Vec::new(),
+        })
     }
 
     /// Parse a block: { statements; expression? }
@@ -346,7 +461,7 @@ impl Parser {
             } else if self.check(&Token::Keyword(Keyword::Break)) {
                 self.advance();
                 self.consume(";")?;
-                statements.push(Statement::Break);
+                statements.push(Statement::Break(None));
             } else if self.check(&Token::Keyword(Keyword::Continue)) {
                 self.advance();
                 self.consume(";")?;
@@ -412,6 +527,7 @@ impl Parser {
             mutable,
             ty,
             initializer,
+            attributes: Vec::new(),
         })
     }
 
@@ -825,8 +941,8 @@ impl Parser {
     /// Parse primary expressions (literals, identifiers, etc.)
     fn parse_primary(&mut self) -> ParseResult<Expression> {
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let call_id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        // eprintln!("[DEBUG parse_primary #{} START, current token={:?}", call_id, self.current());
+        let _call_id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // eprintln!("[DEBUG parse_primary #{} START, current token={:?}", _call_id, self.current());
         let result = match self.current().clone() {
             Token::Integer(n) => {
                 // eprintln!("[DEBUG] parse_primary: Found Integer({}), advancing...", n);
@@ -1080,8 +1196,16 @@ impl Parser {
         Ok(Expression::For { var, iter: Box::new(iter), body })
     }
 
-    /// Parse closure: `|param1, param2| body`
+    /// Parse closure: `|param1, param2| body` or `move |x| x + 1`
     fn parse_closure(&mut self) -> ParseResult<Expression> {
+        // Check for `move` keyword
+        let is_move = if self.check(&Token::Keyword(Keyword::Move)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         // Expecting: | params | body
         self.consume("|")?;
         let mut params = Vec::new();
@@ -1098,13 +1222,14 @@ impl Parser {
         self.consume("|")?;
         let body = Box::new(self.parse_expression()?);
         
-        Ok(Expression::Closure { params, body })
+        Ok(Expression::Closure { params, body, is_move })
     }
 
     /// Parse enum definition: `enum Name { Variant1, Variant2(Type), ... }`
     fn parse_enum(&mut self) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Enum)?;
         let name = self.expect_identifier()?;
+        let generics = self.parse_generics()?;
         self.consume("{")?;
         
         let mut variants = Vec::new();
@@ -1129,7 +1254,7 @@ impl Parser {
                     let field_name = self.expect_identifier()?;
                     self.consume(":")?;
                     let ty = self.parse_type()?;
-                    fields.push(StructField { name: field_name, ty });
+                    fields.push(StructField { name: field_name, ty, attributes: Vec::new() });
                     
                     if !self.check(&Token::RightBrace) {
                         self.consume(",")?;
@@ -1148,13 +1273,20 @@ impl Parser {
         }
         
         self.consume("}")?;
-        Ok(Item::Enum { name, variants })
+        Ok(Item::Enum { 
+            name, 
+            generics,
+            variants,
+            is_pub: false,
+            attributes: Vec::new(),
+        })
     }
 
     /// Parse trait definition: `trait Name { ... }`
     fn parse_trait(&mut self) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Trait)?;
         let name = self.expect_identifier()?;
+        let generics = self.parse_generics()?;
         self.consume("{")?;
         
         let mut methods = Vec::new();
@@ -1167,7 +1299,14 @@ impl Parser {
         }
         
         self.consume("}")?;
-        Ok(Item::Trait { name, methods })
+        Ok(Item::Trait { 
+            name, 
+            generics,
+            supertraits: Vec::new(),
+            methods,
+            is_pub: false,
+            attributes: Vec::new(),
+        })
     }
 
     /// Parse impl block: `impl Name { ... }` or `impl Trait for Name { ... }`
@@ -1208,7 +1347,14 @@ impl Parser {
         }
         
         self.consume("}")?;
-        Ok(Item::Impl { trait_name, struct_name, methods })
+        Ok(Item::Impl { 
+            generics: Vec::new(),
+            trait_name, 
+            struct_name, 
+            methods,
+            is_unsafe: false,
+            attributes: Vec::new(),
+        })
     }
 
     /// Parse module definition: `mod name { ... }`
@@ -1225,28 +1371,51 @@ impl Parser {
             }
             
             self.consume("}")?;
-            Ok(Item::Module { name, items })
+            Ok(Item::Module { 
+                name, 
+                items,
+                is_inline: true,
+                is_pub: false,
+                attributes: Vec::new(),
+            })
         } else {
             // Inline module: `mod name;`
             self.consume(";")?;
-            Ok(Item::Module { name, items: Vec::new() })
+            Ok(Item::Module { 
+                name, 
+                items: Vec::new(),
+                is_inline: false,
+                is_pub: false,
+                attributes: Vec::new(),
+            })
         }
     }
 
     /// Parse use statement: `use path::to::item;`
     fn parse_use(&mut self) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Use)?;
-        let path = self.expect_identifier()?;
+        let first = self.expect_identifier()?;
         
-        let mut full_path = path;
+        let mut path = vec![first];
         while self.check(&Token::DoubleColon) {
             self.advance();
-            full_path.push_str("::");
-            full_path.push_str(&self.expect_identifier()?);
+            path.push(self.expect_identifier()?);
         }
         
+        let is_glob = if self.check(&Token::Star) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        
         self.consume(";")?;
-        Ok(Item::Use { path: full_path })
+        Ok(Item::Use { 
+            path,
+            is_glob,
+            is_public: false,
+            attributes: Vec::new(),
+        })
     }
 }
 

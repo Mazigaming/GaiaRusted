@@ -38,26 +38,78 @@
 //! let result = compile_files(&config)?;
 //! ```
 
+// Frontend: Lexing, Parsing & Macros
 pub mod lexer;
 pub mod parser;
-pub mod lowering;
+pub mod macros;
+pub mod frontend;
+
+// Analysis: Type Checking, Traits, Lifetimes, Pattern Matching
 pub mod typechecker;
+pub mod typesystem;
 pub mod borrowchecker;
+pub mod analysis;
+
+// Codegen: IR, Lowering, Code Generation
+pub mod lowering;
 pub mod mir;
 pub mod codegen;
-pub mod config;
+
+// Runtime: Execution Support
+pub mod runtime;
+
+// Compilation Pipeline
 pub mod compiler;
-pub mod error_reporting;
-pub mod builtins;
-pub mod profiling;
-pub mod colors;  // v0.0.3: Color support for CLI output
+pub mod config;
+pub mod compiler_integration;
+
+// Standard Library
+pub mod stdlib;
+pub mod iterators;
+
+// FFI & Interop
+pub mod ffi;
+
+// Utilities
+pub mod utilities;
+pub mod error_reporting {
+    pub use crate::utilities::error_reporting::*;
+}
+pub mod profiling {
+    pub use crate::utilities::profiling::*;
+}
+
+// Advanced Features
+pub mod closures;
+
+// Module re-exports for test compatibility
+pub mod builtins {
+    pub use crate::utilities::builtins::*;
+}
+pub mod pattern_matching {
+    pub use crate::analysis::pattern_matching::*;
+}
+pub mod option_result {
+    pub use crate::stdlib::option_result::*;
+}
+pub mod library_api {
+    pub use crate::compiler::*;
+    pub use crate::config::*;
+}
+pub mod modules {
+    pub use crate::utilities::modules::*;
+}
 
 pub use config::{CompilationConfig, OutputFormat};
 pub use compiler::{compile_files, CompilationResult, CompileError};
-pub use error_reporting::{Diagnostic, ErrorReporter, SourceLocation, Severity};
-pub use builtins::BuiltinFunction;
-pub use profiling::{Profiler, CompilationStats as ProfileStats};
-pub use colors::{Color, Colored};  // v0.0.3: Export color types
+pub use utilities::error_reporting::{Diagnostic, ErrorReporter, SourceLocation, Severity};
+pub use utilities::builtins::BuiltinFunction;
+pub use utilities::profiling::{Profiler, CompilationStats as ProfileStats};
+pub use utilities::colors::{Color, Colored};
+
+// Analysis re-exports
+pub use analysis::pattern_matching::{PatternAnalyzer, PatternCompiler, ReachabilityChecker};
+pub use stdlib::option_result::{Option, Result};
 
 /// Compilation statistics
 #[derive(Debug, Clone)]

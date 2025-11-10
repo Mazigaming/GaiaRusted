@@ -230,6 +230,8 @@ impl Lexer {
             }
         }
 
+        self.skip_numeric_suffix();
+
         if is_float {
             let value = num_str.parse::<f64>()
                 .map_err(|_| LexError::InvalidNumber(num_str))?;
@@ -238,6 +240,40 @@ impl Lexer {
             let value = num_str.parse::<i64>()
                 .map_err(|_| LexError::InvalidNumber(num_str))?;
             Ok(token::Token::Integer(value))
+        }
+    }
+
+    /// Skip numeric suffix (e.g., i32, u64, f32, f64, isize, usize)
+    fn skip_numeric_suffix(&mut self) {
+        if let Some(ch) = self.current_char() {
+            match ch {
+                'i' | 'u' | 'f' => {
+                    self.advance();
+                    let start_pos = self.position;
+                    let mut suffix = String::new();
+                    suffix.push(ch);
+                    
+                    while let Some(c) = self.current_char() {
+                        if c.is_ascii_alphanumeric() || c == '_' {
+                            suffix.push(c);
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    let valid_suffixes = [
+                        "i8", "i16", "i32", "i64", "isize",
+                        "u8", "u16", "u32", "u64", "usize",
+                        "f32", "f64",
+                    ];
+                    
+                    if !valid_suffixes.contains(&suffix.as_str()) {
+                        self.position = start_pos - 1;
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -289,6 +325,44 @@ impl Lexer {
         Err(LexError::UnterminatedString)
     }
 
+    /// Check if this looks like a lifetime (e.g., 'a, 'static, '_).
+    /// Returns true if current char is ' and next is a valid lifetime start.
+    fn is_lifetime_start(&self) -> bool {
+        if self.current_char() == Some('\'') {
+            if let Some(next_ch) = self.peek_char(1) {
+                match next_ch {
+                    'a'..='z' | 'A'..='Z' | '_' => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Read a lifetime token (e.g., 'a, 'static, '_).
+    fn read_lifetime(&mut self) -> Result<token::Token, LexError> {
+        self.advance(); // skip opening quote
+        let mut lifetime = String::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch.is_alphanumeric() || ch == '_' {
+                lifetime.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if lifetime.is_empty() {
+            Err(LexError::UnterminatedChar)
+        } else {
+            Ok(token::Token::Lifetime(lifetime))
+        }
+    }
+
     /// Read a character literal.
     fn read_char(&mut self) -> Result<token::Token, LexError> {
         self.advance(); // skip opening quote
@@ -321,6 +395,160 @@ impl Lexer {
         }
     }
 
+    /// Read a raw string: r"..."
+    fn read_raw_string(&mut self) -> Result<token::Token, LexError> {
+        self.advance(); // skip opening quote
+        let mut string = String::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch == '"' {
+                self.advance(); // skip closing quote
+                return Ok(token::Token::RawString(string));
+            } else {
+                string.push(ch);
+                self.advance();
+            }
+        }
+
+        Err(LexError::UnterminatedString)
+    }
+
+    /// Read a raw string with hashes: r#"..."#
+    fn read_raw_string_with_hashes(&mut self) -> Result<token::Token, LexError> {
+        // Count opening hashes
+        let mut hash_count = 0;
+        while self.current_char() == Some('#') {
+            hash_count += 1;
+            self.advance();
+        }
+
+        if self.current_char() != Some('"') {
+            return Err(LexError::UnterminatedString);
+        }
+        self.advance(); // skip opening quote
+
+        let mut string = String::new();
+        let mut closing_hashes = 0;
+
+        while let Some(ch) = self.current_char() {
+            if ch == '"' {
+                self.advance();
+                closing_hashes = 0;
+
+                while self.current_char() == Some('#') && closing_hashes < hash_count {
+                    closing_hashes += 1;
+                    self.advance();
+                }
+
+                if closing_hashes == hash_count {
+                    return Ok(token::Token::RawString(string));
+                } else {
+                    string.push('"');
+                    for _ in 0..closing_hashes {
+                        string.push('#');
+                    }
+                    closing_hashes = 0;
+                }
+            } else {
+                string.push(ch);
+                self.advance();
+            }
+        }
+
+        Err(LexError::UnterminatedString)
+    }
+
+    /// Read a byte string: b"..."
+    fn read_byte_string(&mut self) -> Result<token::Token, LexError> {
+        self.advance(); // skip opening quote
+        let mut bytes = Vec::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch == '"' {
+                self.advance(); // skip closing quote
+                return Ok(token::Token::ByteString(bytes));
+            } else if ch == '\\' {
+                self.advance();
+                match self.current_char() {
+                    Some('n') => { bytes.push(b'\n'); self.advance(); }
+                    Some('t') => { bytes.push(b'\t'); self.advance(); }
+                    Some('r') => { bytes.push(b'\r'); self.advance(); }
+                    Some('\\') => { bytes.push(b'\\'); self.advance(); }
+                    Some('"') => { bytes.push(b'"'); self.advance(); }
+                    Some('0') => { bytes.push(0u8); self.advance(); }
+                    Some(ch) if ch.is_ascii() => { 
+                        bytes.push(ch as u8); 
+                        self.advance(); 
+                    }
+                    _ => return Err(LexError::UnterminatedString),
+                }
+            } else if ch.is_ascii() {
+                bytes.push(ch as u8);
+                self.advance();
+            } else {
+                return Err(LexError::UnterminatedString);
+            }
+        }
+
+        Err(LexError::UnterminatedString)
+    }
+
+    /// Read a byte character: b'...'
+    fn read_byte_char(&mut self) -> Result<token::Token, LexError> {
+        self.advance(); // skip opening quote
+        let mut byte_val: u8 = 0;
+
+        if let Some(ch) = self.current_char() {
+            if ch == '\\' {
+                self.advance();
+                byte_val = match self.current_char() {
+                    Some('n') => b'\n',
+                    Some('t') => b'\t',
+                    Some('r') => b'\r',
+                    Some('\\') => b'\\',
+                    Some('\'') => b'\'',
+                    Some('0') => 0u8,
+                    Some(c) if c.is_ascii() => c as u8,
+                    _ => return Err(LexError::UnterminatedChar),
+                };
+                self.advance();
+            } else if ch.is_ascii() {
+                byte_val = ch as u8;
+                self.advance();
+            } else {
+                return Err(LexError::UnterminatedChar);
+            }
+        }
+
+        if self.current_char() == Some('\'') {
+            self.advance(); // skip closing quote
+            Ok(token::Token::ByteChar(byte_val))
+        } else {
+            Err(LexError::UnterminatedChar)
+        }
+    }
+
+    /// Read a macro metavariable (e.g., $x, $expr, $tt).
+    fn read_metavariable(&mut self) -> Result<token::Token, LexError> {
+        self.advance(); // skip $
+        let mut metavar = String::new();
+
+        while let Some(ch) = self.current_char() {
+            if ch.is_alphanumeric() || ch == '_' {
+                metavar.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if metavar.is_empty() {
+            Ok(token::Token::Dollar)
+        } else {
+            Ok(token::Token::Metavariable(metavar))
+        }
+    }
+
     /// Read the next token from the input.
     fn next_token(&mut self) -> Result<Option<token::Token>, LexError> {
         loop {
@@ -348,11 +576,34 @@ impl Lexer {
             // Numbers
             c if c.is_ascii_digit() => self.read_number()?,
 
+            // Raw strings: r"..." or r#"..."#
+            'r' if self.peek_char(1) == Some('"') => {
+                self.advance();
+                self.read_raw_string()?
+            }
+            'r' if self.peek_char(1) == Some('#') => {
+                self.advance();
+                self.read_raw_string_with_hashes()?
+            }
+
+            // Byte strings: b"..." or byte chars: b'...'
+            'b' if self.peek_char(1) == Some('"') => {
+                self.advance();
+                self.read_byte_string()?
+            }
+            'b' if self.peek_char(1) == Some('\'') => {
+                self.advance();
+                self.read_byte_char()?
+            }
+
             // Identifiers and keywords
             c if c.is_alphabetic() || c == '_' => self.read_identifier_or_keyword()?,
 
             // Strings
             '"' => self.read_string()?,
+
+            // Lifetimes (must be checked before character literals)
+            '\'' if self.is_lifetime_start() => self.read_lifetime()?,
 
             // Characters
             '\'' => self.read_char()?,
@@ -565,6 +816,7 @@ impl Lexer {
                 self.advance();
                 token::Token::Question
             }
+            '$' => self.read_metavariable()?,
             _ => {
                 return Err(LexError::UnexpectedCharacter(ch));
             }

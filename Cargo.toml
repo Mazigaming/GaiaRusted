@@ -1,12 +1,12 @@
 [package]
 name = "gaiarusted"
-version = "0.0.1"
+version = "0.0.3"
 edition = "2021"
-description = "A complete Rust compiler implementation built from scratch"
+description = "A complete Rust compiler implementation built from scratch with advanced features"
 license = "MIT"
 repository = "https://github.com/Mazigaming/GaiaRusted"
 readme = "README.md"
-keywords = ["compiler", "rust", "codegen", "llvm-alternative"]
+keywords = ["compiler", "rust", "codegen", "pattern-matching", "modules"]
 categories = ["development-tools::compiler"]
 
 [lib]
@@ -40,3 +40,20 @@ path = "tests/codegen_tests.rs"
 [[test]]
 name = "integration_tests"
 path = "tests/integration_tests.rs"
+
+# v0.0.3: New test files
+[[test]]
+name = "pattern_matching_tests"
+path = "tests/pattern_matching_tests.rs"
+
+[[test]]
+name = "module_system_tests"
+path = "tests/module_system_tests.rs"
+
+[[test]]
+name = "option_result_tests"
+path = "tests/option_result_tests.rs"
+
+[[test]]
+name = "library_api_tests"
+path = "tests/library_api_tests.rs"

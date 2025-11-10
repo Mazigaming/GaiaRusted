@@ -14,13 +14,18 @@ pub enum Token {
     Integer(i64),           // 42, 0xFF, 0b1010
     Float(f64),             // 3.14
     String(String),         // "hello"
+    RawString(String),      // r"hello" or r#"hello"#
     Char(char),             // 'a'
+    ByteString(Vec<u8>),    // b"hello"
+    ByteChar(u8),           // b'a'
+    Lifetime(String),       // 'a, 'static, '_
 
     // Keywords
     Keyword(Keyword),
 
     // Identifiers
     Identifier(String),
+    Metavariable(String),   // $x, $expr, $ty (for macros)
 
     // Operators and Punctuation
     Plus,                   // +
@@ -78,6 +83,7 @@ pub enum Token {
     At,                     // @
     Hash,                   // #
     Question,               // ?
+    Dollar,                 // $ (for macros)
 
     // End of file
     Eof,
@@ -132,6 +138,9 @@ pub enum Keyword {
     False,
     Null,
 
+    // Macros
+    MacroRules,
+
     // Advanced
     Where,
     Generic,
@@ -182,6 +191,7 @@ impl Token {
             "true" => Token::Keyword(Keyword::True),
             "false" => Token::Keyword(Keyword::False),
             "null" => Token::Keyword(Keyword::Null),
+            "macro_rules" => Token::Keyword(Keyword::MacroRules),
             "where" => Token::Keyword(Keyword::Where),
             "async" => Token::Keyword(Keyword::Async),
             "await" => Token::Keyword(Keyword::Await),
@@ -199,9 +209,14 @@ impl fmt::Display for Token {
             Token::Integer(n) => write!(f, "Integer({})", n),
             Token::Float(n) => write!(f, "Float({})", n),
             Token::String(s) => write!(f, "String(\"{}\")", s),
+            Token::RawString(s) => write!(f, "RawString(r\"{}\")", s),
             Token::Char(c) => write!(f, "Char('{}')", c),
+            Token::ByteString(bytes) => write!(f, "ByteString(b\"{}\")", String::from_utf8_lossy(bytes)),
+            Token::ByteChar(b) => write!(f, "ByteChar(b'{}')", *b as char),
+            Token::Lifetime(lt) => write!(f, "Lifetime('{}')", lt),
             Token::Keyword(kw) => write!(f, "Keyword({:?})", kw),
             Token::Identifier(id) => write!(f, "Identifier({})", id),
+            Token::Metavariable(mv) => write!(f, "Metavariable({})", mv),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -251,6 +266,7 @@ impl fmt::Display for Token {
             Token::At => write!(f, "@"),
             Token::Hash => write!(f, "#"),
             Token::Question => write!(f, "?"),
+            Token::Dollar => write!(f, "$"),
             Token::Eof => write!(f, "EOF"),
         }
     }

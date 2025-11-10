@@ -519,7 +519,7 @@ impl MirLowerer {
                 //   goto merge_block
                 // merge_block:
                 
-                let if_block = builder.current_block;
+                let _if_block = builder.current_block;
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
                 let merge_block = builder.create_block();
@@ -551,6 +551,19 @@ impl MirLowerer {
                 
                 // Continue after if
                 builder.current_block = merge_block;
+            }
+
+            HirStatement::UnsafeBlock(stmts) => {
+                // Unsafe blocks are treated as regular blocks in MIR
+                // The safety guarantees are already checked in the borrowchecker
+                for stmt in stmts {
+                    self.lower_statement_in_builder(builder, stmt)?;
+                }
+            }
+
+            HirStatement::Item(_) => {
+                // Nested items are not lowered to MIR at this level
+                // They are processed separately during compilation
             }
         }
         Ok(())
@@ -733,6 +746,10 @@ impl MirLowerer {
             }
             HirExpression::Match { scrutinee: _, arms: _ } => {
                 // Match expressions are complex - for now, treat as unit
+                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+            }
+            HirExpression::Closure { params: _, body: _, return_type: _, is_move: _ } => {
+                // Closures are treated as unit in simplified MIR
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
             }
         }

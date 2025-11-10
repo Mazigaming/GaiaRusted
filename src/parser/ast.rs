@@ -14,40 +14,126 @@ pub enum Item {
     /// Function definition: `fn name(params) -> ReturnType { body }`
     Function {
         name: String,
+        generics: Vec<GenericParam>,
         params: Vec<Parameter>,
         return_type: Option<Type>,
         body: Block,
+        is_unsafe: bool,
+        is_async: bool,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
     },
     /// Struct definition: `struct Name { field: Type, ... }`
     Struct {
         name: String,
+        generics: Vec<GenericParam>,
         fields: Vec<StructField>,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
     },
     /// Enum definition: `enum Name { Variant1, Variant2(Type), ... }`
     Enum {
         name: String,
+        generics: Vec<GenericParam>,
         variants: Vec<EnumVariant>,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
     },
     /// Trait definition: `trait Name { ... }`
     Trait {
         name: String,
+        generics: Vec<GenericParam>,
+        supertraits: Vec<String>,
         methods: Vec<Item>,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
     },
     /// Impl block: `impl TraitName for StructName { ... }` or `impl StructName { ... }`
     Impl {
+        generics: Vec<GenericParam>,
         trait_name: Option<String>,
         struct_name: String,
         methods: Vec<Item>,
+        is_unsafe: bool,
+        attributes: Vec<Attribute>,
     },
-    /// Module definition: `mod name { ... }`
+    /// Module definition: `mod name { ... }` or `mod name;` (with path)
     Module {
         name: String,
         items: Vec<Item>,
+        is_inline: bool,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
     },
-    /// Use statement: `use path::to::item;`
+    /// Use statement: `use path::to::item;` or `use path::*;`
     Use {
-        path: String,
+        path: Vec<String>,
+        is_glob: bool,
+        is_public: bool,
+        attributes: Vec<Attribute>,
     },
+    /// Type alias: `type Name = Type;` or `type Name<T> = Type;`
+    TypeAlias {
+        name: String,
+        generics: Vec<GenericParam>,
+        ty: Type,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
+    },
+    /// Constant: `const NAME: Type = value;`
+    Const {
+        name: String,
+        ty: Type,
+        value: Expression,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
+    },
+    /// Static variable: `static NAME: Type = value;` or `static mut NAME: Type = value;`
+    Static {
+        name: String,
+        ty: Type,
+        value: Expression,
+        is_mutable: bool,
+        is_pub: bool,
+        attributes: Vec<Attribute>,
+    },
+    /// Extern block: `extern "C" { ... }`
+    ExternBlock {
+        abi: String,
+        items: Vec<Item>,
+        attributes: Vec<Attribute>,
+    },
+    /// Macro definition: `macro_rules! name { ... }`
+    MacroDefinition {
+        name: String,
+        rules: Vec<MacroRule>,
+        attributes: Vec<Attribute>,
+    },
+}
+
+/// Generic parameter: `T`, `T: Bound`, `'a`, `const N: usize`
+#[derive(Debug, Clone, PartialEq)]
+pub enum GenericParam {
+    /// Type parameter: `T` or `T: Display`
+    Type {
+        name: String,
+        bounds: Vec<String>,
+        default: Option<Box<Type>>,
+    },
+    /// Lifetime parameter: `'a`
+    Lifetime(String),
+    /// Const parameter: `const N: usize`
+    Const {
+        name: String,
+        ty: Type,
+    },
+}
+
+/// Macro rule for macro_rules!
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroRule {
+    pub pattern: String,  // Macro pattern
+    pub body: String,     // Macro body (simplified)
 }
 
 /// Function parameter: `name: Type` or `mut name: Type`
@@ -63,6 +149,7 @@ pub struct Parameter {
 pub struct StructField {
     pub name: String,
     pub ty: Type,
+    pub attributes: Vec<Attribute>,
 }
 
 /// An enum variant: `Name`, `Name(Type)`, or `Name { field: Type }`
@@ -89,14 +176,21 @@ pub enum Statement {
         mutable: bool,
         ty: Option<Type>,
         initializer: Expression,
+        attributes: Vec<Attribute>,
     },
     /// Expression statement: `x + 1;`
     Expression(Expression),
     /// Return statement: `return value;` or just `return;`
     Return(Option<Box<Expression>>),
-    /// Break statement: `break;` (in loops)
-    Break,
+    /// Break statement: `break;` (in loops) - can optionally break with value
+    Break(Option<Box<Expression>>),
     /// Continue statement: `continue;` (in loops)
+    
+    // Macro invocation: `name!(args)` or `name!(a, b, c)`
+    MacroInvocation {
+        name: String,
+        args: Vec<Expression>,
+    },
     Continue,
     /// For loop statement: `for x in iter { ... }`
     For {
@@ -115,6 +209,10 @@ pub enum Statement {
         then_body: Block,
         else_body: Option<Box<Statement>>, // Can be another If or else block
     },
+    /// Unsafe block: `unsafe { ... }`
+    UnsafeBlock(Block),
+    /// Item definition (nested functions, structs, etc.)
+    Item(Box<Item>),
 }
 
 /// An expression returns a value
@@ -227,7 +325,92 @@ pub enum Expression {
     Closure {
         params: Vec<String>,
         body: Box<Expression>,
+        is_move: bool,
     },
+
+    // Method call: `obj.method(args)` or `obj.method::<T>(args)`
+    MethodCall {
+        receiver: Box<Expression>,
+        method: String,
+        type_args: Vec<Type>,
+        args: Vec<Expression>,
+    },
+
+    // Cast expression: `value as Type`
+    Cast {
+        value: Box<Expression>,
+        ty: Type,
+    },
+
+    // Try operator: `value?`
+    Try {
+        value: Box<Expression>,
+    },
+
+    // Unsafe block: `unsafe { ... }`
+    UnsafeBlock(Block),
+
+    // Async block: `async { ... }`
+    AsyncBlock(Block),
+
+    // Await expression: `future.await`
+    Await {
+        value: Box<Expression>,
+    },
+
+    // Path expression: `crate::module::item` or `Self::method`
+    Path {
+        segments: Vec<String>,
+        is_absolute: bool, // true for ::global, false for relative
+    },
+
+    // Qualified path: `<Type as Trait>::associated_type`
+    QualifiedPath {
+        ty: Type,
+        trait_name: Option<String>,
+        name: String,
+    },
+
+    // String with format arguments: `"Hello {}"` - for macro support
+    FormatString {
+        parts: Vec<String>,
+        args: Vec<Expression>,
+    },
+
+    // Vector literal: `vec![1, 2, 3]` - simplified macro support
+    VecMacro {
+        elements: Vec<Expression>,
+    },
+
+    // Generic function call: `function::<Type>(args)`
+    GenericCall {
+        name: String,
+        type_args: Vec<Type>,
+        args: Vec<Expression>,
+    },
+
+    // Box expression: `box value` or `Box::new(value)`
+    Box(Box<Expression>),
+
+    // Dereference with auto-deref: `*value`
+    Deref {
+        value: Box<Expression>,
+    },
+
+    // Return expression: `return value`
+    Return(Option<Box<Expression>>),
+
+    // Break with value: `break value` or just `break`
+    Break(Option<Box<Expression>>),
+
+    // Continue expression
+    
+    // Macro invocation: `name!(args)` or `name!(a, b, c)`
+    MacroInvocation {
+        name: String,
+        args: Vec<Expression>,
+    },
+    Continue,
 }
 
 /// Match arm: `pattern => expression`
@@ -247,12 +430,36 @@ pub enum Pattern {
     Literal(Expression),
     /// Identifier: `x` (binds the value to x)
     Identifier(String),
+    /// Mutable binding: `mut x`
+    MutableBinding(String),
+    /// Reference pattern: `&x` or `&mut x`
+    Reference {
+        mutable: bool,
+        pattern: Box<Pattern>,
+    },
     /// Tuple pattern: `(x, y)`
     Tuple(Vec<Pattern>),
     /// Struct pattern: `Point { x, y }`
     Struct {
         name: String,
         fields: Vec<(String, Pattern)>,
+    },
+    /// Or pattern: `pattern1 | pattern2`
+    Or(Vec<Pattern>),
+    /// Range pattern: `1..5` or `1..=5`
+    Range {
+        start: Box<Expression>,
+        end: Box<Expression>,
+        inclusive: bool,
+    },
+    /// Slice pattern: `[a, b, ..rest]`
+    Slice(Vec<Pattern>),
+    /// Box pattern: `box value`
+    Box(Box<Pattern>),
+    /// Enum variant pattern: `Some(x)` or `Result::Ok(value)`
+    EnumVariant {
+        path: Vec<String>,
+        data: Option<Box<Pattern>>,
     },
 }
 
@@ -261,48 +468,115 @@ pub enum Pattern {
 pub enum Type {
     /// Basic types: i32, i64, f64, bool, char, str
     Named(String),
-    /// Reference: `&T` or `&mut T`
+    
+    /// Generic type: `Vec<T>`, `HashMap<K, V>`, etc.
+    Generic {
+        name: String,
+        type_args: Vec<Type>,
+    },
+    
+    /// Reference: `&T` or `&mut T` with optional lifetime `&'a T`
     Reference {
+        lifetime: Option<String>,
         mutable: bool,
         inner: Box<Type>,
     },
-    /// Pointer: `*T` or `*mut T` (for unsafe)
+    
+    /// Pointer: `*const T` or `*mut T` (for unsafe)
     Pointer {
         mutable: bool,
         inner: Box<Type>,
     },
+    
     /// Array: `[T; size]`
     Array {
         element: Box<Type>,
         size: Option<Box<Expression>>, // None means slice
     },
-    /// Function type: `fn(T1, T2) -> R`
+    
+    /// Function type: `fn(T1, T2) -> R` or `unsafe fn()` or `extern "C" fn()`
     Function {
         params: Vec<Type>,
         return_type: Box<Type>,
+        is_unsafe: bool,
+        abi: Option<String>, // "C", "Rust", etc.
     },
+    
     /// Tuple type: `(T1, T2)`
     Tuple(Vec<Type>),
+    
+    /// Trait object: `dyn Trait` or `dyn Trait + 'a`
+    TraitObject {
+        bounds: Vec<String>,
+        lifetime: Option<String>,
+    },
+    
+    /// Impl trait: `impl Trait` for return types
+    ImplTrait {
+        bounds: Vec<String>,
+    },
+    
+    /// Associated type: `T::AssocType`
+    AssociatedType {
+        ty: Box<Type>,
+        name: String,
+    },
+    
+    /// Qualified path type: `<T as Trait>::Type`
+    QualifiedPath {
+        ty: Box<Type>,
+        trait_name: String,
+        name: String,
+    },
+    
+    /// Closure type (simplified)
+    Closure {
+        params: Vec<Type>,
+        return_type: Box<Type>,
+    },
+    
+    /// Type parameter/variable: `T`, `U`, etc.
+    TypeVar(String),
+    
+    /// Never type: `!`
+    Never,
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Type::Named(name) => write!(f, "{}", name),
-            Type::Reference { mutable, inner } => {
-                write!(f, "&{}{}", if *mutable { "mut " } else { "" }, inner)
+            Type::Generic { name, type_args } => {
+                write!(f, "{}<", name)?;
+                for (i, arg) in type_args.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ">")
+            }
+            Type::Reference { lifetime, mutable, inner } => {
+                write!(f, "&")?;
+                if let Some(lt) = lifetime {
+                    write!(f, "{} ", lt)?;
+                }
+                if *mutable { write!(f, "mut ")?; }
+                write!(f, "{}", inner)
             }
             Type::Pointer { mutable, inner } => {
                 write!(f, "*{}{}", if *mutable { "mut " } else { "const " }, inner)
             }
             Type::Array { element, size } => {
                 if let Some(_sz) = size {
-                    write!(f, "[{:?}; ...]", element)
+                    write!(f, "[{}; ...]", element)
                 } else {
                     write!(f, "[{}]", element)
                 }
             }
-            Type::Function { params, return_type } => {
+            Type::Function { params, return_type, is_unsafe, abi } => {
+                if *is_unsafe { write!(f, "unsafe ")?; }
+                if let Some(a) = abi {
+                    write!(f, "extern \"{}\" ", a)?;
+                }
                 write!(f, "fn(")?;
                 for (i, param) in params.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
@@ -318,8 +592,52 @@ impl fmt::Display for Type {
                 }
                 write!(f, ")")
             }
+            Type::TraitObject { bounds, lifetime } => {
+                write!(f, "dyn")?;
+                if let Some(lt) = lifetime {
+                    write!(f, " {} +", lt)?;
+                } else {
+                    write!(f, " ")?;
+                }
+                for (i, bound) in bounds.iter().enumerate() {
+                    if i > 0 { write!(f, " +")?; }
+                    write!(f, " {}", bound)?;
+                }
+                Ok(())
+            }
+            Type::ImplTrait { bounds } => {
+                write!(f, "impl")?;
+                for (i, bound) in bounds.iter().enumerate() {
+                    write!(f, "{} {}", if i == 0 { " " } else { " + " }, bound)?;
+                }
+                Ok(())
+            }
+            Type::AssociatedType { ty, name } => {
+                write!(f, "{}::{}", ty, name)
+            }
+            Type::QualifiedPath { ty, trait_name, name } => {
+                write!(f, "<{} as {}>::{}", ty, trait_name, name)
+            }
+            Type::Closure { params, return_type } => {
+                write!(f, "fn(")?;
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", param)?;
+                }
+                write!(f, ") -> {}", return_type)
+            }
+            Type::TypeVar(name) => write!(f, "{}", name),
+            Type::Never => write!(f, "!"),
         }
     }
+}
+
+/// Attribute: `#[derive(Debug)]`, `#[cfg(test)]`, etc.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    pub name: String,
+    pub args: Vec<String>,
+    pub is_macro: bool, // true for #[...], false for ///
 }
 
 /// Binary operators: `+`, `-`, `*`, `/`, etc.

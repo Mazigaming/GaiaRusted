@@ -2,19 +2,44 @@
 //!
 //! Enforces Rust's memory safety rules through ownership and borrowing analysis.
 //!
+//! ## Components:
+//! - **Lifetime tracking** (lifetimes.rs): Lifetime variables, constraints, elision rules
+//! - **Scope management** (scopes.rs): Lexical scope tracking and binding visibility
+//! - **Borrow checking** (mod.rs): Ownership, move semantics, reference validation
+//!
 //! ## What we do:
+//! - Lifetime representation and inference
 //! - Ownership tracking (each value has one owner)
 //! - Borrow analysis (multiple immutable or one mutable)
 //! - Use-after-move detection
 //! - Use-after-free detection
 //! - Multiple mutable reference detection
+//! - Scope-based lifetime validation
 //!
 //! ## Algorithm:
-//! 1. Collect all bindings and their ownership status
-//! 2. Track moves and borrows through the program
-//! 3. Verify no value is used after move
-//! 4. Verify no multiple mutable borrows of same value
-//! 5. Verify all borrows outlive their use
+//! 1. Register all lifetime parameters and create fresh lifetimes
+//! 2. Build scope hierarchy as we traverse the program
+//! 3. Track moves and borrows through each scope
+//! 4. Verify no value is used after move
+//! 5. Verify no multiple mutable borrows of same value
+//! 6. Verify all borrows respect their lifetime constraints
+
+pub mod lifetimes;
+pub mod scopes;
+pub mod nll;
+pub mod function_lifetimes;
+pub mod struct_lifetimes;
+pub mod self_lifetimes;
+pub mod interior_mutability;
+pub mod smart_pointers;
+pub mod reference_cycles;
+pub mod lifetime_solver;
+pub mod unsafe_checking;
+pub mod unsafe_checking_enhanced;
+
+pub use lifetimes::{Lifetime, LifetimeContext, LifetimeConstraint, LifetimeId, LifetimeElision};
+pub use scopes::{Scope, ScopeId, ScopeStack, ScopeBinding};
+pub use nll::{BorrowTracker, Location, BorrowId, UsageAnalyzer, BorrowInfo};
 
 use crate::lowering::{HirExpression, HirItem, HirStatement, HirType};
 use std::collections::HashMap;
@@ -63,130 +88,218 @@ pub struct Binding {
 }
 
 /// Borrow environment: tracks all bindings and their states
-#[derive(Debug, Clone)]
+/// Enhanced version that uses ScopeStack for better lifetime tracking
+#[derive(Debug)]
 pub struct BorrowEnv {
-    scopes: Vec<HashMap<String, Binding>>,
+    /// Lexical scope hierarchy
+    scopes: ScopeStack,
+    /// Lifetime constraints and context
+    lifetime_ctx: LifetimeContext,
+    /// Ownership states for each binding (name -> state)
+    ownership_states: HashMap<String, OwnershipState>,
 }
 
 impl BorrowEnv {
     /// Create a new borrow environment
     pub fn new() -> Self {
         BorrowEnv {
-            scopes: vec![HashMap::new()],
+            scopes: ScopeStack::new(),
+            lifetime_ctx: LifetimeContext::new(),
+            ownership_states: HashMap::new(),
         }
     }
 
     /// Push a new scope
     pub fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push_scope();
     }
 
     /// Pop the current scope
     pub fn pop_scope(&mut self) {
-        if self.scopes.len() > 1 {
-            self.scopes.pop();
-        }
+        self.scopes.pop_scope();
     }
 
-    /// Bind a new variable
+    /// Get the lifetime context
+    pub fn lifetime_context(&self) -> &LifetimeContext {
+        &self.lifetime_ctx
+    }
+
+    /// Get the lifetime context mutably
+    pub fn lifetime_context_mut(&mut self) -> &mut LifetimeContext {
+        &mut self.lifetime_ctx
+    }
+
+    /// Get the scope stack
+    pub fn scopes(&self) -> &ScopeStack {
+        &self.scopes
+    }
+
+    /// Bind a new variable with optional lifetime
     pub fn bind(&mut self, name: String, ty: HirType, is_mutable: bool) -> BorrowCheckResult<()> {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(
-                name,
-                Binding {
-                    state: OwnershipState::Owned,
-                    ty,
-                    is_mutable,
-                    immutable_borrow_count: 0,
-                    has_mutable_borrow: false,
-                },
-            );
-            Ok(())
-        } else {
-            Err(BorrowCheckError {
-                message: "No scope to bind to".to_string(),
-            })
-        }
+        self.scopes
+            .add_binding(name.clone(), ty, is_mutable, None)
+            .map_err(|e| BorrowCheckError {
+                message: e,
+            })?;
+        self.ownership_states.insert(name, OwnershipState::Owned);
+        Ok(())
+    }
+
+    /// Bind with explicit lifetime
+    pub fn bind_with_lifetime(
+        &mut self,
+        name: String,
+        ty: HirType,
+        is_mutable: bool,
+        lifetime: Lifetime,
+    ) -> BorrowCheckResult<()> {
+        self.scopes
+            .add_binding(name.clone(), ty, is_mutable, Some(lifetime))
+            .map_err(|e| BorrowCheckError {
+                message: e,
+            })?;
+        self.ownership_states.insert(name, OwnershipState::Owned);
+        Ok(())
     }
 
     /// Look up a binding (searches from innermost to outermost scope)
     pub fn lookup(&self, name: &str) -> Option<Binding> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(binding) = scope.get(name) {
-                return Some(binding.clone());
-            }
-        }
-        None
+        self.scopes.lookup(name).map(|scope_binding| Binding {
+            state: self
+                .ownership_states
+                .get(name)
+                .cloned()
+                .unwrap_or(OwnershipState::Owned),
+            ty: scope_binding.ty.clone(),
+            is_mutable: scope_binding.is_mutable,
+            immutable_borrow_count: 0,
+            has_mutable_borrow: false,
+        })
     }
 
-    /// Look up a binding mutably
-    fn lookup_mut(&mut self, name: &str) -> Option<&mut Binding> {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                return scope.get_mut(name);
-            }
-        }
-        None
+    /// Look up a binding mutably (for ownership state changes)
+    fn lookup_mut(&mut self, name: &str) -> Option<Binding> {
+        self.scopes.lookup(name).map(|scope_binding| Binding {
+            state: self
+                .ownership_states
+                .get(name)
+                .cloned()
+                .unwrap_or(OwnershipState::Owned),
+            ty: scope_binding.ty.clone(),
+            is_mutable: scope_binding.is_mutable,
+            immutable_borrow_count: 0,
+            has_mutable_borrow: false,
+        })
     }
 
     /// Mark a binding as moved
     pub fn move_binding(&mut self, name: &str) -> BorrowCheckResult<()> {
-        if let Some(binding) = self.lookup_mut(name) {
-            if binding.state == OwnershipState::Moved {
+        // Check if binding exists
+        if !self.scopes.contains(name) {
+            return Err(BorrowCheckError {
+                message: format!("Undefined variable: {}", name),
+            });
+        }
+
+        // Check current state
+        let current_state = self
+            .ownership_states
+            .get(name)
+            .cloned()
+            .unwrap_or(OwnershipState::Owned);
+
+        match current_state {
+            OwnershipState::Moved => {
                 return Err(BorrowCheckError {
                     message: format!("Value {} used after move", name),
                 });
             }
-            if binding.state == OwnershipState::BorrowedMutable {
+            OwnershipState::BorrowedMutable => {
                 return Err(BorrowCheckError {
                     message: format!("Cannot move borrowed value {}", name),
                 });
             }
-            binding.state = OwnershipState::Moved;
-            Ok(())
-        } else {
-            Err(BorrowCheckError {
-                message: format!("Undefined variable: {}", name),
-            })
+            OwnershipState::BorrowedImmutable => {
+                return Err(BorrowCheckError {
+                    message: format!("Cannot move borrowed value {}", name),
+                });
+            }
+            _ => {}
         }
+
+        self.ownership_states.insert(name.to_string(), OwnershipState::Moved);
+        Ok(())
     }
 
     /// Create an immutable borrow
     pub fn borrow_immutable(&mut self, name: &str) -> BorrowCheckResult<()> {
-        if let Some(binding) = self.lookup_mut(name) {
-            if binding.state == OwnershipState::Moved {
+        // Check if binding exists
+        if !self.scopes.contains(name) {
+            return Err(BorrowCheckError {
+                message: format!("Undefined variable: {}", name),
+            });
+        }
+
+        // Check current state
+        let current_state = self
+            .ownership_states
+            .get(name)
+            .cloned()
+            .unwrap_or(OwnershipState::Owned);
+
+        match current_state {
+            OwnershipState::Moved => {
                 return Err(BorrowCheckError {
                     message: format!("Cannot borrow moved value {}", name),
                 });
             }
-            if binding.state == OwnershipState::BorrowedMutable {
+            OwnershipState::BorrowedMutable => {
                 return Err(BorrowCheckError {
                     message: format!("Cannot immutably borrow mutably borrowed value {}", name),
                 });
             }
-            binding.immutable_borrow_count += 1;
-            Ok(())
-        } else {
-            Err(BorrowCheckError {
-                message: format!("Undefined variable: {}", name),
-            })
+            _ => {}
         }
+
+        self.ownership_states
+            .insert(name.to_string(), OwnershipState::BorrowedImmutable);
+        Ok(())
     }
 
     /// Create a mutable borrow
     pub fn borrow_mutable(&mut self, name: &str) -> BorrowCheckResult<()> {
-        if let Some(binding) = self.lookup_mut(name) {
-            if binding.state == OwnershipState::Moved {
+        // Check if binding exists
+        if !self.scopes.contains(name) {
+            return Err(BorrowCheckError {
+                message: format!("Undefined variable: {}", name),
+            });
+        }
+
+        // Get the binding info
+        let scope_binding = self.scopes.lookup(name).ok_or_else(|| BorrowCheckError {
+            message: format!("Undefined variable: {}", name),
+        })?;
+
+        if !scope_binding.is_mutable {
+            return Err(BorrowCheckError {
+                message: format!("Cannot create mutable borrow of immutable value {}", name),
+            });
+        }
+
+        // Check current state
+        let current_state = self
+            .ownership_states
+            .get(name)
+            .cloned()
+            .unwrap_or(OwnershipState::Owned);
+
+        match current_state {
+            OwnershipState::Moved => {
                 return Err(BorrowCheckError {
                     message: format!("Cannot borrow moved value {}", name),
                 });
             }
-            if !binding.is_mutable {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot create mutable borrow of immutable value {}", name),
-                });
-            }
-            if binding.immutable_borrow_count > 0 {
+            OwnershipState::BorrowedImmutable => {
                 return Err(BorrowCheckError {
                     message: format!(
                         "Cannot mutably borrow {} with existing immutable borrows",
@@ -194,18 +307,17 @@ impl BorrowEnv {
                     ),
                 });
             }
-            if binding.has_mutable_borrow {
+            OwnershipState::BorrowedMutable => {
                 return Err(BorrowCheckError {
                     message: format!("Cannot create multiple mutable borrows of {}", name),
                 });
             }
-            binding.has_mutable_borrow = true;
-            Ok(())
-        } else {
-            Err(BorrowCheckError {
-                message: format!("Undefined variable: {}", name),
-            })
+            _ => {}
         }
+
+        self.ownership_states
+            .insert(name.to_string(), OwnershipState::BorrowedMutable);
+        Ok(())
     }
 }
 
@@ -292,7 +404,7 @@ impl BorrowChecker {
             }
 
             HirStatement::For {
-                var,
+                var: _,
                 iter,
                 body,
             } => {
@@ -341,6 +453,20 @@ impl BorrowChecker {
                         self.check_statement(stmt)?;
                     }
                 }
+            }
+
+            HirStatement::UnsafeBlock(stmts) => {
+                // Unsafe blocks bypass borrow checking
+                // We don't need to check borrows inside unsafe blocks
+                // But we should still recurse for consistency
+                for stmt in stmts {
+                    self.check_statement(stmt)?;
+                }
+            }
+
+            HirStatement::Item(_) => {
+                // Nested items don't need borrow checking at this level
+                // They will be checked separately
             }
         }
         Ok(())
@@ -482,6 +608,13 @@ impl BorrowChecker {
             | HirExpression::Float(_)
             | HirExpression::String(_)
             | HirExpression::Bool(_) => Ok(()),
+
+            HirExpression::Closure { body, .. } => {
+                self.env.push_scope();
+                self.check_statements(body)?;
+                self.env.pop_scope();
+                Ok(())
+            }
         }
     }
 }

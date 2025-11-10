@@ -1,7 +1,9 @@
 //! High-level compiler API for multi-file compilation
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::Command;
 
 use crate::config::{CompilationConfig, OutputFormat};
 use crate::lexer;
@@ -11,6 +13,7 @@ use crate::typechecker;
 use crate::borrowchecker;
 use crate::mir;
 use crate::codegen;
+use crate::codegen::backend::assembler::Assembler;
 
 /// Compilation error with detailed context
 #[derive(Debug, Clone)]
@@ -33,6 +36,7 @@ impl std::fmt::Display for CompileError {
 impl std::error::Error for CompileError {}
 
 /// Result of compilation
+#[derive(Debug, Clone)]
 pub struct CompilationResult {
     pub success: bool,
     pub output_files: Vec<PathBuf>,
@@ -231,6 +235,7 @@ fn compile_single_file(
 fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     let output_path = config.output_path_with_extension();
+    let output_dir = config.output_path.parent().unwrap_or_else(|| std::path::Path::new("."));
 
     match config.output_format {
         OutputFormat::Assembly => {
@@ -242,6 +247,10 @@ fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBu
             let asm_file = format!("{}.s", config.output_path.display());
             fs::write(&asm_file, assembly)
                 .map_err(|e| format!("Failed to write assembly file: {}", e))?;
+            
+            let assembler = Assembler::new(output_dir);
+            assembler.assemble_to_object(assembly, &output_path)?;
+            
             files.push(PathBuf::from(&asm_file));
             files.push(output_path);
         }
@@ -249,9 +258,15 @@ fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBu
             let asm_file = format!("{}.s", config.output_path.display());
             fs::write(&asm_file, assembly)
                 .map_err(|e| format!("Failed to write assembly file: {}", e))?;
+            
+            let assembler = Assembler::new(output_dir);
+            assembler.compile_to_executable(assembly, &output_path)?;
+            
+            fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set executable permissions: {}", e))?;
+            
             files.push(PathBuf::from(&asm_file));
-            files.push(output_path.clone());
-            generate_build_script(config, &asm_file, &output_path)?;
+            files.push(output_path);
         }
         OutputFormat::BashScript => {
             let asm_file = format!("{}.s", config.output_path.display());
@@ -266,8 +281,17 @@ fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBu
             let asm_file = format!("{}.s", config.output_path.display());
             fs::write(&asm_file, assembly)
                 .map_err(|e| format!("Failed to write assembly file: {}", e))?;
+            
+            let assembler = Assembler::new(output_dir);
+            let obj_file = format!("{}.o", config.output_path.display());
+            assembler.assemble_to_object(assembly, &PathBuf::from(&obj_file))?;
+            
+            let lib_file = format!("{}.a", config.output_path.display());
+            create_static_library(&obj_file, &lib_file)?;
+            
             files.push(PathBuf::from(&asm_file));
-            files.push(output_path);
+            files.push(PathBuf::from(&obj_file));
+            files.push(PathBuf::from(&lib_file));
         }
     }
 
@@ -339,5 +363,21 @@ fn generate_build_script(
     );
 
     println!("{}", instructions);
+    Ok(())
+}
+
+/// Create a static library from object files
+fn create_static_library(obj_file: &str, lib_file: &str) -> Result<(), String> {
+    let status = Command::new("ar")
+        .arg("rcs")
+        .arg(lib_file)
+        .arg(obj_file)
+        .status()
+        .map_err(|e| format!("Failed to invoke ar: {}", e))?;
+
+    if !status.success() {
+        return Err("Failed to create static library".to_string());
+    }
+
     Ok(())
 }
