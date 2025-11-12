@@ -234,13 +234,68 @@ impl CliArgs {
     }
 }
 
+fn print_detailed_error(error: &gaiarusted::CompileError, error_num: usize, total_errors: usize) {
+    let location = match (error.line, error.column) {
+        (Some(line), Some(col)) => format!("{}:{}", line, col),
+        (Some(line), None) => format!("{}:1", line),
+        _ => "unknown".to_string(),
+    };
+    
+    if let Some(file) = &error.file {
+        eprintln!("error[{}]: {} ({})", error_num, error.message, error.phase);
+        eprintln!(" --> {}:{}", file.display(), location);
+    } else {
+        eprintln!("error[{}]: {} ({})", error_num, error.message, error.phase);
+        eprintln!(" --> {}:{}", location, error.phase);
+    }
+    
+    if let Some(file) = &error.file {
+        if let Ok(source) = fs::read_to_string(file) {
+            if let Some(line_num) = error.line {
+                let lines: Vec<&str> = source.lines().collect();
+                if line_num > 0 && line_num <= lines.len() {
+                    let line_content = lines[line_num - 1];
+                    let line_num_str = line_num.to_string();
+                    let padding = " ".repeat(line_num_str.len());
+                    
+                    eprintln!(" {} |", padding);
+                    eprintln!(" {} | {}", line_num_str, line_content);
+                    
+                    if let Some(col) = error.column {
+                        let col = col.saturating_sub(1);
+                        let pointer_pos = col.min(line_content.len());
+                        let mut pointer_line = String::new();
+                        pointer_line.push_str(&" ".repeat(pointer_pos));
+                        pointer_line.push('^');
+                        eprintln!(" {} | {}", padding, pointer_line);
+                    }
+                }
+            }
+        }
+    }
+    
+    eprintln!("   = {}", error.phase);
+    
+    if let Some(sugg) = &error.suggestion {
+        eprintln!("   = suggestion: {}", sugg);
+    }
+    
+    if let Some(help) = &error.help {
+        eprintln!("   = help: {}", help);
+    }
+    
+    if error_num < total_errors {
+        eprintln!();
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let cli_args = match CliArgs::parse(args) {
         Ok(args) => args,
         Err(e) => {
-            eprintln!("❌ Error: {}", e);
+            eprintln!("Error: {}", e);
             eprintln!("Use --help for usage information");
             process::exit(1);
         }
@@ -271,66 +326,64 @@ fn main() {
         };
 
         if cli_args.verbose {
-            println!("🔍 Discovering .rs files in: {}", discover_path.display());
+            println!("Discovering .rs files in: {}", discover_path.display());
         }
 
         match config.discover_sources(&discover_path) {
             Ok(new_config) => {
                 config = new_config;
                 if cli_args.verbose {
-                    println!("✓ Found {} source files", config.source_files.len());
+                    println!("Found {} source files", config.source_files.len());
                     for file in &config.source_files {
                         println!("  - {}", file.display());
                     }
                 }
             }
             Err(e) => {
-                eprintln!("❌ Discovery error: {}", e);
+                eprintln!("Discovery error: {}", e);
                 process::exit(1);
             }
         }
     } else {
-        // Add explicit input files
         for input_file in cli_args.input {
             match config.add_source_file(&input_file) {
                 Ok(new_config) => config = new_config,
                 Err(e) => {
-                    eprintln!("❌ Error: {}", e);
+                    eprintln!("Error: {}", e);
                     process::exit(1);
                 }
             }
         }
     }
 
-    // Print compilation info
-    println!("🚀 GiaRusted Compiler v0.2.0");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📦 Input files: {}", config.source_files.len());
+    println!("GiaRusted Compiler v0.2.0");
+    println!("==================================================");
+    println!("Input files: {}", config.source_files.len());
     for file in &config.source_files {
         println!("   - {}", file.display());
     }
-    println!("📊 Output: {} [{}]", 
+    println!("Output: {} [{}]", 
         config.output_path.display(), 
         config.output_format);
-    println!("⚙️  Optimization level: {}", config.opt_level);
+    println!("Optimization level: {}", config.opt_level);
     if config.debug {
-        println!("🐛 Debug info: enabled");
+        println!("Debug info: enabled");
     }
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("==================================================");
     println!();
 
     // Compile
     match compile_files(&config) {
         Ok(result) => {
             if result.success {
-                println!("✅ Compilation successful!");
+                println!("Compilation successful!");
                 println!();
-                println!("📊 Statistics:");
+                println!("Statistics:");
                 println!("   Files compiled: {}", result.stats.files_compiled);
                 println!("   Lines of code: {}", result.stats.total_lines);
                 println!("   Assembly size: {} bytes", result.stats.assembly_size);
                 println!();
-                println!("📁 Output files:");
+                println!("Output files:");
                 for file in &result.output_files {
                     if file.exists() {
                         let size = fs::metadata(file)
@@ -344,7 +397,7 @@ fn main() {
                 println!();
 
                 if matches!(config.output_format, OutputFormat::Executable | OutputFormat::BashScript) {
-                    println!("🔧 Next steps:");
+                    println!("Next steps:");
                     let asm_file = format!("{}.s", config.output_path.display());
                     let obj_file = format!("{}.o", config.output_path.display());
                     let out_file = config.output_path.display();
@@ -353,19 +406,20 @@ fn main() {
                     println!("   3. Run:       ./{}", out_file);
                 }
             } else {
-                eprintln!("❌ Compilation failed!");
-                println!();
-                for error in &result.errors {
-                    eprintln!("  {} ({})", error.phase, error.message);
-                    if let Some(file) = &error.file {
-                        eprintln!("    File: {}", file.display());
-                    }
+                eprintln!("error: compilation failed with {} error{}",
+                    result.errors.len(),
+                    if result.errors.len() == 1 { "" } else { "s" });
+                eprintln!();
+                
+                for (idx, error) in result.errors.iter().enumerate() {
+                    print_detailed_error(error, idx + 1, result.errors.len());
                 }
+                
                 process::exit(1);
             }
         }
         Err(e) => {
-            eprintln!("❌ Fatal compilation error: {}", e);
+            eprintln!("Fatal compilation error: {}", e);
             process::exit(1);
         }
     }

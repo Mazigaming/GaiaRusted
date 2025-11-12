@@ -216,11 +216,12 @@ pub enum BinaryOp {
 /// Unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
-    Negate,      // -x
-    Not,         // !x
-    BitwiseNot,  // ~x
-    Dereference, // *x
-    Reference,   // &x
+    Negate,           // -x
+    Not,              // !x
+    BitwiseNot,       // ~x
+    Dereference,      // *x
+    Reference,        // &x
+    MutableReference, // &mut x
 }
 
 /// HIR Types (simplified from parser types)
@@ -231,6 +232,7 @@ pub enum HirType {
     Int64,
     Float64,
     Bool,
+    Char,
     String,
 
     /// User-defined type
@@ -277,6 +279,7 @@ impl fmt::Display for HirType {
             HirType::Int64 => write!(f, "i64"),
             HirType::Float64 => write!(f, "f64"),
             HirType::Bool => write!(f, "bool"),
+            HirType::Char => write!(f, "char"),
             HirType::String => write!(f, "str"),
             HirType::Named(name) => write!(f, "{}", name),
             HirType::Reference(ty) => write!(f, "&{}", ty),
@@ -497,6 +500,7 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 parser::UnaryOp::BitwiseNot => UnaryOp::BitwiseNot,
                 parser::UnaryOp::Dereference => UnaryOp::Dereference,
                 parser::UnaryOp::Reference => UnaryOp::Reference,
+                parser::UnaryOp::MutableReference => UnaryOp::MutableReference,
             };
             Ok(HirExpression::UnaryOp {
                 op: op_hir,
@@ -812,9 +816,17 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         }
 
         // New Expression variants from expanded AST
-        Expression::MethodCall { receiver: _, method: _, type_args: _, args: _ } => {
-            Err(LowerError {
-                message: "Method calls not yet fully supported".to_string(),
+        Expression::MethodCall { receiver, method, type_args: _, args } => {
+            let receiver_hir = lower_expression(receiver)?;
+            let mut all_args: Vec<HirExpression> = vec![receiver_hir];
+            
+            for arg in args {
+                all_args.push(lower_expression(arg)?);
+            }
+            
+            Ok(HirExpression::Call {
+                func: Box::new(HirExpression::Variable(method.clone())),
+                args: all_args,
             })
         }
 

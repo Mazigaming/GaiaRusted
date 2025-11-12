@@ -73,6 +73,7 @@ pub enum Token {
     Comma,                  // ,
     Dot,                    // .
     DotDot,                 // ..
+    DotDotEqual,            // ..=
     DotDotDot,              // ...
     Colon,                  // :
     DoubleColon,            // ::
@@ -258,6 +259,7 @@ impl fmt::Display for Token {
             Token::Comma => write!(f, ","),
             Token::Dot => write!(f, "."),
             Token::DotDot => write!(f, ".."),
+            Token::DotDotEqual => write!(f, "..="),
             Token::DotDotDot => write!(f, "..."),
             Token::Colon => write!(f, ":"),
             Token::DoubleColon => write!(f, "::"),

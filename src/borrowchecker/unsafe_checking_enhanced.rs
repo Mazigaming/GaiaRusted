@@ -188,6 +188,7 @@ impl UnsafeCheckerEnhanced {
             HirType::Int64 => "i64".to_string(),
             HirType::Float64 => "f64".to_string(),
             HirType::Bool => "bool".to_string(),
+            HirType::Char => "char".to_string(),
             HirType::String => "str".to_string(),
             HirType::Named(n) => n.clone(),
             HirType::Reference(inner) => format!("&{}", self.type_name(inner)),

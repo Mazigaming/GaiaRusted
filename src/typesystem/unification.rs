@@ -27,6 +27,36 @@ impl UnificationEngine {
         Self { var_counter: 0 }
     }
 
+    /// Check if a numeric type can be widened to another numeric type
+    /// 
+    /// Widening allows smaller types to be converted to larger types:
+    /// - i8, i16, i32 can widen to i64, isize
+    /// - u8, u16, u32 can widen to u64, usize
+    /// - f32 can widen to f64
+    /// 
+    /// Returns Some(widened_type) if widening is possible, None otherwise
+    fn can_widen(from: &Type, to: &Type) -> Option<Type> {
+        use Type::*;
+        
+        match (from, to) {
+            // Integer widening rules
+            (I8, I16) | (I8, I32) | (I8, I64) | (I8, Isize) => Some(to.clone()),
+            (I16, I32) | (I16, I64) | (I16, Isize) => Some(to.clone()),
+            (I32, I64) | (I32, Isize) => Some(to.clone()),
+            
+            // Unsigned integer widening rules
+            (U8, U16) | (U8, U32) | (U8, U64) | (U8, Usize) => Some(to.clone()),
+            (U16, U32) | (U16, U64) | (U16, Usize) => Some(to.clone()),
+            (U32, U64) | (U32, Usize) => Some(to.clone()),
+            
+            // Float widening rules
+            (F32, F64) => Some(to.clone()),
+            
+            // Cross-category conversions are not allowed
+            _ => None,
+        }
+    }
+
     /// Unify two types
     ///
     /// # Arguments
@@ -179,6 +209,12 @@ impl UnificationEngine {
                 self.unify(r1, r2, subst)
             }
 
+            // Try numeric type widening
+            // Check if ty1 can be widened to ty2
+            (t1, t2) if Self::can_widen(t1, t2).is_some() => Ok(()),
+            // Check if ty2 can be widened to ty1
+            (t1, t2) if Self::can_widen(t2, t1).is_some() => Ok(()),
+
             // No unification possible: type mismatch
             _ => Err(format!("Type mismatch: cannot unify {} and {}", ty1, ty2)),
         }
@@ -239,7 +275,44 @@ mod tests {
         let mut engine = UnificationEngine::new();
         let mut subst = Substitution::new();
 
+        // i32 and i64 can now be unified via widening
         let result = engine.unify(&Type::I32, &Type::I64, &mut subst);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_numeric_type_widening() {
+        let mut engine = UnificationEngine::new();
+        let mut subst = Substitution::new();
+
+        // Test various widening scenarios
+        assert!(engine.unify(&Type::I8, &Type::I32, &mut subst).is_ok());
+        
+        let mut subst = Substitution::new();
+        assert!(engine.unify(&Type::I16, &Type::I64, &mut subst).is_ok());
+        
+        let mut subst = Substitution::new();
+        assert!(engine.unify(&Type::U32, &Type::U64, &mut subst).is_ok());
+        
+        let mut subst = Substitution::new();
+        assert!(engine.unify(&Type::F32, &Type::F64, &mut subst).is_ok());
+    }
+
+    #[test]
+    fn test_no_illegal_widening() {
+        let mut engine = UnificationEngine::new();
+        let mut subst = Substitution::new();
+
+        // Cross-category conversions should still fail
+        let result = engine.unify(&Type::I32, &Type::U32, &mut subst);
+        assert!(result.is_err());
+        
+        let mut subst = Substitution::new();
+        let result = engine.unify(&Type::F32, &Type::I32, &mut subst);
+        assert!(result.is_err());
+        
+        let mut subst = Substitution::new();
+        let result = engine.unify(&Type::Bool, &Type::I32, &mut subst);
         assert!(result.is_err());
     }
 

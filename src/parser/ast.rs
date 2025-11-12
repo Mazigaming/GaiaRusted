@@ -698,11 +698,12 @@ impl fmt::Display for BinaryOp {
 /// Unary operators: `-x`, `!flag`, `*ptr`, `&var`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
-    Negate,      // -
-    Not,         // !
-    BitwiseNot,  // ~
-    Dereference, // *
-    Reference,   // & (borrows)
+    Negate,           // -
+    Not,              // !
+    BitwiseNot,       // ~
+    Dereference,      // *
+    Reference,        // & (immutable borrow)
+    MutableReference, // &mut (mutable borrow)
 }
 
 impl fmt::Display for UnaryOp {
@@ -713,6 +714,7 @@ impl fmt::Display for UnaryOp {
             UnaryOp::BitwiseNot => write!(f, "~"),
             UnaryOp::Dereference => write!(f, "*"),
             UnaryOp::Reference => write!(f, "&"),
+            UnaryOp::MutableReference => write!(f, "&mut"),
         }
     }
 }

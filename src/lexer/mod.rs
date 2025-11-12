@@ -657,6 +657,9 @@ impl Lexer {
                     if self.current_char() == Some('.') {
                         self.advance();
                         token::Token::DotDotDot
+                    } else if self.current_char() == Some('=') {
+                        self.advance();
+                        token::Token::DotDotEqual
                     } else {
                         token::Token::DotDot
                     }

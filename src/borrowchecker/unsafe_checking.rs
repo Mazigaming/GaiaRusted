@@ -166,6 +166,7 @@ impl UnsafeChecker {
             HirType::Int64 |
             HirType::Float64 |
             HirType::Bool |
+            HirType::Char |
             HirType::String |
             HirType::Unknown => Ok(()),
         }

@@ -30,16 +30,20 @@ pub mod nll;
 pub mod function_lifetimes;
 pub mod struct_lifetimes;
 pub mod self_lifetimes;
+pub mod impl_lifetimes;
 pub mod interior_mutability;
 pub mod smart_pointers;
 pub mod reference_cycles;
 pub mod lifetime_solver;
 pub mod unsafe_checking;
 pub mod unsafe_checking_enhanced;
+pub mod lifetime_validation;
 
 pub use lifetimes::{Lifetime, LifetimeContext, LifetimeConstraint, LifetimeId, LifetimeElision};
 pub use scopes::{Scope, ScopeId, ScopeStack, ScopeBinding};
 pub use nll::{BorrowTracker, Location, BorrowId, UsageAnalyzer, BorrowInfo};
+pub use lifetime_validation::{LifetimeValidator, FunctionLifetimeValidator, StructLifetimeValidator};
+pub use impl_lifetimes::{SelfKind, ImplMethodValidator, ImplLifetimeError, MethodLifetimeLocation};
 
 use crate::lowering::{HirExpression, HirItem, HirStatement, HirType};
 use std::collections::HashMap;

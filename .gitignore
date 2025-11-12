@@ -33,6 +33,8 @@ buildit.*
 mathlib.*
 test_project/
 a.out*
+*txt
+test_*
 
 # OS files
 Thumbs.db

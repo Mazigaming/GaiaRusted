@@ -386,6 +386,7 @@ pub fn convert_unary_op(op: &parser_ast::UnaryOp) -> AstUnaryOp {
         parser_ast::UnaryOp::Not => AstUnaryOp::Not,
         parser_ast::UnaryOp::Dereference => AstUnaryOp::Deref,
         parser_ast::UnaryOp::Reference => AstUnaryOp::Reference,
+        parser_ast::UnaryOp::MutableReference => AstUnaryOp::MutableReference,
         parser_ast::UnaryOp::BitwiseNot => AstUnaryOp::BitwiseNot,
     }
 }

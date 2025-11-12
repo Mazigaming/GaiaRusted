@@ -22,6 +22,9 @@ pub struct CompileError {
     pub message: String,
     pub file: Option<PathBuf>,
     pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub suggestion: Option<String>,
+    pub help: Option<String>,
 }
 
 impl std::fmt::Display for CompileError {
@@ -68,6 +71,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         message: e,
         file: None,
         line: None,
+        column: None,
+        suggestion: None,
+        help: None,
     })?;
 
     let mut stats = CompilationStats::new();
@@ -113,6 +119,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             message: e.to_string(),
             file: None,
             line: None,
+            column: None,
+            suggestion: None,
+            help: None,
         });
     }
 
@@ -122,6 +131,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             message: e.to_string(),
             file: None,
             line: None,
+            column: None,
+            suggestion: None,
+            help: None,
         });
     }
 
@@ -143,6 +155,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                     message: e.to_string(),
                     file: None,
                     line: None,
+                    column: None,
+                    suggestion: None,
+                    help: None,
                 });
             }
 
@@ -160,6 +175,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                                     message: e,
                                     file: None,
                                     line: None,
+                                    column: None,
+                                    suggestion: None,
+                                    help: None,
                                 });
                             }
                         }
@@ -170,6 +188,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                             message: e.to_string(),
                             file: None,
                             line: None,
+                            column: None,
+                            suggestion: None,
+                            help: None,
                         });
                     }
                 }
@@ -181,6 +202,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                 message: e.to_string(),
                 file: None,
                 line: None,
+                column: None,
+                suggestion: None,
+                help: None,
             });
         }
     }
@@ -203,6 +227,9 @@ fn compile_single_file(
         message: format!("Failed to read file: {}", e),
         file: Some(source_file.to_path_buf()),
         line: None,
+        column: None,
+        suggestion: None,
+        help: None,
     })?;
 
     let loc = source.lines().count();
@@ -212,6 +239,9 @@ fn compile_single_file(
         message: e.to_string(),
         file: Some(source_file.to_path_buf()),
         line: None,
+        column: None,
+        suggestion: None,
+        help: None,
     })?;
 
     let ast = parser::parse(tokens).map_err(|e| CompileError {
@@ -219,6 +249,9 @@ fn compile_single_file(
         message: e.to_string(),
         file: Some(source_file.to_path_buf()),
         line: None,
+        column: None,
+        suggestion: None,
+        help: None,
     })?;
 
     let hir = lowering::lower(&ast).map_err(|e| CompileError {
@@ -226,6 +259,9 @@ fn compile_single_file(
         message: e.to_string(),
         file: Some(source_file.to_path_buf()),
         line: None,
+        column: None,
+        suggestion: None,
+        help: None,
     })?;
 
     Ok((hir, loc))

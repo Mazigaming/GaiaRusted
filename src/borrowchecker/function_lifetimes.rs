@@ -5,6 +5,7 @@
 
 use crate::parser::ast::{Type, GenericParam, Parameter};
 use super::lifetimes::{Lifetime, LifetimeContext, LifetimeElision};
+use super::lifetime_validation::FunctionLifetimeValidator;
 
 /// Information about a function's lifetime parameters and constraints
 #[derive(Debug, Clone)]
@@ -165,6 +166,28 @@ pub fn validate_function_lifetimes(
     Ok(())
 }
 
+/// Enhanced validation with detailed error messages
+/// Validates:
+/// 1. All declared lifetimes are used
+/// 2. All referenced lifetimes are declared
+/// 3. Provides helpful error context
+pub fn validate_function_lifetimes_detailed(
+    generics: &[GenericParam],
+    params: &[Parameter],
+    return_type: &Option<Type>,
+) -> Result<(), Vec<String>> {
+    let mut validator = FunctionLifetimeValidator::new(generics);
+    
+    // Collect parameter lifetimes
+    validator.add_parameters(params);
+    
+    // Collect return type lifetimes
+    validator.add_return_type(return_type);
+    
+    // Perform validation
+    validator.validate()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +270,101 @@ mod tests {
         assert_eq!(constraints.len(), 1);
         assert_eq!(constraints[0].lhs, Lifetime::Named("a".to_string()));
         assert_eq!(constraints[0].rhs, Lifetime::Named("b".to_string()));
+    }
+
+    #[test]
+    fn test_validate_function_lifetimes_valid_signature() {
+        let generics = vec![GenericParam::Lifetime("a".to_string())];
+        let params = vec![Parameter {
+            name: "x".to_string(),
+            mutable: false,
+            ty: Type::Reference {
+                lifetime: Some("a".to_string()),
+                mutable: false,
+                inner: Box::new(Type::Named("i32".to_string())),
+            },
+        }];
+        let return_type = None;
+
+        let result = validate_function_lifetimes_detailed(&generics, &params, &return_type);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_function_lifetimes_unused() {
+        let generics = vec![GenericParam::Lifetime("a".to_string())];
+        let params = vec![]; // No parameters using 'a
+        let return_type = None;
+
+        let result = validate_function_lifetimes_detailed(&generics, &params, &return_type);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors[0].contains("Unused lifetime parameter 'a'"));
+    }
+
+    #[test]
+    fn test_validate_function_lifetimes_undeclared() {
+        let generics = vec![]; // No lifetime declarations
+        let params = vec![Parameter {
+            name: "x".to_string(),
+            mutable: false,
+            ty: Type::Reference {
+                lifetime: Some("a".to_string()), // Uses undeclared 'a
+                mutable: false,
+                inner: Box::new(Type::Named("i32".to_string())),
+            },
+        }];
+        let return_type = None;
+
+        let result = validate_function_lifetimes_detailed(&generics, &params, &return_type);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors[0].contains("Undeclared lifetime 'a'"));
+    }
+
+    #[test]
+    fn test_validate_function_lifetimes_return_type() {
+        let generics = vec![GenericParam::Lifetime("a".to_string())];
+        let params = vec![];
+        let return_type = Some(Type::Reference {
+            lifetime: Some("a".to_string()),
+            mutable: false,
+            inner: Box::new(Type::Named("i32".to_string())),
+        });
+
+        let result = validate_function_lifetimes_detailed(&generics, &params, &return_type);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_function_lifetimes_multiple() {
+        let generics = vec![
+            GenericParam::Lifetime("a".to_string()),
+            GenericParam::Lifetime("b".to_string()),
+        ];
+        let params = vec![
+            Parameter {
+                name: "x".to_string(),
+                mutable: false,
+                ty: Type::Reference {
+                    lifetime: Some("a".to_string()),
+                    mutable: false,
+                    inner: Box::new(Type::Named("i32".to_string())),
+                },
+            },
+            Parameter {
+                name: "y".to_string(),
+                mutable: false,
+                ty: Type::Reference {
+                    lifetime: Some("b".to_string()),
+                    mutable: false,
+                    inner: Box::new(Type::Named("str".to_string())),
+                },
+            },
+        ];
+        let return_type = None;
+
+        let result = validate_function_lifetimes_detailed(&generics, &params, &return_type);
+        assert!(result.is_ok());
     }
 }

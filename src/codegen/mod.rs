@@ -468,15 +468,21 @@ impl Codegen {
             crate::mir::Operand::Constant(crate::mir::Constant::Integer(n)) => {
                 Ok(X86Operand::Immediate(*n))
             }
+            crate::mir::Operand::Constant(crate::mir::Constant::Float(_f)) => {
+                Ok(X86Operand::Register(Register::RAX))
+            }
             crate::mir::Operand::Constant(crate::mir::Constant::Bool(b)) => {
                 Ok(X86Operand::Immediate(if *b { 1 } else { 0 }))
+            }
+            crate::mir::Operand::Constant(crate::mir::Constant::String(_s)) => {
+                Ok(X86Operand::Register(Register::RAX))
+            }
+            crate::mir::Operand::Constant(crate::mir::Constant::Unit) => {
+                Ok(X86Operand::Immediate(0))
             }
             crate::mir::Operand::Copy(_place) | crate::mir::Operand::Move(_place) => {
                 Ok(X86Operand::Register(Register::RAX))
             }
-            _ => Err(CodegenError {
-                message: "Unsupported operand type".to_string(),
-            })
         }
     }
 

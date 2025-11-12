@@ -5,6 +5,7 @@
 
 use crate::parser::ast::{Type, GenericParam, StructField};
 use super::lifetimes::{Lifetime, LifetimeContext};
+use super::lifetime_validation::StructLifetimeValidator;
 
 /// Information about a struct's lifetime parameters and field constraints
 #[derive(Debug, Clone)]
@@ -132,6 +133,26 @@ pub fn validate_struct_lifetimes(
     Ok(())
 }
 
+/// Enhanced validation with detailed error messages
+/// Validates:
+/// 1. All declared lifetimes are used
+/// 2. All referenced lifetimes are declared
+/// 3. Provides helpful error context
+pub fn validate_struct_lifetimes_detailed(
+    generics: &[GenericParam],
+    fields: &[StructField],
+) -> Result<(), Vec<String>> {
+    let mut validator = StructLifetimeValidator::new(generics);
+    
+    // Collect field lifetimes
+    for (i, field) in fields.iter().enumerate() {
+        validator.add_field(field.name.clone(), &field.ty);
+    }
+    
+    // Perform validation
+    validator.validate()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +232,83 @@ mod tests {
         assert_eq!(constraints.len(), 1);
         assert_eq!(constraints[0].lhs, Lifetime::Named("b".to_string()));
         assert_eq!(constraints[0].rhs, Lifetime::Named("a".to_string()));
+    }
+
+    #[test]
+    fn test_validate_struct_lifetimes_valid() {
+        let generics = vec![GenericParam::Lifetime("a".to_string())];
+        let fields = vec![StructField {
+            name: "data".to_string(),
+            ty: Type::Reference {
+                lifetime: Some("a".to_string()),
+                mutable: false,
+                inner: Box::new(Type::Named("i32".to_string())),
+            },
+            attributes: vec![],
+        }];
+
+        let result = validate_struct_lifetimes_detailed(&generics, &fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_lifetimes_unused() {
+        let generics = vec![GenericParam::Lifetime("a".to_string())];
+        let fields = vec![]; // No fields using 'a
+
+        let result = validate_struct_lifetimes_detailed(&generics, &fields);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors[0].contains("Unused lifetime parameter 'a'"));
+    }
+
+    #[test]
+    fn test_validate_struct_lifetimes_undeclared() {
+        let generics = vec![]; // No lifetime declarations
+        let fields = vec![StructField {
+            name: "data".to_string(),
+            ty: Type::Reference {
+                lifetime: Some("a".to_string()), // Uses undeclared 'a
+                mutable: false,
+                inner: Box::new(Type::Named("i32".to_string())),
+            },
+            attributes: vec![],
+        }];
+
+        let result = validate_struct_lifetimes_detailed(&generics, &fields);
+        assert!(result.is_err());
+        let errors = result.unwrap_err();
+        assert!(errors[0].contains("Undeclared lifetime 'a'"));
+    }
+
+    #[test]
+    fn test_validate_struct_lifetimes_multiple_fields() {
+        let generics = vec![
+            GenericParam::Lifetime("a".to_string()),
+            GenericParam::Lifetime("b".to_string()),
+        ];
+        let fields = vec![
+            StructField {
+                name: "first".to_string(),
+                ty: Type::Reference {
+                    lifetime: Some("a".to_string()),
+                    mutable: false,
+                    inner: Box::new(Type::Named("i32".to_string())),
+                },
+                attributes: vec![],
+            },
+            StructField {
+                name: "second".to_string(),
+                ty: Type::Reference {
+                    lifetime: Some("b".to_string()),
+                    mutable: false,
+                    inner: Box::new(Type::Named("str".to_string())),
+                },
+                attributes: vec![],
+            },
+        ];
+
+        let result = validate_struct_lifetimes_detailed(&generics, &fields);
+        assert!(result.is_ok());
     }
 }

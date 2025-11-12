@@ -159,10 +159,28 @@ impl TypeChecker {
         // String/Array functions
         self.context.register_function("len".to_string(), vec![HirType::String], HirType::Int32);
 
+        // String methods (called via method syntax: s.method())
+        self.context.register_function("to_upper".to_string(), vec![HirType::String], HirType::String);
+        self.context.register_function("to_lower".to_string(), vec![HirType::String], HirType::String);
+        self.context.register_function("to_uppercase".to_string(), vec![HirType::String], HirType::String);
+        self.context.register_function("to_lowercase".to_string(), vec![HirType::String], HirType::String);
+        self.context.register_function("contains".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+        self.context.register_function("starts_with".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+        self.context.register_function("ends_with".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+        self.context.register_function("trim".to_string(), vec![HirType::String], HirType::String);
+        self.context.register_function("split".to_string(), vec![HirType::String, HirType::Char], HirType::String);
+        self.context.register_function("replace".to_string(), vec![HirType::String, HirType::String, HirType::String], HirType::String);
+        self.context.register_function("repeat".to_string(), vec![HirType::String, HirType::Int32], HirType::String);
+        self.context.register_function("reverse_str".to_string(), vec![HirType::String], HirType::String);
+
         // I/O functions
         self.context.register_function("print".to_string(), vec![HirType::String], HirType::Unknown);
-        self.context.register_function("println".to_string(), vec![HirType::String], HirType::Unknown);
-        self.context.register_function("eprintln".to_string(), vec![HirType::String], HirType::Unknown);
+        self.context.register_function("println".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Unknown);
+        self.context.register_function("eprintln".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Unknown);
+        
+        self.context.register_function("__builtin_print".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
+        self.context.register_function("__builtin_println".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
+        self.context.register_function("__builtin_eprintln".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
 
         // Type conversions
         self.context.register_function("as_i32".to_string(), vec![HirType::Float64], HirType::Int32);
@@ -194,12 +212,26 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Check if two types are compatible (including coercions)
+    fn types_compatible(&self, from: &HirType, to: &HirType) -> bool {
+        if from == to {
+            return true;
+        }
+        
+        match (from, to) {
+            (HirType::Int32, HirType::Int64) => true,
+            (HirType::Int32, HirType::Float64) => true,
+            (HirType::Int64, HirType::Float64) => true,
+            _ => false,
+        }
+    }
+    
     /// Infer the type of an expression
     fn infer_type(&mut self, expr: &HirExpression) -> TypeCheckResult<HirType> {
         match expr {
             HirExpression::Integer(_) => Ok(HirType::Int32), // Default to i32
             HirExpression::Float(_) => Ok(HirType::Float64),
-            HirExpression::String(_) => Ok(HirType::String),
+            HirExpression::String(_) => Ok(HirType::Reference(Box::new(HirType::String))),
             HirExpression::Bool(_) => Ok(HirType::Bool),
 
             HirExpression::Variable(name) => {
@@ -255,9 +287,8 @@ impl TypeChecker {
                 match op {
                     UnaryOp::Negate | UnaryOp::BitwiseNot => Ok(operand_ty),
                     UnaryOp::Not => Ok(HirType::Bool),
-                    UnaryOp::Reference => Ok(HirType::Reference(Box::new(operand_ty))),
+                    UnaryOp::Reference | UnaryOp::MutableReference => Ok(HirType::Reference(Box::new(operand_ty))),
                     UnaryOp::Dereference => {
-                        // Dereference of reference type
                         match &operand_ty {
                             HirType::Reference(inner) => Ok((**inner).clone()),
                             HirType::Pointer(inner) => Ok((**inner).clone()),
@@ -341,8 +372,10 @@ impl TypeChecker {
                                 message: format!("Undefined function: {}", name),
                             })?;
 
-                        // Check argument count
-                        if args.len() != param_types.len() {
+                        // Check argument count (allow variadic for builtin print functions)
+                        let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
+                            || name == "println" || name == "print" || name == "eprintln";
+                        if !is_variadic && args.len() != param_types.len() {
                             return Err(TypeCheckError {
                                 message: format!(
                                     "Function {} expects {} arguments, got {}",
@@ -356,7 +389,7 @@ impl TypeChecker {
                         // Check argument types
                         for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
                             let arg_ty = self.infer_type(arg)?;
-                            if arg_ty != *param_ty && *param_ty != HirType::Unknown {
+                            if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
                                 return Err(TypeCheckError {
                                     message: format!(
                                         "Argument {} has type {}, expected {}",
@@ -707,16 +740,54 @@ impl TypeChecker {
                 Ok(())
             }
 
-            HirStatement::Item(_) => {
-                // Nested items (functions, structs, etc.) are type checked separately
-                // For now, just allow them to pass
-                Ok(())
+            HirStatement::Item(item) => {
+                match &**item {
+                    HirItem::Function { name, params, return_type, body, .. } => {
+                        let param_types: Vec<HirType> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                        let ret_ty = return_type.clone().unwrap_or(HirType::Tuple(vec![]));
+                        
+                        self.context.functions.insert(name.clone(), (param_types.clone(), ret_ty.clone()));
+                        
+                        self.context.env.push_scope();
+                        for (param_name, param_ty) in params {
+                            self.context.env.insert(param_name.clone(), param_ty.clone());
+                        }
+                        
+                        self.check_statements(body)?;
+                        self.context.env.pop_scope();
+                        
+                        Ok(())
+                    }
+                    HirItem::Struct { name, fields, .. } => {
+                        let field_types: Vec<(String, HirType)> = fields.iter()
+                            .map(|(n, t)| (n.clone(), t.clone()))
+                            .collect();
+                        self.context.structs.insert(name.clone(), field_types);
+                        Ok(())
+                    }
+                    _ => Ok(())
+                }
             }
         }
     }
 
     /// Type check a list of statements
     fn check_statements(&mut self, stmts: &[HirStatement]) -> TypeCheckResult<()> {
+        for stmt in stmts {
+            if let HirStatement::Item(item) = stmt {
+                if let HirItem::Function { name, params, return_type, .. } = &**item {
+                    let param_types: Vec<HirType> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                    let ret_ty = return_type.clone().unwrap_or(HirType::Tuple(vec![]));
+                    self.context.functions.insert(name.clone(), (param_types, ret_ty));
+                } else if let HirItem::Struct { name, fields, .. } = &**item {
+                    let field_types: Vec<(String, HirType)> = fields.iter()
+                        .map(|(n, t)| (n.clone(), t.clone()))
+                        .collect();
+                    self.context.structs.insert(name.clone(), field_types);
+                }
+            }
+        }
+        
         for stmt in stmts {
             self.check_statement(stmt)?;
         }
