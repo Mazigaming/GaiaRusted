@@ -467,7 +467,7 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
                     parser_ast::Statement::Expression(e) => {
                         exprs.push(convert_expression(e)?);
                     }
-                    parser_ast::Statement::Let { name, ty: _, mutable: _, initializer, attributes: _ } => {
+                    parser_ast::Statement::Let { name, ty: _, mutable: _, initializer, attributes: _, pattern: _ } => {
                         exprs.push(AstExpr::Variable(name.clone()));
                         exprs.push(convert_expression(initializer)?);
                     }
@@ -521,7 +521,7 @@ fn convert_block_to_expr(block: &parser_ast::Block) -> BridgeResult<AstExpr> {
             parser_ast::Statement::Expression(e) => {
                 exprs.push(convert_expression(e)?);
             }
-            parser_ast::Statement::Let { name: _, ty: _, mutable: _, initializer, attributes: _ } => {
+            parser_ast::Statement::Let { name: _, ty: _, mutable: _, initializer, attributes: _, pattern: _ } => {
                 exprs.push(convert_expression(initializer)?);
             }
             _ => {}

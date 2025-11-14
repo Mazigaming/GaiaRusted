@@ -510,9 +510,7 @@ impl Parser {
                 let item = self.parse_item()?;
                 statements.push(Statement::Item(Box::new(item)));
             } else {
-                eprintln!("[DEBUG] parse_block: About to parse expression, current token={:?}", self.current());
                 let expr = self.parse_expression()?;
-                eprintln!("[DEBUG] parse_block: Parsed expression, current token={:?}", self.current());
 
                 if self.check(&Token::Semicolon) {
                     self.advance();
@@ -523,7 +521,6 @@ impl Parser {
                 } else if self.is_block_like_expression(&expr) {
                     statements.push(Statement::Expression(expr));
                 } else {
-                    eprintln!("[DEBUG] parse_block: ERROR - after expression, got token={:?}, expected ';' or '}}'", self.current());
                     return Err(ParseError::InvalidSyntax(
                         "Expected ';' or '}'".to_string(),
                     ));
@@ -566,6 +563,7 @@ impl Parser {
             ty,
             initializer,
             attributes: Vec::new(),
+            pattern: Some(pattern),
         })
     }
 
@@ -973,7 +971,14 @@ impl Parser {
             match self.current() {
                 Token::Dot => {
                     self.advance();
-                    let method = self.expect_identifier()?;
+                    let field_or_method = match self.current() {
+                        Token::Integer(n) => {
+                            let n = *n;
+                            self.advance();
+                            n.to_string()
+                        }
+                        _ => self.expect_identifier()?
+                    };
                     
                     if self.check(&Token::LeftParen) {
                         self.advance();
@@ -981,14 +986,14 @@ impl Parser {
                         self.consume(")")?;
                         expr = Expression::MethodCall {
                             receiver: Box::new(expr),
-                            method,
+                            method: field_or_method,
                             type_args: Vec::new(),
                             args,
                         };
                     } else {
                         expr = Expression::FieldAccess {
                             object: Box::new(expr),
-                            field: method,
+                            field: field_or_method,
                         };
                     }
                 }
@@ -1041,7 +1046,14 @@ impl Parser {
                 Ok(Expression::Bool(false))
             }
             Token::Identifier(name) => {
+                let mut path = vec![name.clone()];
                 self.advance();
+
+                while self.check(&Token::DoubleColon) {
+                    self.advance();
+                    let next_name = self.expect_identifier()?;
+                    path.push(next_name);
+                }
 
                 // Check for macro call (println!, print!, etc.)
                 if self.check(&Token::Bang) {
@@ -1050,18 +1062,20 @@ impl Parser {
                         self.advance();
                         let args = self.parse_arguments()?;
                         self.consume(")")?;
-                        Ok(Expression::FunctionCall { name, args })
+                        // For macros with paths, use the last segment as the name
+                        let macro_name = path.last().unwrap().clone();
+                        Ok(Expression::FunctionCall { name: macro_name, args })
                     } else {
                         return Err(ParseError::InvalidSyntax(
                             "Expected '(' after macro '!'".to_string(),
                         ));
                     }
-                } else if self.check(&Token::LeftParen) {
+                } else if self.check(&Token::LeftParen) && path.len() == 1 {
                     self.advance();
                     let args = self.parse_arguments()?;
                     self.consume(")")?;
-                    Ok(Expression::FunctionCall { name, args })
-                } else if self.check(&Token::LeftBrace) && matches!(self.restrictions, Restrictions::None) {
+                    Ok(Expression::FunctionCall { name: path[0].clone(), args })
+                } else if self.check(&Token::LeftBrace) && matches!(self.restrictions, Restrictions::None) && path.len() == 1 {
                     // Struct literal: Name { field: value, ... }
                     // Only parse as struct literal if restrictions allow it
                     // (NoStructLiteral is used in contexts like `for x in EXPR {`, where the `{` is a loop body, not struct fields)
@@ -1081,8 +1095,13 @@ impl Parser {
                     
                     self.consume("}")?;
                     Ok(Expression::StructLiteral {
-                        struct_name: name,
+                        struct_name: path[0].clone(),
                         fields,
+                    })
+                } else if path.len() > 1 {
+                    Ok(Expression::Path {
+                        segments: path,
+                        is_absolute: false,
                     })
                 } else {
                     Ok(Expression::Variable(name))
@@ -1245,6 +1264,32 @@ impl Parser {
                 self.advance();
                 if name == "_" {
                     Pattern::Wildcard
+                } else if self.check(&Token::DoubleColon) {
+                    let mut path = vec![name];
+                    while self.check(&Token::DoubleColon) {
+                        self.advance();
+                        let next_name = self.expect_identifier()?;
+                        path.push(next_name);
+                    }
+                    
+                    let inner_pattern = if self.check(&Token::LeftParen) {
+                        self.advance();
+                        let inner = if self.check(&Token::RightParen) {
+                            None
+                        } else {
+                            let pat = self.parse_pattern()?;
+                            Some(Box::new(pat))
+                        };
+                        self.consume(")")?;
+                        inner
+                    } else {
+                        None
+                    };
+                    
+                    Pattern::EnumVariant {
+                        path,
+                        data: inner_pattern,
+                    }
                 } else if self.check(&Token::LeftParen) {
                     self.advance();
                     let inner_pattern = if self.check(&Token::RightParen) {

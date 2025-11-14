@@ -1,6 +1,6 @@
 [package]
 name = "gaiarusted"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A complete Rust compiler implementation built from scratch with advanced features"
 license = "MIT"
@@ -21,39 +21,3 @@ path = "src/bin/gaiarusted.rs"
 
 [dev-dependencies]
 
-[[test]]
-name = "config_tests"
-path = "tests/config_tests.rs"
-
-[[test]]
-name = "borrowchecker_tests"
-path = "tests/borrowchecker_tests.rs"
-
-[[test]]
-name = "mir_tests"
-path = "tests/mir_tests.rs"
-
-[[test]]
-name = "codegen_tests"
-path = "tests/codegen_tests.rs"
-
-[[test]]
-name = "integration_tests"
-path = "tests/integration_tests.rs"
-
-# v0.0.3: New test files
-[[test]]
-name = "pattern_matching_tests"
-path = "tests/pattern_matching_tests.rs"
-
-[[test]]
-name = "module_system_tests"
-path = "tests/module_system_tests.rs"
-
-[[test]]
-name = "option_result_tests"
-path = "tests/option_result_tests.rs"
-
-[[test]]
-name = "library_api_tests"
-path = "tests/library_api_tests.rs"

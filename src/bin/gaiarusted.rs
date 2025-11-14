@@ -20,6 +20,7 @@ struct CliArgs {
     verbose: bool,
     debug: bool,
     discover_mode: bool,
+    show_output: bool,
 }
 
 impl CliArgs {
@@ -33,6 +34,7 @@ impl CliArgs {
         let mut verbose = false;
         let mut debug = false;
         let mut discover_mode = false;
+        let mut show_output = false;
 
         let mut i = 1;
         while i < args.len() {
@@ -96,6 +98,10 @@ impl CliArgs {
                     verbose = true;
                     i += 1;
                 }
+                "-S" | "--show-output" => {
+                    show_output = true;
+                    i += 1;
+                }
                 "-g" | "--debug" => {
                     debug = true;
                     i += 1;
@@ -128,6 +134,7 @@ impl CliArgs {
             verbose,
             debug,
             discover_mode,
+            show_output,
         })
     }
 
@@ -151,6 +158,7 @@ impl CliArgs {
         println!("    -l <LIB>                     Link library");
         println!("    -O <LEVEL>                   Optimization level (0-3, default: 2)");
         println!("    -v, --verbose                Verbose output");
+        println!("    -S, --show-output            Display generated output in terminal");
         println!("    -g, --debug                  Include debug information");
         println!("    --discover                   Auto-discover .rs files in directory");
         println!("    -h, --help                   Print this help message");
@@ -164,8 +172,8 @@ impl CliArgs {
         println!("    # Compile to static library");
         println!("    gaiarusted lib.rs -o mylib --format lib");
         println!();
-        println!("    # Compile to bash build script");
-        println!("    gaiarusted main.rs --format bash");
+        println!("    # Show generated assembly in terminal");
+        println!("    gaiarusted main.rs --format asm -S");
         println!();
         println!("    # Discover and compile all .rs files in src/ to assembly");
         println!("    gaiarusted --discover src/ --format asm");
@@ -241,52 +249,83 @@ fn print_detailed_error(error: &gaiarusted::CompileError, error_num: usize, tota
         _ => "unknown".to_string(),
     };
     
-    if let Some(file) = &error.file {
-        eprintln!("error[{}]: {} ({})", error_num, error.message, error.phase);
-        eprintln!(" --> {}:{}", file.display(), location);
+    let file_location = if let Some(file) = &error.file {
+        format!("{}:{}", file.display(), location)
     } else {
-        eprintln!("error[{}]: {} ({})", error_num, error.message, error.phase);
-        eprintln!(" --> {}:{}", location, error.phase);
-    }
+        location
+    };
+    
+    eprintln!("{}: {}: {}", 
+        format_error("error"),
+        file_location,
+        error.message);
     
     if let Some(file) = &error.file {
         if let Ok(source) = fs::read_to_string(file) {
             if let Some(line_num) = error.line {
                 let lines: Vec<&str> = source.lines().collect();
                 if line_num > 0 && line_num <= lines.len() {
-                    let line_content = lines[line_num - 1];
+                    let line_idx = line_num - 1;
+                    let _line_content = lines[line_idx];
                     let line_num_str = line_num.to_string();
-                    let padding = " ".repeat(line_num_str.len());
+                    let padding = " ".repeat(line_num_str.len() + 2);
                     
-                    eprintln!(" {} |", padding);
-                    eprintln!(" {} | {}", line_num_str, line_content);
+                    let num_lines = lines.len();
+                    let start_line = if line_num > 1 { line_num - 2 } else { line_num - 1 };
+                    let end_line = std::cmp::min(line_num + 1, num_lines);
                     
-                    if let Some(col) = error.column {
-                        let col = col.saturating_sub(1);
-                        let pointer_pos = col.min(line_content.len());
-                        let mut pointer_line = String::new();
-                        pointer_line.push_str(&" ".repeat(pointer_pos));
-                        pointer_line.push('^');
-                        eprintln!(" {} | {}", padding, pointer_line);
+                    eprintln!("  {} | ", " ".repeat(line_num_str.len()));
+                    
+                    for display_line in start_line..end_line {
+                        let is_error_line = display_line + 1 == line_num;
+                        let line_num_display = display_line + 1;
+                        let line_str = lines[display_line];
+                        let line_marker = if is_error_line { ">" } else { "|" };
+                        
+                        eprintln!("  {} {} {}", 
+                            format!("{:>width$}", line_num_display, width = line_num_str.len()),
+                            line_marker,
+                            line_str);
+                        
+                        if is_error_line {
+                            if let Some(col) = error.column {
+                                let col = col.saturating_sub(1);
+                                let pointer_pos = col.min(line_str.len());
+                                let mut pointer_line = String::new();
+                                pointer_line.push_str(&" ".repeat(pointer_pos));
+                                pointer_line.push_str(&format_error("^"));
+                                eprintln!("  {} | {}", padding, pointer_line);
+                            }
+                        }
                     }
                 }
             }
         }
     }
     
-    eprintln!("   = {}", error.phase);
-    
     if let Some(sugg) = &error.suggestion {
-        eprintln!("   = suggestion: {}", sugg);
+        eprintln!("  {} = suggestion: {}", format_info("help"), sugg);
     }
     
     if let Some(help) = &error.help {
-        eprintln!("   = help: {}", help);
+        eprintln!("  {} = {}", format_info("help"), help);
     }
     
     if error_num < total_errors {
         eprintln!();
     }
+}
+
+fn format_error(text: &str) -> String {
+    format!("\x1b[1;31m{}\x1b[0m", text)
+}
+
+fn format_warning(text: &str) -> String {
+    format!("\x1b[1;33m{}\x1b[0m", text)
+}
+
+fn format_info(text: &str) -> String {
+    format!("\x1b[1;36m{}\x1b[0m", text)
 }
 
 fn main() {
@@ -382,7 +421,21 @@ fn main() {
                 println!("   Files compiled: {}", result.stats.files_compiled);
                 println!("   Lines of code: {}", result.stats.total_lines);
                 println!("   Assembly size: {} bytes", result.stats.assembly_size);
+                println!("   Compilation time: {}ms", result.stats.compilation_time_ms);
                 println!();
+                
+                if cli_args.show_output {
+                    let asm_file = format!("{}.s", config.output_path.display());
+                    if let Ok(asm_content) = fs::read_to_string(&asm_file) {
+                        println!("==================================================");
+                        println!("Generated Assembly Output:");
+                        println!("==================================================");
+                        println!("{}", asm_content);
+                        println!("==================================================");
+                        println!();
+                    }
+                }
+                
                 println!("Output files:");
                 for file in &result.output_files {
                     if file.exists() {

@@ -105,6 +105,7 @@ impl MacroExpansionPass {
                 ty,
                 initializer,
                 attributes,
+                pattern,
             } => {
                 let expanded_init = self.expand_expression(initializer)?;
                 Ok(vec![Statement::Let {
@@ -113,6 +114,7 @@ impl MacroExpansionPass {
                     ty: ty.clone(),
                     initializer: expanded_init,
                     attributes: attributes.clone(),
+                    pattern: pattern.clone(),
                 }])
             }
             Statement::Expression(expr) => {

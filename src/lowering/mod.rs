@@ -14,6 +14,71 @@
 
 use crate::parser::{self, Expression, Statement, Item, Type, Block, Parameter, StructField, Pattern, EnumVariant};
 use std::fmt;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    static ENUM_REGISTRY: RefCell<HashMap<String, HashMap<String, i64>>> = RefCell::new(HashMap::new());
+}
+
+fn get_enum_variant(enum_name: &str, variant_name: &str) -> Option<i64> {
+    ENUM_REGISTRY.with(|registry| {
+        registry.borrow().get(enum_name).and_then(|variants| {
+            variants.get(variant_name).copied()
+        })
+    })
+}
+
+fn register_enum_variants(enum_name: String, variants: Vec<String>) {
+    ENUM_REGISTRY.with(|registry| {
+        let mut reg = registry.borrow_mut();
+        let mut variant_map = HashMap::new();
+        for (idx, variant_name) in variants.iter().enumerate() {
+            variant_map.insert(variant_name.clone(), idx as i64);
+        }
+        reg.insert(enum_name, variant_map);
+    });
+}
+
+fn clear_enum_registry() {
+    ENUM_REGISTRY.with(|registry| {
+        registry.borrow_mut().clear();
+    });
+}
+
+fn convert_rust_format_to_printf(rust_fmt: &str) -> String {
+    let mut result = String::new();
+    let mut chars = rust_fmt.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            if chars.peek() == Some(&'}') {
+                chars.next();
+                result.push_str("%ld");
+            } else {
+                result.push(ch);
+            }
+        } else if ch == '\\' {
+            if let Some(next_ch) = chars.next() {
+                match next_ch {
+                    'n' => result.push('\n'),
+                    't' => result.push('\t'),
+                    'r' => result.push('\r'),
+                    '\\' => result.push('\\'),
+                    c => {
+                        result.push('\\');
+                        result.push(c);
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    
+    result.push('\n');
+    result
+}
 
 /// High-Level Intermediate Representation (HIR)
 /// Similar to AST but with syntactic sugar removed
@@ -135,6 +200,12 @@ pub enum HirExpression {
         field: String,
     },
 
+    /// Tuple access: tuple.0, tuple.1, etc.
+    TupleAccess {
+        object: Box<HirExpression>,
+        index: u32,
+    },
+
     /// Array indexing: arr[idx]
     Index {
         array: Box<HirExpression>,
@@ -230,6 +301,10 @@ pub enum HirType {
     /// Primitive types
     Int32,
     Int64,
+    UInt32,
+    UInt64,
+    USize,
+    ISize,
     Float64,
     Bool,
     Char,
@@ -277,6 +352,10 @@ impl fmt::Display for HirType {
         match self {
             HirType::Int32 => write!(f, "i32"),
             HirType::Int64 => write!(f, "i64"),
+            HirType::UInt32 => write!(f, "u32"),
+            HirType::UInt64 => write!(f, "u64"),
+            HirType::USize => write!(f, "usize"),
+            HirType::ISize => write!(f, "isize"),
             HirType::Float64 => write!(f, "f64"),
             HirType::Bool => write!(f, "bool"),
             HirType::Char => write!(f, "char"),
@@ -358,6 +437,10 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
         Type::Named(name) => match name.as_str() {
             "i32" => Ok(HirType::Int32),
             "i64" => Ok(HirType::Int64),
+            "u32" => Ok(HirType::UInt32),
+            "u64" => Ok(HirType::UInt64),
+            "usize" => Ok(HirType::USize),
+            "isize" => Ok(HirType::ISize),
             "f64" => Ok(HirType::Float64),
             "bool" => Ok(HirType::Bool),
             "str" => Ok(HirType::String),
@@ -643,9 +726,54 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         Expression::FunctionCall { name, args } => {
             let args_hir: Result<Vec<_>, _> =
                 args.iter().map(|arg| lower_expression(arg)).collect();
+            let mut args_final = args_hir?;
+            
+            let func_name = match name.as_str() {
+                "println" => {
+                    if args_final.len() > 1 {
+                        if let HirExpression::String(fmt_str) = &args_final[0] {
+                            let printf_fmt = convert_rust_format_to_printf(fmt_str);
+                            args_final[0] = HirExpression::String(printf_fmt);
+                        }
+                        "__builtin_printf".to_string()
+                    } else {
+                        "__builtin_println".to_string()
+                    }
+                }
+                "print" => {
+                    if args_final.len() > 1 {
+                        if let HirExpression::String(fmt_str) = &args_final[0] {
+                            let printf_fmt_no_newline = {
+                                let fmt = convert_rust_format_to_printf(fmt_str);
+                                if fmt.ends_with("\n") {
+                                    fmt[..fmt.len()-1].to_string()
+                                } else {
+                                    fmt
+                                }
+                            };
+                            args_final[0] = HirExpression::String(printf_fmt_no_newline);
+                        }
+                        "__builtin_printf".to_string()
+                    } else {
+                        "__builtin_print".to_string()
+                    }
+                }
+                "eprintln" => "__builtin_eprintln".to_string(),
+                "__builtin_println_args" => {
+                    if !args_final.is_empty() {
+                        if let HirExpression::String(fmt_str) = &args_final[0] {
+                            let printf_fmt = convert_rust_format_to_printf(fmt_str);
+                            args_final[0] = HirExpression::String(printf_fmt);
+                        }
+                    }
+                    "__builtin_printf".to_string()
+                }
+                _ => name.clone(),
+            };
+            
             Ok(HirExpression::Call {
-                func: Box::new(HirExpression::Variable(name.clone())),
-                args: args_hir?,
+                func: Box::new(HirExpression::Variable(func_name)),
+                args: args_final,
             })
         }
 
@@ -860,10 +988,22 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             })
         }
 
-        Expression::Path { .. } => {
-            Err(LowerError {
-                message: "Path expressions not yet fully supported".to_string(),
-            })
+        Expression::Path { segments, is_absolute: _ } => {
+            if segments.len() == 2 {
+                let enum_name = &segments[0];
+                let variant_name = &segments[1];
+                
+                if let Some(discriminant) = get_enum_variant(enum_name, variant_name) {
+                    Ok(HirExpression::Integer(discriminant))
+                } else {
+                    Ok(HirExpression::Variable(format!("{}::{}", enum_name, variant_name)))
+                }
+            } else if segments.len() > 1 {
+                let path = segments.join("::");
+                Ok(HirExpression::Variable(path))
+            } else {
+                Ok(HirExpression::Variable(segments[0].clone()))
+            }
         }
 
         Expression::QualifiedPath { .. } => {
@@ -942,6 +1082,7 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
             ty: type_opt,
             initializer,
             attributes: _,
+            pattern: _,
         } => {
             let init_hir = lower_expression(initializer)?;
             // Infer or use provided type
@@ -1040,9 +1181,65 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
     }
 }
 
+/// Extract variable names and their positions from a pattern
+fn extract_pattern_vars(pattern: &Pattern) -> Vec<String> {
+    match pattern {
+        Pattern::Identifier(name) => vec![name.clone()],
+        Pattern::MutableBinding(name) => vec![name.clone()],
+        Pattern::Tuple(patterns) => {
+            patterns.iter()
+                .flat_map(|p| extract_pattern_vars(p))
+                .collect()
+        }
+        _ => vec![],
+    }
+}
+
 /// Lower a list of statements
 fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
-    stmts.iter().map(lower_statement).collect()
+    let mut result = Vec::new();
+    
+    for stmt in stmts {
+        if let Statement::Let {
+            name: _,
+            mutable: _,
+            ty: _,
+            initializer,
+            attributes: _,
+            pattern: Some(Pattern::Tuple(patterns)),
+        } = stmt {
+            // Handle tuple destructuring
+            let tuple_init = lower_expression(initializer)?;
+            let tuple_temp = format!("__tuple_temp_{}", result.len());
+            
+            // Create a temporary variable to hold the tuple
+            result.push(HirStatement::Let {
+                name: tuple_temp.clone(),
+                ty: HirType::Unknown,
+                init: tuple_init,
+            });
+            
+            // For each pattern in the tuple, create a let binding
+            for (idx, pattern) in patterns.iter().enumerate() {
+                let vars = extract_pattern_vars(pattern);
+                for var_name in vars {
+                    let field_access = HirExpression::TupleAccess {
+                        object: Box::new(HirExpression::Variable(tuple_temp.clone())),
+                        index: idx as u32,
+                    };
+                    result.push(HirStatement::Let {
+                        name: var_name,
+                        ty: HirType::Unknown,
+                        init: field_access,
+                    });
+                }
+            }
+        } else {
+            result.push(lower_statement(stmt)?);
+        }
+    }
+    
+    Ok(result)
 }
 
 /// Lower an item from AST to HIR
@@ -1247,6 +1444,22 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 
 /// Lower the entire AST to HIR
 pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
+    clear_enum_registry();
+    
+    for item in ast {
+        if let Item::Enum { name, variants, .. } = item {
+            let variant_names: Vec<String> = variants
+                .iter()
+                .map(|v| match v {
+                    EnumVariant::Unit(n) => n.clone(),
+                    EnumVariant::Tuple(n, _) => n.clone(),
+                    EnumVariant::Struct(n, _) => n.clone(),
+                })
+                .collect();
+            register_enum_variants(name.clone(), variant_names);
+        }
+    }
+    
     ast.iter().map(lower_item).collect()
 }
 

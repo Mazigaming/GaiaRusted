@@ -181,11 +181,20 @@ impl TypeChecker {
         self.context.register_function("__builtin_print".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_println".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_eprintln".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
+        self.context.register_function("__builtin_printf".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
 
         // Type conversions
         self.context.register_function("as_i32".to_string(), vec![HirType::Float64], HirType::Int32);
         self.context.register_function("as_i64".to_string(), vec![HirType::Float64], HirType::Int64);
         self.context.register_function("as_f64".to_string(), vec![HirType::Int32], HirType::Float64);
+
+        // Option enum constructors
+        self.context.register_function("Some".to_string(), vec![HirType::Unknown], HirType::Named("Option".to_string()));
+        self.context.register_function("None".to_string(), vec![], HirType::Named("Option".to_string()));
+
+        // Result enum constructors
+        self.context.register_function("Ok".to_string(), vec![HirType::Unknown], HirType::Named("Result".to_string()));
+        self.context.register_function("Err".to_string(), vec![HirType::Unknown], HirType::Named("Result".to_string()));
     }
 
     /// Collect all type definitions (first pass)
@@ -220,8 +229,21 @@ impl TypeChecker {
         
         match (from, to) {
             (HirType::Int32, HirType::Int64) => true,
+            (HirType::Int32, HirType::USize) => true,
+            (HirType::Int32, HirType::ISize) => true,
             (HirType::Int32, HirType::Float64) => true,
             (HirType::Int64, HirType::Float64) => true,
+            (HirType::Int64, HirType::USize) => true,
+            (HirType::Int64, HirType::ISize) => true,
+            (HirType::USize, HirType::Int64) => true,
+            (HirType::ISize, HirType::Int64) => true,
+            // Reference/dereference coercion for string methods
+            (HirType::Reference(inner_from), to_ty) => {
+                self.types_compatible(inner_from, to_ty)
+            }
+            (from_ty, HirType::Reference(inner_to)) => {
+                self.types_compatible(from_ty, inner_to)
+            }
             _ => false,
         }
     }
@@ -374,7 +396,7 @@ impl TypeChecker {
 
                         // Check argument count (allow variadic for builtin print functions)
                         let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
-                            || name == "println" || name == "print" || name == "eprintln";
+                            || name == "println" || name == "print" || name == "eprintln" || name == "__builtin_printf";
                         if !is_variadic && args.len() != param_types.len() {
                             return Err(TypeCheckError {
                                 message: format!(
@@ -477,8 +499,43 @@ impl TypeChecker {
                                 ),
                             })
                     }
+                    HirType::Tuple(types) => {
+                        if let Ok(index) = field.parse::<usize>() {
+                            if index < types.len() {
+                                Ok(types[index].clone())
+                            } else {
+                                Err(TypeCheckError {
+                                    message: format!(
+                                        "Tuple index {} out of bounds (tuple has {} elements)",
+                                        index, types.len()
+                                    ),
+                                })
+                            }
+                        } else {
+                            Err(TypeCheckError {
+                                message: format!(
+                                    "Cannot access tuple field with non-numeric name '{}'",
+                                    field
+                                ),
+                            })
+                        }
+                    }
                     _ => Err(TypeCheckError {
                         message: format!("Cannot access field on type {}", obj_ty),
+                    }),
+                }
+            }
+
+            HirExpression::TupleAccess { object, index: _ } => {
+                let obj_ty = self.infer_type(object)?;
+                match obj_ty {
+                    HirType::Tuple(types) => {
+                        // Return Unknown for tuple access since we don't track indices
+                        // In a real implementation, we'd return types[*index]
+                        Ok(HirType::Unknown)
+                    }
+                    _ => Err(TypeCheckError {
+                        message: format!("Cannot access tuple field on type {}", obj_ty),
                     }),
                 }
             }
@@ -617,8 +674,8 @@ impl TypeChecker {
                 let final_ty = if *ty == HirType::Unknown {
                     init_ty
                 } else {
-                    // Verify inferred type matches annotation
-                    if init_ty != *ty && init_ty != HirType::Unknown {
+                    // Verify inferred type matches annotation (with coercion)
+                    if !self.types_compatible(&init_ty, ty) && init_ty != HirType::Unknown {
                         return Err(TypeCheckError {
                             message: format!(
                                 "Variable {} has type {}, but initializer has type {}",

@@ -4,6 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Instant;
 
 use crate::config::{CompilationConfig, OutputFormat};
 use crate::lexer;
@@ -52,6 +53,16 @@ pub struct CompilationStats {
     pub files_compiled: usize,
     pub total_lines: usize,
     pub assembly_size: usize,
+    pub compilation_time_ms: u128,
+    pub lexing_time_ms: u128,
+    pub parsing_time_ms: u128,
+    pub lowering_time_ms: u128,
+    pub typechecking_time_ms: u128,
+    pub borrowchecking_time_ms: u128,
+    pub mir_lowering_time_ms: u128,
+    pub mir_optimization_time_ms: u128,
+    pub codegen_time_ms: u128,
+    pub output_time_ms: u128,
 }
 
 impl CompilationStats {
@@ -60,12 +71,24 @@ impl CompilationStats {
             files_compiled: 0,
             total_lines: 0,
             assembly_size: 0,
+            compilation_time_ms: 0,
+            lexing_time_ms: 0,
+            parsing_time_ms: 0,
+            lowering_time_ms: 0,
+            typechecking_time_ms: 0,
+            borrowchecking_time_ms: 0,
+            mir_lowering_time_ms: 0,
+            mir_optimization_time_ms: 0,
+            codegen_time_ms: 0,
+            output_time_ms: 0,
         }
     }
 }
 
 /// Compile multiple files according to configuration
 pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, CompileError> {
+    let total_start = Instant::now();
+    
     config.validate().map_err(|e| CompileError {
         phase: "Configuration".to_string(),
         message: e,
@@ -86,7 +109,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             println!("📝 Compiling: {}", source_file.display());
         }
 
-        match compile_single_file(source_file, config) {
+        match compile_single_file(source_file, config, &mut stats) {
             Ok((hir_items, loc)) => {
                 stats.files_compiled += 1;
                 stats.total_lines += loc;
@@ -105,6 +128,8 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     }
 
     if !errors.is_empty() {
+        let total_elapsed = total_start.elapsed().as_millis();
+        stats.compilation_time_ms = total_elapsed;
         return Ok(CompilationResult {
             success: false,
             output_files: Vec::new(),
@@ -113,6 +138,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         });
     }
 
+    let tc_start = Instant::now();
     if let Err(e) = typechecker::check_types(&all_hir_items) {
         errors.push(CompileError {
             phase: "Type Checking".to_string(),
@@ -124,7 +150,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             help: None,
         });
     }
+    stats.typechecking_time_ms = tc_start.elapsed().as_millis();
 
+    let bc_start = Instant::now();
     if let Err(e) = borrowchecker::check_borrows(&all_hir_items) {
         errors.push(CompileError {
             phase: "Borrow Checking".to_string(),
@@ -136,8 +164,11 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             help: None,
         });
     }
+    stats.borrowchecking_time_ms = bc_start.elapsed().as_millis();
 
     if !errors.is_empty() {
+        let total_elapsed = total_start.elapsed().as_millis();
+        stats.compilation_time_ms = total_elapsed;
         return Ok(CompilationResult {
             success: false,
             output_files: Vec::new(),
@@ -146,8 +177,12 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         });
     }
 
+    let mir_lower_start = Instant::now();
     match mir::lower_to_mir(&all_hir_items) {
         Ok(mir_items) => {
+            stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
+            
+            let mir_opt_start = Instant::now();
             let mut optimized_mir = mir_items.clone();
             if let Err(e) = mir::optimize_mir(&mut optimized_mir, config.opt_level) {
                 errors.push(CompileError {
@@ -160,16 +195,23 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                     help: None,
                 });
             }
+            stats.mir_optimization_time_ms = mir_opt_start.elapsed().as_millis();
 
             if errors.is_empty() {
+                let codegen_start = Instant::now();
                 match codegen::generate_code(&optimized_mir) {
                     Ok(assembly) => {
+                        stats.codegen_time_ms = codegen_start.elapsed().as_millis();
                         stats.assembly_size = assembly.len();
+                        
+                        let output_start = Instant::now();
                         match write_output(&config, &assembly) {
                             Ok(files) => {
                                 output_files = files;
+                                stats.output_time_ms = output_start.elapsed().as_millis();
                             }
                             Err(e) => {
+                                stats.output_time_ms = output_start.elapsed().as_millis();
                                 errors.push(CompileError {
                                     phase: "Output Generation".to_string(),
                                     message: e,
@@ -183,6 +225,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                         }
                     }
                     Err(e) => {
+                        stats.codegen_time_ms = codegen_start.elapsed().as_millis();
                         errors.push(CompileError {
                             phase: "Code Generation".to_string(),
                             message: e.to_string(),
@@ -197,6 +240,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             }
         }
         Err(e) => {
+            stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
             errors.push(CompileError {
                 phase: "MIR Lowering".to_string(),
                 message: e.to_string(),
@@ -208,6 +252,9 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             });
         }
     }
+
+    let total_elapsed = total_start.elapsed().as_millis();
+    stats.compilation_time_ms = total_elapsed;
 
     Ok(CompilationResult {
         success: errors.is_empty(),
@@ -221,6 +268,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
 fn compile_single_file(
     source_file: &std::path::Path,
     _config: &CompilationConfig,
+    stats: &mut CompilationStats,
 ) -> Result<(Vec<lowering::HirItem>, usize), CompileError> {
     let source = fs::read_to_string(source_file).map_err(|e| CompileError {
         phase: "File Reading".to_string(),
@@ -234,6 +282,7 @@ fn compile_single_file(
 
     let loc = source.lines().count();
 
+    let lex_start = Instant::now();
     let tokens = lexer::lex(&source).map_err(|e| CompileError {
         phase: "Lexing".to_string(),
         message: e.to_string(),
@@ -243,7 +292,9 @@ fn compile_single_file(
         suggestion: None,
         help: None,
     })?;
+    stats.lexing_time_ms += lex_start.elapsed().as_millis();
 
+    let parse_start = Instant::now();
     let ast = parser::parse(tokens).map_err(|e| CompileError {
         phase: "Parsing".to_string(),
         message: e.to_string(),
@@ -253,7 +304,9 @@ fn compile_single_file(
         suggestion: None,
         help: None,
     })?;
+    stats.parsing_time_ms += parse_start.elapsed().as_millis();
 
+    let lower_start = Instant::now();
     let hir = lowering::lower(&ast).map_err(|e| CompileError {
         phase: "Lowering".to_string(),
         message: e.to_string(),
@@ -263,6 +316,7 @@ fn compile_single_file(
         suggestion: None,
         help: None,
     })?;
+    stats.lowering_time_ms += lower_start.elapsed().as_millis();
 
     Ok((hir, loc))
 }

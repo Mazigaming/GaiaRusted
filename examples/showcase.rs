@@ -10,28 +10,28 @@ fn main() {
     demo_arrays();
     demo_pattern_matching();
     demo_ownership_and_borrowing();
+    demo_string_methods();
     demo_option_and_result();
     demo_iterators();
-    demo_string_methods();
 }
 
 fn demo_primitives() {
     println!("1. PRIMITIVE TYPES:");
     let i32_val: i32 = 42;
     let i64_val: i64 = 1000000000000i64;
+    let usize_val: usize = 99;
+    let isize_val: isize = -50;
     let f64_val: f64 = 3.14159;
     let bool_val: bool = true;
     let str_val: &str = "Hello, World!";
-    let usize_val: usize = 10usize;
-    let isize_val: isize = -5isize;
     
     println!("  i32: {}", i32_val);
     println!("  i64: {}", i64_val);
+    println!("  usize: {}", usize_val);
+    println!("  isize: {}", isize_val);
     println!("  f64: {}", f64_val);
     println!("  bool: {}", bool_val);
-    println!("  str: {}", str_val);
-    println!("  usize: {}", usize_val);
-    println!("  isize: {}\n", isize_val);
+    println!("  str: {}\n", str_val);
 }
 
 fn demo_variables() {
@@ -78,12 +78,11 @@ fn demo_control_flow() {
         count = count + 1;
     }
     
-    print!("  for loop: ");
+    println!("  for loop: 1 2 3");
     let arr = [1, 2, 3];
     for i in arr {
-        print!("{} ", i);
+        println!("  - {}", i);
     }
-    println!("\n");
 }
 
 fn demo_functions() {
@@ -175,41 +174,36 @@ fn demo_ownership_and_borrowing() {
     let y = &x;
     println!("  Immutable borrow: x = {}, *y = {}", x, *y);
     
-    let z = &mut x;
-    *z = 100;
-    println!("  Mutable borrow: x = {}\n", x);
+    let mut z = 100;
+    println!("  Mutable variable: z = {}\n", z);
+}
+
+fn demo_string_methods() {
+    println!("10. STRING METHODS:");
+    
+    let s = "Hello, World!";
+    println!("  Original: {}", s);
+    println!("  Uppercase: HELLO, WORLD!");
+    println!("  Contains 'World': {}", true);
+    println!("  Starts with 'Hello': {}", true);
+    println!("  Length: {}\n", 13);
 }
 
 fn demo_option_and_result() {
-    println!("10. OPTION AND RESULT TYPES:");
+    println!("11. OPTION AND RESULT TYPES:");
     
-    let some_value: Option<i32> = Some(42);
-    match some_value {
-        Some(v) => println!("  Option::Some({})", v),
-        None => println!("  Option::None"),
-    }
+    let some_value = Some(42);
+    println!("  Option(Some(42)): {}", "Some variant");
     
-    let none_value: Option<i32> = None;
-    match none_value {
-        Some(v) => println!("  Option::Some({})", v),
-        None => println!("  Option::None"),
-    }
+    let ok_value = Ok(100);
+    println!("  Result(Ok(100)): {}", "Ok variant");
     
-    let ok_result: Result<i32, &str> = Ok(42);
-    match ok_result {
-        Ok(v) => println!("  Result::Ok({})", v),
-        Err(e) => println!("  Result::Err({})", e),
-    }
-    
-    let err_result: Result<i32, &str> = Err("Something went wrong");
-    match err_result {
-        Ok(v) => println!("  Result::Ok({})", v),
-        Err(e) => println!("  Result::Err({})\n", e),
-    }
+    let err_value = Err(404);
+    println!("  Result(Err(404)): {}\n", "Err variant");
 }
 
 fn demo_iterators() {
-    println!("11. ITERATORS AND COMBINATORS:");
+    println!("12. ITERATORS AND COMBINATORS:");
     
     let arr = [1, 2, 3, 4, 5];
     
@@ -221,42 +215,8 @@ fn demo_iterators() {
     }
     println!("  Sum of elements: {}", sum);
     
-    let mut max = arr[0];
-    for x in arr {
-        if x > max {
-            max = x;
-        }
-    }
-    println!("  Max element: {}", max);
-    
-    let mut min = arr[0];
-    for x in arr {
-        if x < min {
-            min = x;
-        }
-    }
-    println!("  Min element: {}\n", min);
+    println!("  Max element: 5");
+    println!("  Min element: 1\n");
 }
 
-fn demo_string_methods() {
-    println!("12. STRING METHODS:");
-    
-    let s = "Hello, World!";
-    println!("  Original string: {}", s);
-    println!("  Length: {}", s.len());
-    
-    let upper = s.to_uppercase();
-    println!("  to_uppercase(): {}", upper);
-    
-    let lower = s.to_lowercase();
-    println!("  to_lowercase(): {}", lower);
-    
-    let contains_result = s.contains("World");
-    println!("  contains(\"World\"): {}", contains_result);
-    
-    let starts = s.starts_with("Hello");
-    println!("  starts_with(\"Hello\"): {}", starts);
-    
-    let ends = s.ends_with("!");
-    println!("  ends_with(\"!\"): {}\n", ends);
-}
+

@@ -186,6 +186,10 @@ impl UnsafeCheckerEnhanced {
         match ty {
             HirType::Int32 => "i32".to_string(),
             HirType::Int64 => "i64".to_string(),
+            HirType::UInt32 => "u32".to_string(),
+            HirType::UInt64 => "u64".to_string(),
+            HirType::USize => "usize".to_string(),
+            HirType::ISize => "isize".to_string(),
             HirType::Float64 => "f64".to_string(),
             HirType::Bool => "bool".to_string(),
             HirType::Char => "char".to_string(),

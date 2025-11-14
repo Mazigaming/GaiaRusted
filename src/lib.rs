@@ -62,6 +62,7 @@ pub mod runtime;
 pub mod compiler;
 pub mod config;
 pub mod compiler_integration;
+pub mod cargo_api;
 
 // Standard Library
 pub mod stdlib;
@@ -106,6 +107,7 @@ pub use utilities::error_reporting::{Diagnostic, ErrorReporter, SourceLocation, 
 pub use utilities::builtins::BuiltinFunction;
 pub use utilities::profiling::{Profiler, CompilationStats as ProfileStats};
 pub use utilities::colors::{Color, Colored};
+pub use cargo_api::{CargoAPI, CargoProject, CargoManifest, CargoBuildConfig, BuildProfile, CrateType};
 
 // Analysis re-exports
 pub use analysis::pattern_matching::{PatternAnalyzer, PatternCompiler, ReachabilityChecker};

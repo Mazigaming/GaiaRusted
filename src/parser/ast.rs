@@ -177,6 +177,7 @@ pub enum Statement {
         ty: Option<Type>,
         initializer: Expression,
         attributes: Vec<Attribute>,
+        pattern: Option<Pattern>,
     },
     /// Expression statement: `x + 1;`
     Expression(Expression),

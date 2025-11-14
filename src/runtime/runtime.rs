@@ -12,11 +12,13 @@ pub fn generate_runtime_assembly() -> String {
     format_str: .string "%ld\n"
     format_str_bool: .string "%d\n"
     print_string_fmt: .string "%s"
+    print_str_newline: .string "%s\n"
 
 .section .text
 .globl gaia_print_i64
 .globl gaia_print_bool
 .globl gaia_print_str
+.globl __builtin_println
 
 gaia_print_i64:
     push rbp
@@ -45,6 +47,24 @@ gaia_print_str:
     mov rbp, rsp
     mov rsi, rdi
     lea rdi, [rip + print_string_fmt]
+    call printf
+    mov rsp, rbp
+    pop rbp
+    ret
+
+__builtin_println:
+    push rbp
+    mov rbp, rsp
+    mov rsi, rdi
+    lea rdi, [rip + print_str_newline]
+    call printf
+    mov rsp, rbp
+    pop rbp
+    ret
+
+__builtin_printf:
+    push rbp
+    mov rbp, rsp
     call printf
     mov rsp, rbp
     pop rbp

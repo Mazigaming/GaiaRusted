@@ -164,6 +164,10 @@ impl UnsafeChecker {
             HirType::Named(_) |
             HirType::Int32 |
             HirType::Int64 |
+            HirType::UInt32 |
+            HirType::UInt64 |
+            HirType::USize |
+            HirType::ISize |
             HirType::Float64 |
             HirType::Bool |
             HirType::Char |

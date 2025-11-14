@@ -2,7 +2,7 @@
 ------------
 A complete Rust compiler implementation built from scratch in pure Rust with zero external dependencies. Converts Rust source code to multiple output formats including Assembly, Object files, Executables, and Libraries.
 
-**v0.1.0** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Release Notes](#-v010-features)
+**v0.2.0** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Release Notes](#-v020-features)
 
 * * *
 
@@ -804,7 +804,48 @@ Roadmap
 *   ✅ 100% backward compatibility maintained
 *   ✅ 44,955 lines of code
 
-### 📋 v0.2.0 (Planned)
+### 📋 v0.2.0 (Released)
+
+**String Formatting & Printf**
+*   ✅ Enhanced println! macro with format arguments (e.g., `println!("Count: {}", x)`)
+*   ✅ Automatic format string conversion from Rust `{}` to printf `%ld`
+*   ✅ Fixed string constant escaping in assembly (newlines, tabs, quotes, backslashes)
+*   ✅ Registered `__builtin_printf` as variadic function in type system
+
+**Boolean Result Materialization**
+*   ✅ Implemented SET instruction variants (SETE, SETNE, SETL, SETLE, SETG, SETGE)
+*   ✅ Proper comparison result materialization for boolean values
+*   ✅ Fixed register initialization strategy to preserve CPU flags during comparisons
+*   ✅ Added MOVZX and XOR instruction support to instruction set
+
+**Cargo Integration**
+*   ✅ Cargo subcommand support (`cargo gaiarusted build`)
+*   ✅ Cargo.toml parsing and project manifest resolution
+*   ✅ Multi-file project compilation (lib.rs + main.rs)
+*   ✅ Dependency resolution system
+*   ✅ Build profile support (Debug and Release with optimization levels)
+*   ✅ Library artifact generation (.a files)
+*   ✅ CargoProject API for programmatic project building
+*   ✅ Target specification support (x86_64-unknown-linux-gnu)
+*   ✅ Workspace compatibility framework
+
+**Loop & Variable Improvements**
+*   ✅ Enhanced loop variable persistence through stack memory tracking
+*   ✅ Improved MIR generation for loop constructs
+*   ✅ Better variable scope management in nested blocks
+
+**Test Suite & Stability**
+*   ✅ Fixed test configuration (removed 6 invalid test file references from Cargo.toml)
+*   ✅ All 926 unit tests passing
+*   ✅ All 11 end-to-end integration tests passing
+*   ✅ Full backward compatibility maintained
+
+**Bug Fixes:**
+*   ✅ Resolved issue with comparison operators not generating proper boolean values
+*   ✅ Fixed infinite loop in test execution due to invalid cargo test references
+*   ✅ Corrected string escaping in .string directives for assembly output
+
+### 📋 v0.3.0 (Planned)
 
 **High Priority:**
 *   Closures and lambda expressions (|x| x + 1)
@@ -812,9 +853,10 @@ Roadmap
 *   Error propagation operator (?)
 *   Associated types in traits (type Item = T;)
 *   Where clause support for generic bounds
-*   Comprehensive macro system (println!, format!, vec!)
+*   Comprehensive macro system (format!, vec!, vec_macro!)
 
 **Medium Priority:**
+*   Enum pattern matching for match expressions
 *   Slice patterns in match expressions
 *   Const generics (const T: usize)
 *   Trait objects with virtual dispatch (dyn Trait)
@@ -836,7 +878,7 @@ Roadmap
 *   Module re-export support (pub use)
 *   File-based module system
 
-### 📋 v0.3.0+ Roadmap
+### 📋 v0.4.0+ Roadmap
 
 **Advanced Features:**
 *   Async/await syntax and runtime

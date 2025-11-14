@@ -520,6 +520,11 @@ impl BorrowChecker {
                 Ok(())
             }
 
+            HirExpression::TupleAccess { object, .. } => {
+                self.check_expression(object)?;
+                Ok(())
+            }
+
             HirExpression::Index { array, index } => {
                 self.check_expression(array)?;
                 self.check_expression(index)?;

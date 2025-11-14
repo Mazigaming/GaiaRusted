@@ -123,6 +123,8 @@ impl fmt::Display for X86Operand {
 pub enum X86Instruction {
     /// mov dst, src
     Mov { dst: X86Operand, src: X86Operand },
+    /// lea dst, [label]
+    Lea { dst: X86Operand, src: String },
     /// add dst, src
     Add { dst: X86Operand, src: X86Operand },
     /// sub dst, src
@@ -131,6 +133,8 @@ pub enum X86Instruction {
     IMul { dst: X86Operand, src: X86Operand },
     /// idiv src (divides RDX:RAX by src, result in RAX, remainder in RDX)
     IDiv { src: X86Operand },
+    /// xor dst, src
+    Xor { dst: X86Operand, src: X86Operand },
     /// cmp dst, src
     Cmp { dst: X86Operand, src: X86Operand },
     /// jmp label
@@ -147,10 +151,24 @@ pub enum X86Instruction {
     Jg { label: String },
     /// jge label (jump if greater or equal)
     Jge { label: String },
+    /// sete dst (set if equal)
+    Sete { dst: X86Operand },
+    /// setne dst (set if not equal)
+    Setne { dst: X86Operand },
+    /// setl dst (set if less)
+    Setl { dst: X86Operand },
+    /// setle dst (set if less or equal)
+    Setle { dst: X86Operand },
+    /// setg dst (set if greater)
+    Setg { dst: X86Operand },
+    /// setge dst (set if greater or equal)
+    Setge { dst: X86Operand },
     /// call function
     Call { func: String },
     /// ret
     Ret,
+    /// movzx dst, src - move with zero extension
+    Movzx { dst: Register, src: Register },
     /// push reg
     Push { reg: Register },
     /// pop reg
@@ -165,10 +183,12 @@ impl fmt::Display for X86Instruction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             X86Instruction::Mov { dst, src } => write!(f, "    mov {}, {}", dst, src),
+            X86Instruction::Lea { dst, src } => write!(f, "    lea {}, [rip + {}]", dst, src),
             X86Instruction::Add { dst, src } => write!(f, "    add {}, {}", dst, src),
             X86Instruction::Sub { dst, src } => write!(f, "    sub {}, {}", dst, src),
             X86Instruction::IMul { dst, src } => write!(f, "    imul {}, {}", dst, src),
             X86Instruction::IDiv { src } => write!(f, "    idiv {}", src),
+            X86Instruction::Xor { dst, src } => write!(f, "    xor {}, {}", dst, src),
             X86Instruction::Cmp { dst, src } => write!(f, "    cmp {}, {}", dst, src),
             X86Instruction::Jmp { label } => write!(f, "    jmp {}", label),
             X86Instruction::Je { label } => write!(f, "    je {}", label),
@@ -177,8 +197,69 @@ impl fmt::Display for X86Instruction {
             X86Instruction::Jle { label } => write!(f, "    jle {}", label),
             X86Instruction::Jg { label } => write!(f, "    jg {}", label),
             X86Instruction::Jge { label } => write!(f, "    jge {}", label),
+            X86Instruction::Sete { dst } => {
+                let operand = match dst {
+                    X86Operand::Register(Register::RAX) => "al".to_string(),
+                    X86Operand::Register(Register::RBX) => "bl".to_string(),
+                    X86Operand::Register(Register::RCX) => "cl".to_string(),
+                    X86Operand::Register(Register::RDX) => "dl".to_string(),
+                    _ => format!("{}", dst),
+                };
+                write!(f, "    sete {}", operand)
+            }
+            X86Instruction::Setne { dst } => {
+                let operand = match dst {
+                    X86Operand::Register(Register::RAX) => "al".to_string(),
+                    X86Operand::Register(Register::RBX) => "bl".to_string(),
+                    X86Operand::Register(Register::RCX) => "cl".to_string(),
+                    X86Operand::Register(Register::RDX) => "dl".to_string(),
+                    _ => format!("{}", dst),
+                };
+                write!(f, "    setne {}", operand)
+            }
+            X86Instruction::Setl { dst } => {
+                let operand = match dst {
+                    X86Operand::Register(Register::RAX) => "al".to_string(),
+                    X86Operand::Register(Register::RBX) => "bl".to_string(),
+                    X86Operand::Register(Register::RCX) => "cl".to_string(),
+                    X86Operand::Register(Register::RDX) => "dl".to_string(),
+                    _ => format!("{}", dst),
+                };
+                write!(f, "    setl {}", operand)
+            }
+            X86Instruction::Setle { dst } => {
+                let operand = match dst {
+                    X86Operand::Register(Register::RAX) => "al".to_string(),
+                    X86Operand::Register(Register::RBX) => "bl".to_string(),
+                    X86Operand::Register(Register::RCX) => "cl".to_string(),
+                    X86Operand::Register(Register::RDX) => "dl".to_string(),
+                    _ => format!("{}", dst),
+                };
+                write!(f, "    setle {}", operand)
+            }
+            X86Instruction::Setg { dst } => {
+                let operand = match dst {
+                    X86Operand::Register(Register::RAX) => "al".to_string(),
+                    X86Operand::Register(Register::RBX) => "bl".to_string(),
+                    X86Operand::Register(Register::RCX) => "cl".to_string(),
+                    X86Operand::Register(Register::RDX) => "dl".to_string(),
+                    _ => format!("{}", dst),
+                };
+                write!(f, "    setg {}", operand)
+            }
+            X86Instruction::Setge { dst } => {
+                let operand = match dst {
+                    X86Operand::Register(Register::RAX) => "al".to_string(),
+                    X86Operand::Register(Register::RBX) => "bl".to_string(),
+                    X86Operand::Register(Register::RCX) => "cl".to_string(),
+                    X86Operand::Register(Register::RDX) => "dl".to_string(),
+                    _ => format!("{}", dst),
+                };
+                write!(f, "    setge {}", operand)
+            }
             X86Instruction::Call { func } => write!(f, "    call {}", func),
             X86Instruction::Ret => write!(f, "    ret"),
+            X86Instruction::Movzx { dst, src } => write!(f, "    movzx {}, {}", dst, src),
             X86Instruction::Push { reg } => write!(f, "    push {}", reg),
             X86Instruction::Pop { reg } => write!(f, "    pop {}", reg),
             X86Instruction::Label { name } => write!(f, "{}:", name),
@@ -233,6 +314,9 @@ impl RegisterAllocator {
 pub struct Codegen {
     instructions: Vec<X86Instruction>,
     label_counter: usize,
+    var_locations: HashMap<String, i64>,
+    stack_offset: i64,
+    string_constants: HashMap<String, String>,
 }
 
 impl Codegen {
@@ -241,6 +325,9 @@ impl Codegen {
         Codegen {
             instructions: Vec::new(),
             label_counter: 0,
+            var_locations: HashMap::new(),
+            stack_offset: -8,
+            string_constants: HashMap::new(),
         }
     }
 
@@ -262,6 +349,20 @@ impl Codegen {
         // Convert instructions to assembly
         for instr in &self.instructions {
             asm.push_str(&format!("{}\n", instr));
+        }
+        
+        // Add rodata section with string constants
+        if !self.string_constants.is_empty() {
+            asm.push_str("\n.section .rodata\n");
+            for (string, label) in &self.string_constants {
+                let escaped = string
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\t", "\\t")
+                    .replace("\r", "\\r");
+                asm.push_str(&format!("    {}: .string \"{}\"\n", label, escaped));
+            }
         }
         
         // Include runtime support
@@ -303,11 +404,9 @@ impl Codegen {
         
         // Generate code for each basic block
         for (block_idx, block) in func.basic_blocks.iter().enumerate() {
-            if block_idx > 0 {
-                self.instructions.push(X86Instruction::Label {
-                    name: format!("{}_bb{}", func_name, block_idx),
-                });
-            }
+            self.instructions.push(X86Instruction::Label {
+                name: format!("{}_bb{}", func_name, block_idx),
+            });
             
             // Generate statements
             for stmt in &block.statements {
@@ -381,11 +480,22 @@ impl Codegen {
     fn generate_statement(&mut self, stmt: &Statement, _allocator: &RegisterAllocator) -> CodegenResult<()> {
         match &stmt.rvalue {
             crate::mir::Rvalue::Use(operand) => {
-                let src = self.operand_to_x86(operand)?;
-                self.instructions.push(X86Instruction::Mov {
-                    dst: X86Operand::Register(Register::RAX),
-                    src,
-                });
+                match operand {
+                    crate::mir::Operand::Constant(crate::mir::Constant::String(s)) => {
+                        let label = self.allocate_string(s.clone());
+                        self.instructions.push(X86Instruction::Lea {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: label,
+                        });
+                    }
+                    _ => {
+                        let src = self.operand_to_x86(operand)?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src,
+                        });
+                    }
+                }
             }
             crate::mir::Rvalue::BinaryOp(op, left, right) => {
                 let left_val = self.operand_to_x86(left)?;
@@ -420,12 +530,106 @@ impl Codegen {
                             src: right_val,
                         });
                     }
-                    crate::lowering::BinaryOp::Equal | crate::lowering::BinaryOp::NotEqual |
-                    crate::lowering::BinaryOp::Less | crate::lowering::BinaryOp::LessEqual |
-                    crate::lowering::BinaryOp::Greater | crate::lowering::BinaryOp::GreaterEqual => {
+                    crate::lowering::BinaryOp::Equal => {
                         self.instructions.push(X86Instruction::Cmp {
                             dst: X86Operand::Register(Register::RAX),
                             src: right_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RCX),
+                            src: X86Operand::Immediate(0),
+                        });
+                        self.instructions.push(X86Instruction::Sete {
+                            dst: X86Operand::Register(Register::RCX),
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RCX),
+                        });
+                    }
+                    crate::lowering::BinaryOp::NotEqual => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RCX),
+                            src: X86Operand::Immediate(0),
+                        });
+                        self.instructions.push(X86Instruction::Setne {
+                            dst: X86Operand::Register(Register::RCX),
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RCX),
+                        });
+                    }
+                    crate::lowering::BinaryOp::Less => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RCX),
+                            src: X86Operand::Immediate(0),
+                        });
+                        self.instructions.push(X86Instruction::Setl {
+                            dst: X86Operand::Register(Register::RCX),
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RCX),
+                        });
+                    }
+                    crate::lowering::BinaryOp::LessEqual => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RCX),
+                            src: X86Operand::Immediate(0),
+                        });
+                        self.instructions.push(X86Instruction::Setle {
+                            dst: X86Operand::Register(Register::RCX),
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RCX),
+                        });
+                    }
+                    crate::lowering::BinaryOp::Greater => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RCX),
+                            src: X86Operand::Immediate(0),
+                        });
+                        self.instructions.push(X86Instruction::Setg {
+                            dst: X86Operand::Register(Register::RCX),
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RCX),
+                        });
+                    }
+                    crate::lowering::BinaryOp::GreaterEqual => {
+                        self.instructions.push(X86Instruction::Cmp {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: right_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RCX),
+                            src: X86Operand::Immediate(0),
+                        });
+                        self.instructions.push(X86Instruction::Setge {
+                            dst: X86Operand::Register(Register::RCX),
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RCX),
                         });
                     }
                     _ => {
@@ -455,9 +659,46 @@ impl Codegen {
                     _ => {}
                 }
             }
+            crate::mir::Rvalue::Call(func_name, args) => {
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_val = self.operand_to_x86(arg)?;
+                    match i {
+                        0 => {
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RDI),
+                                src: arg_val,
+                            });
+                        }
+                        1 => {
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RSI),
+                                src: arg_val,
+                            });
+                        }
+                        2 => {
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RDX),
+                                src: arg_val,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                self.instructions.push(X86Instruction::Call {
+                    func: func_name.clone(),
+                });
+            }
             _ => {
                 self.instructions.push(X86Instruction::Nop);
             }
+        }
+        
+        if let crate::mir::Place::Local(ref name) = stmt.place {
+            let offset = self.get_var_location(name);
+            self.instructions.push(X86Instruction::Mov {
+                dst: X86Operand::Memory { base: Register::RBP, offset },
+                src: X86Operand::Register(Register::RAX),
+            });
         }
         Ok(())
     }
@@ -480,6 +721,13 @@ impl Codegen {
             crate::mir::Operand::Constant(crate::mir::Constant::Unit) => {
                 Ok(X86Operand::Immediate(0))
             }
+            crate::mir::Operand::Copy(crate::mir::Place::Local(name)) | crate::mir::Operand::Move(crate::mir::Place::Local(name)) => {
+                if let Some(offset) = self.var_locations.get(name) {
+                    Ok(X86Operand::Memory { base: Register::RBP, offset: *offset })
+                } else {
+                    Ok(X86Operand::Register(Register::RAX))
+                }
+            }
             crate::mir::Operand::Copy(_place) | crate::mir::Operand::Move(_place) => {
                 Ok(X86Operand::Register(Register::RAX))
             }
@@ -491,6 +739,39 @@ impl Codegen {
         let label = format!("L{}", self.label_counter);
         self.label_counter += 1;
         label
+    }
+
+    /// Allocate stack space for a variable
+    fn allocate_var(&mut self, var_name: String) -> i64 {
+        if !self.var_locations.contains_key(&var_name) {
+            let offset = self.stack_offset;
+            self.var_locations.insert(var_name, offset);
+            self.stack_offset -= 8;
+            offset
+        } else {
+            self.var_locations[&var_name]
+        }
+    }
+
+    /// Get or allocate stack location for a variable
+    fn get_var_location(&mut self, var_name: &str) -> i64 {
+        if !self.var_locations.contains_key(var_name) {
+            self.allocate_var(var_name.to_string())
+        } else {
+            self.var_locations[var_name]
+        }
+    }
+
+    /// Allocate a label for a string constant
+    fn allocate_string(&mut self, string: String) -> String {
+        if let Some(label) = self.string_constants.get(&string) {
+            label.clone()
+        } else {
+            let label = format!("str_{}", self.label_counter);
+            self.label_counter += 1;
+            self.string_constants.insert(string, label.clone());
+            label
+        }
     }
 }
 

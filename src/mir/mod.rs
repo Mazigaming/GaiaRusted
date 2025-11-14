@@ -712,6 +712,11 @@ impl MirLowerer {
                     field.clone(),
                 ))));
             }
+            HirExpression::TupleAccess { object, index: _ } => {
+                let obj_temp = builder.gen_temp();
+                self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
+                builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Local(obj_temp))));
+            }
             HirExpression::Index { array, index } => {
                 let arr_temp = builder.gen_temp();
                 let idx_temp = builder.gen_temp();

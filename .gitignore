@@ -35,6 +35,7 @@ test_project/
 a.out*
 *txt
 test_*
+benchmark_*.rs
 
 # OS files
 Thumbs.db
