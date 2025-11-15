@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use crate::parser::ast::{Item, Attribute, StructField, EnumVariant};
-use crate::lowering::{HirExpression, HirStatement, HirType};
+use crate::parser::ast::{Item, Attribute, EnumVariant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeriveMacro {

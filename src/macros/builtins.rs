@@ -1,5 +1,5 @@
 use super::{TokenTree, MacroExpander, MacroRule, MacroPattern, MacroDefinition, MetaVarKind, Delimiter};
-use crate::lexer::token::{Token, Keyword};
+use crate::lexer::token::Token;
 
 pub fn register_builtin_macros(expander: &mut MacroExpander) {
     register_println_macro(expander);

@@ -185,7 +185,7 @@ pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut Conve
                 if type_args.is_empty() {
                     Ok(Type::Generic(generic_id))
                 } else {
-                    let args: BridgeResult<Vec<_>> = type_args.iter()
+                    let _args: BridgeResult<Vec<_>> = type_args.iter()
                         .map(|a| convert_type_with_context(a, ctx))
                         .collect();
                     if let Some(&struct_id) = ctx.known_structs.get(name) {

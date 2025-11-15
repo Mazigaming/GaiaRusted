@@ -40,7 +40,7 @@ impl PeepholeOptimizer {
         while i + 1 < self.instructions.len() {
             if let (
                 Instruction::Load { dst: d1, src: s1 },
-                Instruction::Load { dst: d2, src: s2 },
+                Instruction::Load { dst: _d2, src: s2 },
             ) = (&self.instructions[i], &self.instructions[i + 1])
             {
                 if d1 == s2 && s1 == s2 {
@@ -161,7 +161,7 @@ impl LoopOptimizer {
 
         for i in loop_start..loop_end.min(self.instructions.len()) {
             match &self.instructions[i] {
-                Instruction::Load { src, .. } => {
+                Instruction::Load { src: _, .. } => {
                     // If loading from a constant/unchanging source, it's invariant
                     invariants.push(i);
                 }

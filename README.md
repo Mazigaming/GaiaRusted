@@ -2,7 +2,7 @@
 ------------
 A complete Rust compiler implementation built from scratch in pure Rust with zero external dependencies. Converts Rust source code to multiple output formats including Assembly, Object files, Executables, and Libraries.
 
-**v0.2.0** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Release Notes](#-v020-features)
+**v0.3.0** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Release Notes](#-v030-features)
 
 * * *
 
@@ -845,9 +845,39 @@ Roadmap
 *   ✅ Fixed infinite loop in test execution due to invalid cargo test references
 *   ✅ Corrected string escaping in .string directives for assembly output
 
-### 📋 v0.3.0 (Planned)
+### ✅ v0.3.0 (Released)
 
-**High Priority:**
+**Bitwise Operators & Parser Enhancement**
+*   ✅ Complete bitwise operator support (&, |, ^, <<, >>)
+*   ✅ Proper operator precedence chain implementation
+*   ✅ Unary reference operator disambiguation from binary bitwise AND
+*   ✅ Parser restriction handling for struct literal contexts
+
+**Type System & Mutability**
+*   ✅ Variable mutability tracking across compilation phases
+*   ✅ Immutable variable reassignment detection and rejection
+*   ✅ Extended TypeEnv with mutable_vars field
+*   ✅ Assignment validation for immutable bindings
+*   ✅ Comprehensive mutability error messages
+
+**Lexer Improvements**
+*   ✅ Large unsigned integer literal support (u64 max: 18446744073709551615)
+*   ✅ Fallback parsing for numbers exceeding i64 range
+*   ✅ Proper bit-pattern preservation for unsigned literals
+
+**Parser Bug Fixes**
+*   ✅ Fixed parser failures with let statements in if conditions
+*   ✅ Applied NoStructLiteral restriction to condition parsing
+*   ✅ If/while expression parsing in complex control flow
+
+**Test Coverage**
+*   ✅ 929 unit tests passing with no regressions
+*   ✅ Comprehensive feature test file (434 lines)
+*   ✅ Bitwise operator test suite
+*   ✅ Mutability validation test cases
+*   ✅ Arithmetic, logical, and comparison operators
+
+**Next Priority (v0.4.0):**
 *   Closures and lambda expressions (|x| x + 1)
 *   Fn/FnMut/FnOnce trait implementation
 *   Error propagation operator (?)

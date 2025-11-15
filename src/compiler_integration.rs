@@ -5,8 +5,7 @@
 
 use crate::codegen::monomorphization::{MonomorphizationRegistry, collect_generics};
 use crate::codegen::optimization::lto::{SymbolTable, FunctionInfo, SymbolVisibility, LinkTimeOptimizer};
-use crate::mir::{Mir, MirFunction, BasicBlock, Terminator, Statement, Operand, Place, Rvalue};
-use crate::lowering::HirItem;
+use crate::mir::{Mir, MirFunction, BasicBlock, Terminator, Operand, Rvalue};
 use crate::parser::ast::Item;
 use std::collections::{HashMap, HashSet};
 
@@ -109,7 +108,7 @@ impl MirEnhancementPhase {
     pub fn process_mir(
         &mut self,
         mir: &Mir,
-        monomorphization: &MonomorphizationPhase,
+        _monomorphization: &MonomorphizationPhase,
     ) -> Result<(), String> {
         self.monomorphized_functions = mir.functions.clone();
         
@@ -191,7 +190,7 @@ impl MirEnhancementPhase {
     pub fn build_symbol_table(&self) -> SymbolTable {
         let mut table = SymbolTable::new();
 
-        for (name, info) in &self.function_info {
+        for (_name, info) in &self.function_info {
             table.add_function(info.clone());
         }
 

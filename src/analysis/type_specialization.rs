@@ -7,7 +7,7 @@
 //! - Specialization overlap detection
 //! - Monomorphization target selection
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SpecializationRule {

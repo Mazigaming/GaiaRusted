@@ -145,7 +145,7 @@ pub fn validate_struct_lifetimes_detailed(
     let mut validator = StructLifetimeValidator::new(generics);
     
     // Collect field lifetimes
-    for (i, field) in fields.iter().enumerate() {
+    for (_i, field) in fields.iter().enumerate() {
         validator.add_field(field.name.clone(), &field.ty);
     }
     

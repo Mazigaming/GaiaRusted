@@ -8,10 +8,9 @@
 //! - **Runtime**: Manages executor and event loop
 //! - **TaskQueue**: Manages ready and pending task queues
 
-use crate::runtime::async_types::{Context, Poll, Waker};
+use crate::runtime::async_types::{Context, Poll};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::{Arc, Mutex};
 
 /// Unique identifier for async tasks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

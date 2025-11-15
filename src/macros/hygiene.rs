@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::lexer::token::Token;
-use super::{TokenTree, Delimiter};
+use super::TokenTree;
 
 #[derive(Debug, Clone)]
 pub struct HygieneContext {
@@ -104,7 +104,7 @@ impl HygieneContext {
 
 pub fn apply_macro_hygiene(
     expansion: &[TokenTree],
-    macro_name: &str,
+    _macro_name: &str,
 ) -> Vec<TokenTree> {
     let mut context = HygieneContext::new();
     

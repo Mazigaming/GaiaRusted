@@ -1,6 +1,5 @@
 use crate::parser::{Item, Statement, Expression};
-use crate::macros::{MacroExpander, TokenTree};
-use std::collections::HashMap;
+use crate::macros::MacroExpander;
 
 pub struct MacroExpansionPass {
     expander: MacroExpander,
@@ -22,10 +21,10 @@ impl MacroExpansionPass {
 
     fn expand_item(&mut self, item: &Item) -> Result<Vec<Item>, String> {
         match item {
-            Item::MacroDefinition { name, rules, attributes } => {
+            Item::MacroDefinition { name, rules, .. } => {
                 let macro_def = crate::macros::MacroDefinition {
                     name: name.clone(),
-                    rules: rules.iter().map(|r| {
+                    rules: rules.iter().map(|_r| {
                         crate::macros::MacroRule {
                             pattern: vec![],
                             body: vec![],

@@ -294,7 +294,7 @@ impl AdvancedPatternEngine {
 
     pub fn find_matching_arm(
         &self,
-        value: &str,
+        _value: &str,
         bindings: &HashMap<String, String>,
     ) -> Result<Option<&AdvancedArm>, String> {
         for arm in &self.compiled_arms {

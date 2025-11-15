@@ -313,6 +313,9 @@ impl MirBuilder {
 /// MIR lowerer: converts HIR to MIR
 pub struct MirLowerer {
     builder: MirBuilder,
+    closure_counter: usize,
+    generated_functions: Vec<MirFunction>,
+    closure_vars: std::collections::HashMap<String, String>, // Maps variable name -> generated function name
 }
 
 impl MirLowerer {
@@ -320,7 +323,46 @@ impl MirLowerer {
     pub fn new() -> Self {
         MirLowerer {
             builder: MirBuilder::new(),
+            closure_counter: 0,
+            generated_functions: Vec::new(),
+            closure_vars: std::collections::HashMap::new(),
         }
+    }
+
+    /// Generate a unique closure function name
+    fn gen_closure_name(&mut self) -> String {
+        let name = format!("__closure_{}", self.closure_counter);
+        self.closure_counter += 1;
+        name
+    }
+
+    /// Generate a closure function from a closure expression
+    fn generate_closure_function(
+        &mut self,
+        params: &[(String, HirType)],
+        body: &[HirStatement],
+        return_type: &HirType,
+    ) -> MirResult<String> {
+        let func_name = self.gen_closure_name();
+        let mut builder = MirBuilder::new();
+
+        for stmt in body {
+            self.lower_statement_in_builder(&mut builder, stmt)?;
+        }
+
+        if matches!(builder.blocks[builder.current_block].terminator, Terminator::Unreachable) {
+            builder.set_terminator(Terminator::Return(None));
+        }
+
+        let func = MirFunction {
+            name: func_name.clone(),
+            params: params.to_vec(),
+            return_type: return_type.clone(),
+            basic_blocks: builder.finish(),
+        };
+
+        self.generated_functions.push(func);
+        Ok(func_name)
     }
 
     /// Lower all items to MIR
@@ -361,6 +403,9 @@ impl MirLowerer {
             }
         }
 
+        // Add any generated closure functions
+        functions.extend(self.generated_functions.drain(..));
+
         Ok(Mir { functions })
     }
 
@@ -368,8 +413,16 @@ impl MirLowerer {
     fn lower_statement_in_builder(&mut self, builder: &mut MirBuilder, stmt: &HirStatement) -> MirResult<()> {
         match stmt {
             HirStatement::Let { name, init, .. } => {
-                let place = Place::Local(name.clone());
-                self.lower_expression_to_place(builder, init, place)?;
+                if let HirExpression::Closure { params, body, return_type, is_move: _ } = init {
+                    // Generate a closure function
+                    let func_name = self.generate_closure_function(params, body, return_type)?;
+                    self.closure_vars.insert(name.clone(), func_name);
+                    let place = Place::Local(name.clone());
+                    builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+                } else {
+                    let place = Place::Local(name.clone());
+                    self.lower_expression_to_place(builder, init, place)?;
+                }
             }
             HirStatement::Expression(expr) => {
                 let temp = builder.gen_temp();
@@ -604,10 +657,15 @@ impl MirLowerer {
                 builder.add_statement(place, rvalue);
             }
             HirExpression::Call { func, args } => {
-                let func_name = match &**func {
+                let mut func_name = match &**func {
                     HirExpression::Variable(name) => name.clone(),
                     _ => return Err(MirError { message: "Indirect calls not supported".to_string() }),
                 };
+
+                // Check if this is a call to a closure variable
+                if let Some(actual_func_name) = self.closure_vars.get(&func_name) {
+                    func_name = actual_func_name.clone();
+                }
 
                 let mut mir_args = Vec::new();
                 for arg in args {
@@ -756,6 +814,11 @@ impl MirLowerer {
             HirExpression::Closure { params: _, body: _, return_type: _, is_move: _ } => {
                 // Closures are treated as unit in simplified MIR
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+            }
+
+            HirExpression::Try { value } => {
+                // Try operator: evaluate inner expression and handle Result/Option
+                self.lower_expression_to_place(builder, value, place)?;
             }
         }
         Ok(())

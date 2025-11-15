@@ -10,10 +10,9 @@
 //! - Generate library artifacts
 //! - Integration with cargo build system
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Cargo manifest representation
 #[derive(Debug, Clone)]
@@ -602,7 +601,7 @@ pub struct LockedPackage {
 impl CargoLock {
     /// Parse Cargo.lock file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let content = fs::read_to_string(path)
+        let _content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read Cargo.lock: {}", e))?;
         
         Ok(CargoLock {

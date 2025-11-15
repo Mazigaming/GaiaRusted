@@ -101,9 +101,10 @@ pub enum HirItem {
 /// HIR statements (simplified from parser statements)
 #[derive(Debug, Clone)]
 pub enum HirStatement {
-    /// Variable binding: let x: i32 = 42;
+    /// Variable binding: let x: i32 = 42; or let mut x: i32 = 42;
     Let {
         name: String,
+        mutable: bool,
         ty: HirType,
         init: HirExpression,
     },
@@ -241,6 +242,11 @@ pub enum HirExpression {
         return_type: Box<HirType>,
         is_move: bool,
     },
+
+    /// Try operator: `value?` - unwrap Result/Option or propagate error
+    Try {
+        value: Box<HirExpression>,
+    },
 }
 
 /// Match arm for match expressions
@@ -295,6 +301,27 @@ pub enum UnaryOp {
     MutableReference, // &mut x
 }
 
+/// Closure trait kind: Fn, FnMut, or FnOnce
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum ClosureTrait {
+    /// Fn: immutable reference, can be called multiple times
+    Fn,
+    /// FnMut: mutable reference, can be called multiple times but may mutate
+    FnMut,
+    /// FnOnce: takes self by value, can only be called once
+    FnOnce,
+}
+
+impl fmt::Display for ClosureTrait {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ClosureTrait::Fn => write!(f, "Fn"),
+            ClosureTrait::FnMut => write!(f, "FnMut"),
+            ClosureTrait::FnOnce => write!(f, "FnOnce"),
+        }
+    }
+}
+
 /// HIR Types (simplified from parser types)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HirType {
@@ -341,6 +368,7 @@ pub enum HirType {
     Closure {
         params: Vec<HirType>,
         return_type: Box<HirType>,
+        trait_kind: ClosureTrait,
     },
 
     /// Unknown type (will be inferred later)
@@ -394,8 +422,8 @@ impl fmt::Display for HirType {
                 }
                 write!(f, ")")
             }
-            HirType::Closure { params, return_type } => {
-                write!(f, "fn(")?;
+            HirType::Closure { params, return_type, trait_kind } => {
+                write!(f, "{}(", trait_kind)?;
                 for (i, param) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -517,6 +545,7 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
                     Ok(HirType::Closure {
                         params: pts,
                         return_type: Box::new(ret_ty),
+                        trait_kind: ClosureTrait::Fn,
                     })
                 }
                 Err(e) => Err(e),
@@ -964,9 +993,10 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             })
         }
 
-        Expression::Try { value: _ } => {
-            Err(LowerError {
-                message: "Try operator (?) not yet fully supported".to_string(),
+        Expression::Try { value } => {
+            let inner = lower_expression(value)?;
+            Ok(HirExpression::Try {
+                value: Box::new(inner),
             })
         }
 
@@ -1070,7 +1100,14 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
 
 /// Lower a block (statements + optional expression)
 fn lower_block(block: &Block) -> LowerResult<Vec<HirStatement>> {
-    lower_statements(&block.statements)
+    let mut statements = lower_statements(&block.statements)?;
+    
+    if let Some(expr) = &block.expression {
+        let expr_hir = lower_expression(expr)?;
+        statements.push(HirStatement::Return(Some(expr_hir)));
+    }
+    
+    Ok(statements)
 }
 
 /// Lower a statement from AST to HIR
@@ -1078,7 +1115,7 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
     match stmt {
         Statement::Let {
             name,
-            mutable: _,
+            mutable,
             ty: type_opt,
             initializer,
             attributes: _,
@@ -1093,6 +1130,7 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
             };
             Ok(HirStatement::Let {
                 name: name.clone(),
+                mutable: *mutable,
                 ty,
                 init: init_hir,
             })
@@ -1215,6 +1253,7 @@ fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
             // Create a temporary variable to hold the tuple
             result.push(HirStatement::Let {
                 name: tuple_temp.clone(),
+                mutable: false,
                 ty: HirType::Unknown,
                 init: tuple_init,
             });
@@ -1229,6 +1268,7 @@ fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
                     };
                     result.push(HirStatement::Let {
                         name: var_name,
+                        mutable: false,
                         ty: HirType::Unknown,
                         init: field_access,
                     });

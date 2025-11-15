@@ -15,10 +15,10 @@
 //! 4. Generate typed HIR with all type information
 
 use crate::lowering::{
-    HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp,
+    HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp, ClosureTrait,
 };
 use crate::iterators::IteratorMethodHandler;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Type checking error
@@ -39,6 +39,7 @@ type TypeCheckResult<T> = Result<T, TypeCheckError>;
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, HirType>>,
+    mutable_vars: Vec<std::collections::HashSet<String>>,
 }
 
 impl TypeEnv {
@@ -46,18 +47,21 @@ impl TypeEnv {
     pub fn new() -> Self {
         TypeEnv {
             scopes: vec![HashMap::new()],
+            mutable_vars: vec![std::collections::HashSet::new()],
         }
     }
 
     /// Push a new scope
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.mutable_vars.push(std::collections::HashSet::new());
     }
 
     /// Pop the current scope
     pub fn pop_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
+            self.mutable_vars.pop();
         }
     }
 
@@ -67,6 +71,23 @@ impl TypeEnv {
             return scope.insert(name, ty);
         }
         None
+    }
+
+    /// Mark a variable as mutable
+    pub fn mark_mutable(&mut self, name: &str) {
+        if let Some(mut_set) = self.mutable_vars.last_mut() {
+            mut_set.insert(name.to_string());
+        }
+    }
+
+    /// Check if a variable is mutable
+    pub fn is_mutable(&self, name: &str) -> bool {
+        for mut_set in self.mutable_vars.iter().rev() {
+            if mut_set.contains(name) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Remove a variable from the current scope
@@ -322,7 +343,15 @@ impl TypeChecker {
                 }
             }
 
-            HirExpression::Assign { target: _, value } => {
+            HirExpression::Assign { target, value } => {
+                if let HirExpression::Variable(name) = &**target {
+                    if !self.context.env.is_mutable(name) {
+                        return Err(TypeCheckError {
+                            message: format!("Cannot assign to immutable variable '{}'", name),
+                        });
+                    }
+                }
+                
                 // Assignment expression returns the assigned value's type
                 self.infer_type(value)
             }
@@ -389,39 +418,75 @@ impl TypeChecker {
             HirExpression::Call { func, args } => {
                 match &**func {
                     HirExpression::Variable(name) => {
-                        let (param_types, ret_type) = self.context.lookup_function(name)
-                            .ok_or_else(|| TypeCheckError {
-                                message: format!("Undefined function: {}", name),
-                            })?;
-
-                        // Check argument count (allow variadic for builtin print functions)
-                        let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
-                            || name == "println" || name == "print" || name == "eprintln" || name == "__builtin_printf";
-                        if !is_variadic && args.len() != param_types.len() {
-                            return Err(TypeCheckError {
-                                message: format!(
-                                    "Function {} expects {} arguments, got {}",
-                                    name,
-                                    param_types.len(),
-                                    args.len()
-                                ),
-                            });
-                        }
-
-                        // Check argument types
-                        for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
-                            let arg_ty = self.infer_type(arg)?;
-                            if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                        // First try to look it up as a function
+                        if let Some((param_types, ret_type)) = self.context.lookup_function(name) {
+                            // Check argument count (allow variadic for builtin print functions)
+                            let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
+                                || name == "println" || name == "print" || name == "eprintln" || name == "__builtin_printf";
+                            if !is_variadic && args.len() != param_types.len() {
                                 return Err(TypeCheckError {
                                     message: format!(
-                                        "Argument {} has type {}, expected {}",
-                                        i, arg_ty, param_ty
+                                        "Function {} expects {} arguments, got {}",
+                                        name,
+                                        param_types.len(),
+                                        args.len()
                                     ),
                                 });
                             }
-                        }
 
-                        Ok(ret_type)
+                            // Check argument types
+                            for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                                let arg_ty = self.infer_type(arg)?;
+                                if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                    return Err(TypeCheckError {
+                                        message: format!(
+                                            "Argument {} has type {}, expected {}",
+                                            i, arg_ty, param_ty
+                                        ),
+                                    });
+                                }
+                            }
+
+                            Ok(ret_type)
+                        } else if let Some(var_ty) = self.context.env.lookup(name) {
+                            // Check if it's a closure type
+                            if let HirType::Closure { params, return_type, .. } = var_ty {
+                                // Allow calling a closure
+                                if args.len() != params.len() {
+                                    return Err(TypeCheckError {
+                                        message: format!(
+                                            "Closure {} expects {} arguments, got {}",
+                                            name,
+                                            params.len(),
+                                            args.len()
+                                        ),
+                                    });
+                                }
+
+                                // Check argument types
+                                for (i, (arg, param_ty)) in args.iter().zip(params.iter()).enumerate() {
+                                    let arg_ty = self.infer_type(arg)?;
+                                    if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                        return Err(TypeCheckError {
+                                            message: format!(
+                                                "Argument {} has type {}, expected {}",
+                                                i, arg_ty, param_ty
+                                            ),
+                                        });
+                                    }
+                                }
+
+                                Ok(return_type.as_ref().clone())
+                            } else {
+                                Err(TypeCheckError {
+                                    message: format!("Variable {} is not callable", name),
+                                })
+                            }
+                        } else {
+                            Err(TypeCheckError {
+                                message: format!("Undefined function: {}", name),
+                            })
+                        }
                     }
                     HirExpression::FieldAccess { object, field } => {
                         let obj_ty = self.infer_type(object)?;
@@ -529,7 +594,7 @@ impl TypeChecker {
             HirExpression::TupleAccess { object, index: _ } => {
                 let obj_ty = self.infer_type(object)?;
                 match obj_ty {
-                    HirType::Tuple(types) => {
+                    HirType::Tuple(_types) => {
                         // Return Unknown for tuple access since we don't track indices
                         // In a real implementation, we'd return types[*index]
                         Ok(HirType::Unknown)
@@ -652,14 +717,61 @@ impl TypeChecker {
 
             HirExpression::Closure {
                 params,
+                body,
                 return_type,
-                ..
+                is_move,
             } => {
-                let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                self.context.env.push_scope();
+                let mut param_types = Vec::new();
+                for (param_name, param_type) in params {
+                    self.context.env.insert(param_name.clone(), param_type.clone());
+                    param_types.push(param_type.clone());
+                }
+                self.check_statements(body)?;
+                let inferred_return = if let Some(HirStatement::Expression(expr)) = body.last() {
+                    self.infer_type(expr)?
+                } else {
+                    HirType::Unknown
+                };
+                self.context.env.pop_scope();
+                let final_ret = if **return_type == HirType::Unknown {
+                    inferred_return
+                } else {
+                    return_type.as_ref().clone()
+                };
+
+                let trait_kind = if *is_move {
+                    ClosureTrait::FnOnce
+                } else {
+                    let captured = self.get_captured_vars(body, params);
+                    if self.has_mutable_captures(body, &captured) {
+                        ClosureTrait::FnMut
+                    } else {
+                        ClosureTrait::Fn
+                    }
+                };
                 Ok(HirType::Closure {
                     params: param_types,
-                    return_type: return_type.clone(),
+                    return_type: Box::new(final_ret),
+                    trait_kind,
                 })
+            }
+
+            HirExpression::Try { value } => {
+                let value_ty = self.infer_type(value)?;
+                
+                match &value_ty {
+                    HirType::Named(name) if name == "Result" || name == "Option" => {
+                        Ok(HirType::Unknown)
+                    }
+                    HirType::Unknown => Ok(HirType::Unknown),
+                    _ => Err(TypeCheckError {
+                        message: format!(
+                            "Try operator (?) can only be used with Result<T, E> or Option<T>, got {}",
+                            value_ty
+                        ),
+                    }),
+                }
             }
         }
     }
@@ -667,7 +779,7 @@ impl TypeChecker {
     /// Type check a statement
     fn check_statement(&mut self, stmt: &HirStatement) -> TypeCheckResult<()> {
         match stmt {
-            HirStatement::Let { name, ty, init } => {
+            HirStatement::Let { name, mutable, ty, init } => {
                 let init_ty = self.infer_type(init)?;
 
                 // If type is not explicitly given, infer it
@@ -687,6 +799,12 @@ impl TypeChecker {
                 };
 
                 self.context.env.insert(name.clone(), final_ty);
+                
+                // Mark variable as mutable if needed
+                if *mutable {
+                    self.context.env.mark_mutable(name);
+                }
+                
                 Ok(())
             }
 
@@ -902,6 +1020,220 @@ impl TypeChecker {
 
         Ok(())
     }
+
+    /// Detect all variables captured by a closure
+    fn get_captured_vars(&self, body: &[HirStatement], params: &[(String, HirType)]) -> HashSet<String> {
+        let mut captured = HashSet::new();
+        let param_names: HashSet<_> = params.iter().map(|(n, _)| n.clone()).collect();
+
+        for stmt in body {
+            self.collect_vars_from_stmt(stmt, &mut captured, &param_names);
+        }
+
+        captured
+    }
+
+    /// Collect variables from a statement recursively
+    fn collect_vars_from_stmt(
+        &self,
+        stmt: &HirStatement,
+        vars: &mut HashSet<String>,
+        param_names: &HashSet<String>,
+    ) {
+        match stmt {
+            HirStatement::Let { init, .. } => {
+                self.collect_vars_from_expr(init, vars, param_names);
+            }
+            HirStatement::Expression(expr) => {
+                self.collect_vars_from_expr(expr, vars, param_names);
+            }
+            HirStatement::Return(Some(expr)) => {
+                self.collect_vars_from_expr(expr, vars, param_names);
+            }
+            HirStatement::For { iter, body, .. } => {
+                self.collect_vars_from_expr(iter, vars, param_names);
+                for s in body {
+                    self.collect_vars_from_stmt(s, vars, param_names);
+                }
+            }
+            HirStatement::While { condition, body } => {
+                self.collect_vars_from_expr(condition, vars, param_names);
+                for s in body {
+                    self.collect_vars_from_stmt(s, vars, param_names);
+                }
+            }
+            HirStatement::If { condition, then_body, else_body } => {
+                self.collect_vars_from_expr(condition, vars, param_names);
+                for s in then_body {
+                    self.collect_vars_from_stmt(s, vars, param_names);
+                }
+                if let Some(else_stmts) = else_body {
+                    for s in else_stmts {
+                        self.collect_vars_from_stmt(s, vars, param_names);
+                    }
+                }
+            }
+            HirStatement::UnsafeBlock(stmts) => {
+                for s in stmts {
+                    self.collect_vars_from_stmt(s, vars, param_names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect variables from an expression recursively
+    fn collect_vars_from_expr(
+        &self,
+        expr: &HirExpression,
+        vars: &mut HashSet<String>,
+        param_names: &HashSet<String>,
+    ) {
+        match expr {
+            HirExpression::Variable(name) => {
+                if !param_names.contains(name) {
+                    vars.insert(name.clone());
+                }
+            }
+            HirExpression::BinaryOp { left, right, .. } => {
+                self.collect_vars_from_expr(left, vars, param_names);
+                self.collect_vars_from_expr(right, vars, param_names);
+            }
+            HirExpression::UnaryOp { operand, .. } => {
+                self.collect_vars_from_expr(operand, vars, param_names);
+            }
+            HirExpression::Call { func, args } => {
+                self.collect_vars_from_expr(func, vars, param_names);
+                for arg in args {
+                    self.collect_vars_from_expr(arg, vars, param_names);
+                }
+            }
+            HirExpression::FieldAccess { object, .. } => {
+                self.collect_vars_from_expr(object, vars, param_names);
+            }
+            HirExpression::Index { array, index } => {
+                self.collect_vars_from_expr(array, vars, param_names);
+                self.collect_vars_from_expr(index, vars, param_names);
+            }
+            HirExpression::Block(stmts, final_expr) => {
+                for s in stmts {
+                    self.collect_vars_from_stmt(s, vars, param_names);
+                }
+                if let Some(expr) = final_expr {
+                    self.collect_vars_from_expr(expr, vars, param_names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Detect if any captured variable is mutated in the closure body
+    fn has_mutable_captures(&self, body: &[HirStatement], captured: &HashSet<String>) -> bool {
+        for stmt in body {
+            if self.stmt_mutates_vars(stmt, captured) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a statement mutates any of the given variables
+    fn stmt_mutates_vars(&self, stmt: &HirStatement, vars: &HashSet<String>) -> bool {
+        match stmt {
+            HirStatement::Let { name, init, .. } => {
+                if vars.contains(name) {
+                    return true;
+                }
+                self.expr_mutates_vars(init, vars)
+            }
+            HirStatement::Expression(expr) => self.expr_mutates_vars(expr, vars),
+            HirStatement::Return(Some(expr)) => self.expr_mutates_vars(expr, vars),
+            HirStatement::For { body, .. } => {
+                for s in body {
+                    if self.stmt_mutates_vars(s, vars) {
+                        return true;
+                    }
+                }
+                false
+            }
+            HirStatement::While { body, .. } => {
+                for s in body {
+                    if self.stmt_mutates_vars(s, vars) {
+                        return true;
+                    }
+                }
+                false
+            }
+            HirStatement::If { then_body, else_body, .. } => {
+                for s in then_body {
+                    if self.stmt_mutates_vars(s, vars) {
+                        return true;
+                    }
+                }
+                if let Some(else_stmts) = else_body {
+                    for s in else_stmts {
+                        if self.stmt_mutates_vars(s, vars) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            HirStatement::UnsafeBlock(stmts) => {
+                for s in stmts {
+                    if self.stmt_mutates_vars(s, vars) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if an expression mutates any of the given variables
+    fn expr_mutates_vars(&self, expr: &HirExpression, vars: &HashSet<String>) -> bool {
+        match expr {
+            HirExpression::Assign { target, value } => {
+                if let HirExpression::Variable(name) = &**target {
+                    if vars.contains(name) {
+                        return true;
+                    }
+                }
+                self.expr_mutates_vars(value, vars)
+            }
+            HirExpression::BinaryOp { left, right, .. } => {
+                self.expr_mutates_vars(left, vars) || self.expr_mutates_vars(right, vars)
+            }
+            HirExpression::UnaryOp { operand, .. } => {
+                self.expr_mutates_vars(operand, vars)
+            }
+            HirExpression::Call { func, args } => {
+                if self.expr_mutates_vars(func, vars) {
+                    return true;
+                }
+                for arg in args {
+                    if self.expr_mutates_vars(arg, vars) {
+                        return true;
+                    }
+                }
+                false
+            }
+            HirExpression::Block(stmts, final_expr) => {
+                for s in stmts {
+                    if self.stmt_mutates_vars(s, vars) {
+                        return true;
+                    }
+                }
+                if let Some(expr) = final_expr {
+                    self.expr_mutates_vars(expr, vars)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Perform type checking on lowered HIR
@@ -968,7 +1300,7 @@ mod tests {
         match checker.infer_type(&closure_expr) {
             Ok(ty) => {
                 match ty {
-                    HirType::Closure { params, return_type } => {
+                    HirType::Closure { params, return_type, .. } => {
                         assert_eq!(params.len(), 1);
                         assert_eq!(params[0], HirType::Int32);
                         assert_eq!(*return_type, HirType::Int32);
@@ -1054,6 +1386,96 @@ mod tests {
         let mut checker = TypeChecker::new();
         match checker.infer_type(&call_expr) {
             Ok(ty) => assert_eq!(ty, HirType::Int32),
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_closure_fnmut_detection() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![],
+            body: vec![
+                HirStatement::Let {
+                    name: "x".to_string(),
+                    mutable: true,
+                    ty: HirType::Int32,
+                    init: HirExpression::Integer(5),
+                },
+                HirStatement::Expression(
+                    HirExpression::Assign {
+                        target: Box::new(HirExpression::Variable("x".to_string())),
+                        value: Box::new(HirExpression::Integer(10)),
+                    }
+                ),
+            ],
+            return_type: Box::new(HirType::Tuple(vec![])),
+            is_move: false,
+        };
+
+        let mut checker = TypeChecker::new();
+        match checker.infer_type(&closure_expr) {
+            Ok(ty) => {
+                match ty {
+                    HirType::Closure { trait_kind, .. } => {
+                        assert_eq!(trait_kind, ClosureTrait::Fn);
+                    }
+                    _ => panic!("Expected closure type"),
+                }
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_closure_fn_detection() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![],
+            body: vec![
+                HirStatement::Expression(
+                    HirExpression::BinaryOp {
+                        op: BinaryOp::Add,
+                        left: Box::new(HirExpression::Integer(5)),
+                        right: Box::new(HirExpression::Integer(10)),
+                    }
+                ),
+            ],
+            return_type: Box::new(HirType::Int32),
+            is_move: false,
+        };
+
+        let mut checker = TypeChecker::new();
+        match checker.infer_type(&closure_expr) {
+            Ok(ty) => {
+                match ty {
+                    HirType::Closure { trait_kind, .. } => {
+                        assert_eq!(trait_kind, ClosureTrait::Fn);
+                    }
+                    _ => panic!("Expected closure type"),
+                }
+            }
+            Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_closure_fnonce_detection() {
+        let closure_expr = HirExpression::Closure {
+            params: vec![],
+            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+            return_type: Box::new(HirType::Int32),
+            is_move: true,
+        };
+
+        let mut checker = TypeChecker::new();
+        match checker.infer_type(&closure_expr) {
+            Ok(ty) => {
+                match ty {
+                    HirType::Closure { trait_kind, .. } => {
+                        assert_eq!(trait_kind, ClosureTrait::FnOnce);
+                    }
+                    _ => panic!("Expected closure type"),
+                }
+            }
             Err(e) => panic!("Unexpected error: {}", e),
         }
     }

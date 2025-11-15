@@ -254,7 +254,7 @@ impl TraitSystem {
     }
 
     pub fn resolve_super_traits(&self, trait_name: &str) -> Result<Vec<String>, TraitError> {
-        let trait_def = self.get_trait(trait_name).ok_or(
+        let _trait_def = self.get_trait(trait_name).ok_or(
             TraitError::InvalidTraitObject(format!("Trait {} not found", trait_name)),
         )?;
 

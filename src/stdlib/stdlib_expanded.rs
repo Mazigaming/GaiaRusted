@@ -83,7 +83,7 @@ pub mod string_ops {
 }
 
 pub mod collections {
-    use std::collections::{HashMap as StdHashMap, HashSet as StdHashSet, BTreeMap};
+    use std::collections::{HashMap as StdHashMap, HashSet as StdHashSet};
 
     pub struct Vector<T> {
         data: std::vec::Vec<T>,

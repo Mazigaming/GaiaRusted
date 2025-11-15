@@ -1,5 +1,3 @@
-use std::collections::HashMap as StdHashMap;
-
 pub trait IteratorExt: std::iter::Iterator + Sized {
     fn count_items(self) -> usize {
         self.count()

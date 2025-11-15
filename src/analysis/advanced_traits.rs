@@ -206,7 +206,7 @@ impl AdvancedTraitChecker {
         Ok(())
     }
 
-    pub fn resolve_variance(&self, ty: &str, bound: &TraitBound) -> Variance {
+    pub fn resolve_variance(&self, _ty: &str, bound: &TraitBound) -> Variance {
         match bound {
             TraitBound::Simple(_) => Variance::Covariant,
             TraitBound::Complex { .. } => Variance::Invariant,
@@ -220,7 +220,7 @@ impl AdvancedTraitChecker {
     }
 
     pub fn collect_supertrait_bounds(&self, trait_name: &str) -> Result<Vec<TraitBound>, String> {
-        let metadata = self.trait_registry.get(trait_name)
+        let _metadata = self.trait_registry.get(trait_name)
             .ok_or(format!("Trait {} not found", trait_name))?;
 
         let mut bounds = Vec::new();

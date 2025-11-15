@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions, metadata, create_dir, remove_file, remove_dir};
-use std::io::{Read, Write, BufReader, BufWriter, Result as IoResult, Error as IoError};
+use std::io::{Read, Write, BufReader, BufWriter, Result as IoResult};
 use std::path::Path;
 use std::collections::HashMap;
 

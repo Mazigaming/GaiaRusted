@@ -224,7 +224,26 @@ impl MirLowerer {
                 let (right_val, _) = self.lower_expression(right, blocks, current_block, state);
 
                 let temp_name = state.gen_temp();
-                let mir_op = crate::lowering::BinaryOp::Add; // Simplified
+                let mir_op = match op {
+                    ast::BinaryOp::Add => crate::lowering::BinaryOp::Add,
+                    ast::BinaryOp::Subtract => crate::lowering::BinaryOp::Subtract,
+                    ast::BinaryOp::Multiply => crate::lowering::BinaryOp::Multiply,
+                    ast::BinaryOp::Divide => crate::lowering::BinaryOp::Divide,
+                    ast::BinaryOp::Modulo => crate::lowering::BinaryOp::Modulo,
+                    ast::BinaryOp::Equal => crate::lowering::BinaryOp::Equal,
+                    ast::BinaryOp::NotEqual => crate::lowering::BinaryOp::NotEqual,
+                    ast::BinaryOp::Less => crate::lowering::BinaryOp::Less,
+                    ast::BinaryOp::LessEq => crate::lowering::BinaryOp::LessEqual,
+                    ast::BinaryOp::Greater => crate::lowering::BinaryOp::Greater,
+                    ast::BinaryOp::GreaterEq => crate::lowering::BinaryOp::GreaterEqual,
+                    ast::BinaryOp::And => crate::lowering::BinaryOp::And,
+                    ast::BinaryOp::Or => crate::lowering::BinaryOp::Or,
+                    ast::BinaryOp::BitwiseAnd => crate::lowering::BinaryOp::BitwiseAnd,
+                    ast::BinaryOp::BitwiseOr => crate::lowering::BinaryOp::BitwiseOr,
+                    ast::BinaryOp::BitwiseXor => crate::lowering::BinaryOp::BitwiseXor,
+                    ast::BinaryOp::LeftShift => crate::lowering::BinaryOp::LeftShift,
+                    ast::BinaryOp::RightShift => crate::lowering::BinaryOp::RightShift,
+                };
 
                 if let Some(block) = blocks.get_mut(*current_block) {
                     block.statements.push(MirStatement {

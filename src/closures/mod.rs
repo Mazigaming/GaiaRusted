@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::lowering::{HirExpression, HirStatement, HirType};
+use crate::lowering::{HirExpression, HirStatement, HirType, ClosureTrait};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureKind {
@@ -472,6 +472,7 @@ mod tests {
         let inner_closure_type = HirType::Closure {
             params: vec![HirType::Int32],
             return_type: Box::new(HirType::Int32),
+            trait_kind: ClosureTrait::Fn,
         };
         
         let params = vec![("f".to_string(), inner_closure_type)];
@@ -500,6 +501,7 @@ mod tests {
         bindings.insert("inner_closure".to_string(), HirType::Closure {
             params: vec![HirType::Int32],
             return_type: Box::new(HirType::Int32),
+            trait_kind: ClosureTrait::Fn,
         });
 
         let closure = analyzer.analyze_closure(

@@ -127,7 +127,7 @@ impl std::fmt::Display for ImplLifetimeError {
             } => {
                 let position_desc = match return_position.as_ref() {
                     MethodLifetimeLocation::ReturnType => "return type",
-                    MethodLifetimeLocation::Parameter(idx) => {
+                    MethodLifetimeLocation::Parameter(_idx) => {
                         return write!(
                             f,
                             "Method '{}': References a lifetime in parameter position but doesn't have reference parameters",

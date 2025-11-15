@@ -380,11 +380,11 @@ impl BorrowChecker {
     /// Check a single statement
     fn check_statement(&mut self, stmt: &HirStatement) -> BorrowCheckResult<()> {
         match stmt {
-            HirStatement::Let { name, ty, init } => {
+            HirStatement::Let { name, mutable, ty, init } => {
                 // Check the right-hand side expression
                 self.check_expression(init)?;
 
-                self.env.bind(name.clone(), ty.clone(), false)?;
+                self.env.bind(name.clone(), ty.clone(), *mutable)?;
             }
 
             HirStatement::Expression(expr) => {
@@ -622,6 +622,11 @@ impl BorrowChecker {
                 self.env.push_scope();
                 self.check_statements(body)?;
                 self.env.pop_scope();
+                Ok(())
+            }
+
+            HirExpression::Try { value } => {
+                self.check_expression(value)?;
                 Ok(())
             }
         }

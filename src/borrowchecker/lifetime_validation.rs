@@ -94,7 +94,7 @@ impl LifetimeValidator {
                 self._collect_type_lifetimes_impl(element, location);
             }
             Type::Tuple(types) => {
-                for (i, ty) in types.iter().enumerate() {
+                for (_i, ty) in types.iter().enumerate() {
                     let loc = match &location {
                         LifetimeLocation::StructField(name) => LifetimeLocation::StructField(name.clone()),
                         LifetimeLocation::FunctionParam(idx) => LifetimeLocation::FunctionParam(*idx),

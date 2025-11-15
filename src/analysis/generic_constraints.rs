@@ -46,11 +46,11 @@ impl ConstraintSet {
                 self.resolved.entry(b.clone()).or_insert_with(Vec::new).push(constraint.clone());
                 Ok(())
             }
-            Constraint::TraitBound(ty, trait_name) => {
+            Constraint::TraitBound(ty, _trait_name) => {
                 self.resolved.entry(ty.clone()).or_insert_with(Vec::new).push(constraint.clone());
                 Ok(())
             }
-            Constraint::LifetimeBound(a, b) => {
+            Constraint::LifetimeBound(a, _b) => {
                 self.resolved.entry(a.clone()).or_insert_with(Vec::new).push(constraint.clone());
                 Ok(())
             }

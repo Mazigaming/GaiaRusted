@@ -237,9 +237,16 @@ impl Lexer {
                 .map_err(|_| LexError::InvalidNumber(num_str))?;
             Ok(token::Token::Float(value))
         } else {
-            let value = num_str.parse::<i64>()
-                .map_err(|_| LexError::InvalidNumber(num_str))?;
-            Ok(token::Token::Integer(value))
+            // Try to parse as i64; if it fails, try u64 for large unsigned values
+            match num_str.parse::<i64>() {
+                Ok(value) => Ok(token::Token::Integer(value)),
+                Err(_) => {
+                    match num_str.parse::<u64>() {
+                        Ok(value) => Ok(token::Token::Integer(value as i64)),
+                        Err(_) => Err(LexError::InvalidNumber(num_str))
+                    }
+                }
+            }
         }
     }
 

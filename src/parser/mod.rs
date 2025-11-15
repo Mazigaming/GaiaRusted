@@ -18,7 +18,10 @@
 //! expression     → assignment
 //! assignment     → logical_or ( = expression )?
 //! logical_or     → logical_and ( || logical_and )*
-//! logical_and    → equality ( && equality )*
+//! logical_and    → bitwise_or ( && bitwise_or )*
+//! bitwise_or     → bitwise_xor ( | bitwise_xor )*
+//! bitwise_xor    → bitwise_and ( ^ bitwise_and )*
+//! bitwise_and    → equality ( & equality )*
 //! equality       → comparison ( (== | !=) comparison )*
 //! comparison     → addition ( (<|<=|>|>=) addition )*
 //! addition       → multiplication ( (+|-) multiplication )*
@@ -600,7 +603,9 @@ impl Parser {
     /// Parse a while statement: `while condition { ... }`
     fn parse_while_statement(&mut self) -> ParseResult<Statement> {
         self.expect_keyword(Keyword::While)?;
-        let condition = Box::new(self.parse_expression()?);
+        let condition = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+            parser.parse_expression()
+        })?);
         let body = self.parse_block()?;
         
         Ok(Statement::While { condition, body })
@@ -609,7 +614,9 @@ impl Parser {
     /// Parse an if statement: `if condition { ... } else { ... }`
     fn parse_if_statement(&mut self) -> ParseResult<Statement> {
         self.expect_keyword(Keyword::If)?;
-        let condition = Box::new(self.parse_expression()?);
+        let condition = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+            parser.parse_expression()
+        })?);
         let then_body = self.parse_block()?;
         
         let else_body = if self.check(&Token::Keyword(Keyword::Else)) {
@@ -695,11 +702,11 @@ impl Parser {
 
     /// Parse logical AND: expr && expr
     fn parse_logical_and(&mut self) -> ParseResult<Expression> {
-        let mut expr = self.parse_equality()?;
+        let mut expr = self.parse_bitwise_or()?;
 
         while self.check(&Token::AndAnd) {
             self.advance();
-            let right = Box::new(self.parse_equality()?);
+            let right = Box::new(self.parse_bitwise_or()?);
             expr = Expression::Binary {
                 left: Box::new(expr),
                 op: BinaryOp::And,
@@ -710,6 +717,70 @@ impl Parser {
         Ok(expr)
     }
 
+
+    /// Parse bitwise OR: expr | expr
+    fn parse_bitwise_or(&mut self) -> ParseResult<Expression> {
+        let mut expr = self.parse_bitwise_xor()?;
+
+        while self.check(&Token::Pipe) {
+            self.advance();
+            let right = Box::new(self.parse_bitwise_xor()?);
+            expr = Expression::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::BitwiseOr,
+                right,
+            };
+        }
+
+        Ok(expr)
+    }
+
+    /// Parse bitwise XOR: expr ^ expr
+    fn parse_bitwise_xor(&mut self) -> ParseResult<Expression> {
+        let mut expr = self.parse_bitwise_and()?;
+
+        while self.check(&Token::Caret) {
+            self.advance();
+            let right = Box::new(self.parse_bitwise_and()?);
+            expr = Expression::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::BitwiseXor,
+                right,
+            };
+        }
+
+        Ok(expr)
+    }
+
+    /// Parse bitwise AND: expr & expr
+    fn parse_bitwise_and(&mut self) -> ParseResult<Expression> {
+        let mut expr = self.parse_equality()?;
+
+        while self.check(&Token::Ampersand) && !self.is_unary_ampersand() {
+            self.advance();
+            let right = Box::new(self.parse_equality()?);
+            expr = Expression::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::BitwiseAnd,
+                right,
+            };
+        }
+
+        Ok(expr)
+    }
+
+    /// Helper to distinguish between binary & (bitwise AND) and unary & (reference)
+    fn is_unary_ampersand(&self) -> bool {
+        match self.peek(1) {
+            Token::Keyword(Keyword::Mut) => true,
+            Token::Star => true,
+            Token::Bang => true,
+            Token::Minus => true,
+            Token::Tilde => true,
+            Token::Ampersand => true,
+            _ => false,
+        }
+    }
     /// Parse equality: expr == expr, expr != expr
     fn parse_equality(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_comparison()?;
@@ -1181,7 +1252,9 @@ impl Parser {
     /// Parse if expression
     fn parse_if_expression(&mut self) -> ParseResult<Expression> {
         self.expect_keyword(Keyword::If)?;
-        let condition = Box::new(self.parse_expression()?);
+        let condition = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+            parser.parse_expression()
+        })?);
         let then_body = self.parse_block()?;
 
         let else_body = if self.check(&Token::Keyword(Keyword::Else)) {
@@ -1424,6 +1497,12 @@ impl Parser {
         while !self.check(&Token::Pipe) {
             let param = self.expect_identifier()?;
             params.push(param);
+            
+            // Skip type annotations if present (they're parsed but not stored in the AST)
+            if self.check(&Token::Colon) {
+                self.advance();
+                let _ = self.parse_type()?;
+            }
             
             if !self.check(&Token::Pipe) {
                 self.consume(",")?;

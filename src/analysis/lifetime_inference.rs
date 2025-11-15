@@ -105,7 +105,7 @@ impl LifetimeInferenceEngine {
             .collect();
 
         if !outlives_constraints.is_empty() {
-            let (a, b) = &outlives_constraints[0];
+            let (a, _b) = &outlives_constraints[0];
             return Ok(a.clone());
         }
 

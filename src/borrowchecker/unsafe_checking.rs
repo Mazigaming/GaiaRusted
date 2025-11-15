@@ -154,7 +154,7 @@ impl UnsafeChecker {
                 }
                 self.check_type(return_type)
             }
-            HirType::Closure { params, return_type } => {
+            HirType::Closure { params, return_type, .. } => {
                 // Closure types are OK, calling them is what's unsafe
                 for param in params {
                     self.check_type(param)?;

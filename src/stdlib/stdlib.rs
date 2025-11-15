@@ -594,9 +594,6 @@ pub mod string {
 }
 
 pub mod io {
-    use std::io::{Read, Write};
-    use std::fs::File;
-
     pub fn println(s: &str) {
         println!("{}", s);
     }

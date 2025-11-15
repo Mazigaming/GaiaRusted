@@ -40,7 +40,7 @@
 //! - **State Machine Generator**: Creates coroutine state machine for execution
 //! - **Pin Handling**: Ensures proper pinning for safe async operations
 
-use crate::lowering::{HirExpression, HirItem, HirStatement, HirType};
+use crate::lowering::{HirExpression, HirItem, HirType};
 use crate::parser::ast as parser_ast;
 use std::collections::HashMap;
 use std::fmt;
@@ -195,7 +195,6 @@ impl AsyncTransformer {
                 name,
                 params,
                 return_type,
-                body,
                 is_async: true,
                 ..
             } => {

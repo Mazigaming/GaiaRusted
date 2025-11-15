@@ -274,7 +274,7 @@ mod integration_tests {
         // Should be a reference type
         assert!(matches!(result, Type::Reference { .. }));
     }
-
+q
     #[test]
     fn test_complex_constraint_solving() {
         use super::constraints::{ConstraintGenerator, BinaryOp};

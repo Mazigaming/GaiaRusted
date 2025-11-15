@@ -1,6 +1,5 @@
-use std::panic::{PanicInfo, catch_unwind, AssertUnwindSafe, UnwindSafe};
+use std::panic::{PanicHookInfo, catch_unwind, AssertUnwindSafe, UnwindSafe};
 use std::cell::RefCell;
-use std::sync::Mutex;
 
 thread_local! {
     static PANIC_CONTEXT: RefCell<PanicContext> = RefCell::new(PanicContext::new());
@@ -65,7 +64,7 @@ impl PanicContext {
 pub struct PanicHandler {
     enabled: bool,
     catch_panics: bool,
-    handler_hook: Option<Box<dyn Fn(&PanicInfo) + Send + Sync>>,
+    handler_hook: Option<Box<dyn Fn(&PanicHookInfo) + Send + Sync>>,
 }
 
 impl PanicHandler {

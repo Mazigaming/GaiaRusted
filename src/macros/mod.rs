@@ -329,7 +329,7 @@ impl MacroExpander {
                             stream,
                         } = &body[i + 1]
                         {
-                            let (expanded, consumed) = 
+                            let (expanded, _consumed) = 
                                 self.substitute_repetition(stream, bindings, depth + 1)?;
                             result.extend(expanded);
                             i += 2;

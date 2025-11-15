@@ -8,8 +8,6 @@
 //! - {:b} - Binary formatting
 //! - {:o} - Octal formatting
 
-use std::fmt;
-
 /// Represents a single format specification
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormatSpec {

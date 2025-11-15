@@ -6,7 +6,7 @@
 //! - Lifetime bounds in where clauses
 //! - Lifetime in associated types
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OutlivesConstraint {
