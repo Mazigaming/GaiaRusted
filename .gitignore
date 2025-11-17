@@ -1,0 +1,42 @@
+# Rust build artifacts
+/target/
+**/*.rlib
+**/*.rmeta
+*.pdb
+
+# Generated output files
+*.s
+*.o
+*.a
+output
+output.*
+out
+# Generated scripts
+build.sh
+*.sh
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Cargo lock for non-binary crates
+Cargo.lock
+
+# Temporary test files
+test_*.rs
+comprehensive_*.rs
+buildit.*
+mathlib.*
+test_project/
+a.out*
+*txt
+test_*
+benchmark_*.rs
+out_test*
+
+# OS files
+Thumbs.db

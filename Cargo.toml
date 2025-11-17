@@ -1,0 +1,23 @@
+[package]
+name = "gaiarusted"
+version = "0.5.0"
+edition = "2021"
+description = "A complete Rust compiler implementation built from scratch with advanced features"
+license = "MIT"
+repository = "https://github.com/Mazigaming/GaiaRusted"
+readme = "README.md"
+keywords = ["compiler", "rust", "codegen", "pattern-matching", "modules"]
+categories = ["development-tools::compiler"]
+
+[lib]
+name = "gaiarusted"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gaiarusted"
+path = "src/bin/gaiarusted.rs"
+
+[dependencies]
+
+[dev-dependencies]
+
