@@ -4,7 +4,7 @@ A complete Rust compiler implementation built from scratch in pure Rust with zer
 
 > **Note:** Previous repo got nuked lmao 💀 Fresh start with clean history. This is the new home.
 
-**v0.5.0 - CURRENT STABLE** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusteD/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
+**v0.5.0 - CURRENT STABLE** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
 
 * * *
 
@@ -36,8 +36,8 @@ Quick Start
 
 ```bash
 # Clone repository
-git clone https://github.com/Mazigaming/GaiaRusteD.git
-cd GaiaRusteD
+git clone https://github.com/Mazigaming/GaiaRusted.git
+cd GaiaRusted/gaiarusted
 
 # Build release
 cargo build --release
