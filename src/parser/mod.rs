@@ -692,26 +692,31 @@ impl Parser {
 
         let where_clause = self.parse_where_clause()?;
 
-        self.consume("{")?;
         let mut fields = Vec::new();
 
-        while !self.check(&Token::RightBrace) {
-            let field_name = self.expect_identifier()?;
-            self.consume(":")?;
-            let ty = self.parse_type()?;
+        if self.check(&Token::Semicolon) {
+            self.consume(";")?;
+        } else {
+            self.consume("{")?;
 
-            fields.push(StructField {
-                name: field_name,
-                ty,
-                attributes: Vec::new(),
-            });
+            while !self.check(&Token::RightBrace) {
+                let field_name = self.expect_identifier()?;
+                self.consume(":")?;
+                let ty = self.parse_type()?;
 
-            if !self.check(&Token::RightBrace) {
-                self.consume(",")?;
+                fields.push(StructField {
+                    name: field_name,
+                    ty,
+                    attributes: Vec::new(),
+                });
+
+                if !self.check(&Token::RightBrace) {
+                    self.consume(",")?;
+                }
             }
-        }
 
-        self.consume("}")?;
+            self.consume("}")?;
+        }
 
         Ok(Item::Struct { 
             name, 
@@ -1180,6 +1185,35 @@ impl Parser {
     /// Parse range expressions: a..b, a..=b, a.., ..b
     fn parse_range(&mut self) -> ParseResult<Expression> {
         // eprintln!("[DEBUG] parse_range: START, current token={:?}, restriction={:?}", self.current(), self.restrictions);
+        
+        // Check for range starting with .. (e.g., ..5, ..=10)
+        if self.check(&Token::DotDot) {
+            self.advance();
+            if self.check(&Token::Equal) {
+                self.advance();
+                let end = Box::new(self.parse_range_end()?);
+                return Ok(Expression::Range {
+                    start: None,
+                    end: Some(end),
+                    inclusive: true,
+                });
+            } else if !self.is_expression_terminator() {
+                let end = Box::new(self.parse_range_end()?);
+                return Ok(Expression::Range {
+                    start: None,
+                    end: Some(end),
+                    inclusive: false,
+                });
+            } else {
+                // Just .. with no end (e.g., ..)
+                return Ok(Expression::Range {
+                    start: None,
+                    end: None,
+                    inclusive: false,
+                });
+            }
+        }
+        
         let mut expr = self.parse_postfix()?;
         // eprintln!("[DEBUG] parse_range: After postfix, current token={:?}, expr type parsed", self.current());
 
@@ -1412,19 +1446,24 @@ impl Parser {
                     path.push(next_name);
                 }
 
-                // Check for macro call (println!, print!, etc.)
+                // Check for macro call (println!, print!, vec!, etc.)
                 if self.check(&Token::Bang) {
                     self.advance();
+                    let macro_name = path.last().unwrap().clone();
                     if self.check(&Token::LeftParen) {
                         self.advance();
                         let args = self.parse_arguments()?;
                         self.consume(")")?;
-                        // For macros with paths, use the last segment as the name
-                        let macro_name = path.last().unwrap().clone();
+                        Ok(Expression::FunctionCall { name: macro_name, args })
+                    } else if self.check(&Token::LeftBracket) {
+                        // Handle bracket-style macros like vec![1, 2, 3]
+                        self.advance();
+                        let args = self.parse_bracket_contents()?;
+                        self.consume("]")?;
                         Ok(Expression::FunctionCall { name: macro_name, args })
                     } else {
                         return Err(ParseError::InvalidSyntax(
-                            "Expected '(' after macro '!'".to_string(),
+                            "Expected '(' or '[' after macro '!'".to_string(),
                         ));
                     }
                 } else if self.check(&Token::LeftParen) && path.len() == 1 {
@@ -1541,6 +1580,19 @@ impl Parser {
         while !self.check(&Token::RightParen) {
             args.push(self.parse_expression()?);
             if !self.check(&Token::RightParen) {
+                self.consume(",")?;
+            }
+        }
+
+        Ok(args)
+    }
+
+    fn parse_bracket_contents(&mut self) -> ParseResult<Vec<Expression>> {
+        let mut args = Vec::new();
+
+        while !self.check(&Token::RightBracket) {
+            args.push(self.parse_expression()?);
+            if !self.check(&Token::RightBracket) {
                 self.consume(",")?;
             }
         }
@@ -1934,7 +1986,8 @@ impl Parser {
         let mut methods = Vec::new();
         while !self.check(&Token::RightBrace) {
             if self.check(&Token::Keyword(Keyword::Fn)) {
-                methods.push(self.parse_function()?);
+                let method = self.parse_trait_method()?;
+                methods.push(method);
             } else if self.check(&Token::Keyword(Keyword::Type)) {
                 self.advance();
                 let assoc_type_name = self.expect_identifier()?;
@@ -1967,6 +2020,48 @@ impl Parser {
             is_pub: false,
             attributes: Vec::new(),
             where_clause,
+        })
+    }
+
+    fn parse_trait_method(&mut self) -> ParseResult<Item> {
+        self.expect_keyword(Keyword::Fn)?;
+        let name = self.expect_identifier()?;
+        let generics = self.parse_generics()?;
+        let where_clause = self.parse_where_clause()?;
+        
+        self.consume("(")?;
+        let params = self.parse_parameters()?;
+        self.consume(")")?;
+        
+        let return_type = if self.check(&Token::Arrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        
+        let body = if self.check(&Token::LeftBrace) {
+            self.parse_block()?
+        } else {
+            self.consume(";")?;
+            Block {
+                statements: Vec::new(),
+                expression: None,
+            }
+        };
+        
+        Ok(Item::Function {
+            name,
+            generics,
+            params,
+            return_type,
+            body,
+            is_unsafe: false,
+            is_async: false,
+            is_pub: false,
+            attributes: Vec::new(),
+            where_clause,
+            abi: None,
         })
     }
 

@@ -208,6 +208,7 @@ impl UnsafeCheckerEnhanced {
                 let type_strs: Vec<_> = types.iter().map(|t| self.type_name(t)).collect();
                 format!("({})", type_strs.join(", "))
             }
+            HirType::Range => "Range".to_string(),
             HirType::Unknown => "?".to_string(),
         }
     }

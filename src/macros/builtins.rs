@@ -166,21 +166,16 @@ fn register_eprintln_macro(expander: &mut MacroExpander) {
 fn register_vec_macro(expander: &mut MacroExpander) {
     let rule = MacroRule {
         pattern: vec![
-            MacroPattern::Group {
-                delimiter: Delimiter::Bracket,
-                patterns: vec![
-                    MacroPattern::MetaVar {
-                        name: "item".to_string(),
-                        kind: MetaVarKind::Expr,
-                    },
-                ],
+            MacroPattern::MetaVar {
+                name: "items".to_string(),
+                kind: MetaVarKind::Tt,
             },
         ],
         body: vec![
-            TokenTree::Token(Token::Identifier("__builtin_vec".to_string())),
+            // Expand vec![x, y, z] to an array literal [x, y, z]
             TokenTree::Token(Token::LeftBracket),
             TokenTree::Token(Token::Dollar),
-            TokenTree::Token(Token::Identifier("item".to_string())),
+            TokenTree::Token(Token::Identifier("items".to_string())),
             TokenTree::Token(Token::RightBracket),
         ],
     };

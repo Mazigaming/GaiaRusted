@@ -42,6 +42,8 @@ pub enum Place {
     Field(Box<Place>, String),
     /// Array index
     Index(Box<Place>, usize),
+    /// Dereference: *ptr
+    Deref(Box<Place>),
 }
 
 impl fmt::Display for Place {
@@ -50,6 +52,7 @@ impl fmt::Display for Place {
             Place::Local(name) => write!(f, "{}", name),
             Place::Field(place, field) => write!(f, "{}.{}", place, field),
             Place::Index(place, idx) => write!(f, "{}[{}]", place, idx),
+            Place::Deref(place) => write!(f, "*{}", place),
         }
     }
 }
@@ -380,6 +383,7 @@ impl MirLowerer {
                     params,
                     return_type,
                     body,
+                    ..
                 } => {
                     let mut mir_builder = MirBuilder::new();
 
@@ -707,12 +711,36 @@ impl MirLowerer {
                 let val_temp = builder.gen_temp();
                 self.lower_expression_to_place(builder, value, Place::Local(val_temp.clone()))?;
                 
-                // For simple variable assignments
-                if let HirExpression::Variable(name) = &**target {
-                    builder.add_statement(Place::Local(name.clone()), Rvalue::Use(Operand::Copy(Place::Local(val_temp))));
-                    builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
-                } else {
-                    return Err(MirError { message: "Complex assignment targets not yet supported".to_string() });
+                // Handle different assignment targets
+                match &**target {
+                    HirExpression::Variable(name) => {
+                        // Simple variable assignment: x = value
+                        builder.add_statement(Place::Local(name.clone()), Rvalue::Use(Operand::Copy(Place::Local(val_temp))));
+                        builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+                    }
+                    HirExpression::UnaryOp { op: UnaryOp::Dereference, operand } => {
+                        // Dereference assignment: *ptr = value
+                        // First evaluate the pointer
+                        let ptr_temp = builder.gen_temp();
+                        self.lower_expression_to_place(builder, operand, Place::Local(ptr_temp.clone()))?;
+                        
+                        // Then store through the pointer
+                        // In a full implementation, this would create a Store instruction
+                        // For now, we'll represent it as an assignment to the dereferenced place
+                        builder.add_statement(Place::Deref(Box::new(Place::Local(ptr_temp))), Rvalue::Use(Operand::Copy(Place::Local(val_temp))));
+                        builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+                    }
+                    HirExpression::FieldAccess { object, field } => {
+                        // Field assignment: obj.field = value
+                        let obj_temp = builder.gen_temp();
+                        self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
+                        
+                        builder.add_statement(Place::Field(Box::new(Place::Local(obj_temp)), field.clone()), Rvalue::Use(Operand::Copy(Place::Local(val_temp))));
+                        builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+                    }
+                    _ => {
+                        return Err(MirError { message: "Complex assignment targets not yet supported".to_string() });
+                    }
                 }
             }
             HirExpression::If { condition, then_body, else_body } => {

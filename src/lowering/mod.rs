@@ -12,7 +12,7 @@
 //! ## Algorithm:
 //! Single recursive pass over the AST, transforming nodes as we go.
 
-use crate::parser::{self, Expression, Statement, Item, Type, Block, Parameter, StructField, Pattern, EnumVariant};
+use crate::parser::{self, Expression, Statement, Item, Type, Block, Parameter, StructField, Pattern, EnumVariant, GenericParam};
 use std::fmt;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -270,6 +270,7 @@ pub enum HirItem {
     /// Function definition
     Function {
         name: String,
+        generics: Vec<GenericParam>,
         params: Vec<(String, HirType)>,
         return_type: Option<HirType>,
         body: Vec<HirStatement>,
@@ -566,6 +567,9 @@ pub enum HirType {
         trait_kind: ClosureTrait,
     },
 
+    /// Range type (for slicing)
+    Range,
+
     /// Unknown type (will be inferred later)
     Unknown,
 }
@@ -627,6 +631,7 @@ impl fmt::Display for HirType {
                 }
                 write!(f, ") -> {}", return_type)
             }
+            HirType::Range => write!(f, "Range"),
             HirType::Unknown => write!(f, "?"),
         }
     }
@@ -1545,7 +1550,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
      match item {
          Item::Function {
              name,
-             generics: _,
+             generics,
              params,
              return_type,
              body,
@@ -1566,6 +1571,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                      // Create a dummy function that won't be called
                      return Ok(HirItem::Function {
                          name: format!("_enum_constructor_{}", name.replace("::", "_impl_")),
+                         generics: vec![],
                          params: vec![],
                          return_type: None,
                          body: vec![],
@@ -1591,6 +1597,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 
              Ok(HirItem::Function {
                  name: name.clone(),
+                 generics: generics.clone(),
                  params: params_hir?,
                  return_type: ret_type_hir,
                  body: body_hir,
@@ -1693,6 +1700,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                             (Ok(p), Some(Some(r)), Ok(b)) => {
                                 Ok(HirItem::Function {
                                     name: qualified_name,
+                                    generics: vec![],
                                     params: p,
                                     return_type: Some(r),
                                     body: b,
@@ -1701,6 +1709,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                             (Ok(p), None, Ok(b)) => {
                                 Ok(HirItem::Function {
                                     name: qualified_name,
+                                    generics: vec![],
                                     params: p,
                                     return_type: None,
                                     body: b,

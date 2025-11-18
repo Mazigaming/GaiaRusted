@@ -217,6 +217,7 @@ impl AsyncTransformer {
 
                 Ok(HirItem::Function {
                     name: name.clone(),
+                    generics: vec![],
                     params: hir_params,
                     return_type: Some(output_type),
                     body: hir_body,

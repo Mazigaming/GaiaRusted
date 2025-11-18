@@ -246,6 +246,32 @@ impl TypeChecker {
         Ok(())
     }
 
+    /// Try to match a generic parameter type with an actual type
+    /// Returns a substitution map (generic name -> concrete type) if successful
+    fn try_unify_type(&self, generic_ty: &HirType, actual_ty: &HirType) -> Option<(String, HirType)> {
+        match generic_ty {
+            HirType::Named(name) if name.len() == 1 && name.chars().next().unwrap().is_uppercase() => {
+                // This looks like a generic type parameter (single uppercase letter like T, U, etc.)
+                Some((name.clone(), actual_ty.clone()))
+            }
+            _ => None
+        }
+    }
+
+    /// Apply generic type substitutions to a type
+    fn apply_substitutions(&self, ty: &HirType, subs: &std::collections::HashMap<String, HirType>) -> HirType {
+        match ty {
+            HirType::Named(name) => {
+                if let Some(concrete_ty) = subs.get(name) {
+                    concrete_ty.clone()
+                } else {
+                    ty.clone()
+                }
+            }
+            _ => ty.clone()
+        }
+    }
+
     /// Check if two types are compatible (including coercions)
     fn types_compatible(&self, from: &HirType, to: &HirType) -> bool {
         if from == to {
@@ -300,12 +326,17 @@ impl TypeChecker {
             HirExpression::Bool(_) => Ok(HirType::Bool),
 
             HirExpression::Variable(name) => {
-                self.context
-                    .env
-                    .lookup(name)
-                    .ok_or_else(|| TypeCheckError {
+                // First check if it's a variable
+                if let Some(ty) = self.context.env.lookup(name) {
+                    Ok(ty)
+                } else if self.context.lookup_struct(name).is_some() {
+                    // It's a struct type - unit struct or type name used as a value
+                    Ok(HirType::Named(name.clone()))
+                } else {
+                    Err(TypeCheckError {
                         message: format!("Undefined variable: {}", name),
                     })
+                }
             }
 
             HirExpression::BinaryOp { op, left, right } => {
@@ -464,10 +495,15 @@ impl TypeChecker {
                                 });
                             }
 
-                            // Check argument types
+                            // Check argument types and collect generic substitutions
+                            let mut substitutions = std::collections::HashMap::new();
                             for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
                                 let arg_ty = self.infer_type(arg)?;
-                                if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                
+                                // Try to unify generic types
+                                if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
+                                    substitutions.insert(gen_name, concrete_ty);
+                                } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
                                     return Err(TypeCheckError {
                                         message: format!(
                                             "Argument {} has type {}, expected {}",
@@ -477,7 +513,9 @@ impl TypeChecker {
                                 }
                             }
 
-                            Ok(ret_type)
+                            // Apply substitutions to return type
+                            let final_ret_type = self.apply_substitutions(&ret_type, &substitutions);
+                            Ok(final_ret_type)
                         } else if let Some(var_ty) = self.context.env.lookup(name) {
                             // Check if it's a closure type
                             if let HirType::Closure { params, return_type, .. } = var_ty {
@@ -649,12 +687,13 @@ impl TypeChecker {
                 let _array_ty = self.infer_type(array)?;
                 let index_ty = self.infer_type(index)?;
 
-                // Index must be an integer
+                // Index must be an integer or a Range
                 match index_ty {
                     HirType::Int32 | HirType::Int64 => {}
+                    HirType::Range => {}  // Ranges are now valid for slicing
                     _ => {
                         return Err(TypeCheckError {
-                            message: format!("Array index must be integer, got {}", index_ty),
+                            message: format!("Array index must be integer or range, got {}", index_ty),
                         })
                     }
                 }
@@ -735,8 +774,8 @@ impl TypeChecker {
                 if let Some(end_expr) = end {
                     let _end_ty = self.infer_type(end_expr)?;
                 }
-                // Ranges are typed as Range<T> but we simplify to Unknown for now
-                Ok(HirType::Unknown)
+                // Range expressions have the Range type
+                Ok(HirType::Range)
             }
 
             HirExpression::Block(stmts, expr) => {
@@ -1050,6 +1089,7 @@ impl TypeChecker {
                     params,
                     return_type,
                     body,
+                    ..
                 } => {
                     self.check_function(name, params, return_type, body)?;
                 }

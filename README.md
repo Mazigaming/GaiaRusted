@@ -903,8 +903,9 @@ Roadmap
 *   ✅ File-based module system (mod.rs)
 *   ✅ Better error recovery in parser
 *   ✅ Improved diagnostics with code suggestions
+*   ✅ Array slicing with range expressions (arr[1..3], arr[..5], arr[1..])
 
-### 📋 v0.6.0+ Vision
+### ✅ v0.6.0 , 0.6.1 (Completed)
 
 **Advanced Features:**
 *   ✅ Async/await syntax and runtime

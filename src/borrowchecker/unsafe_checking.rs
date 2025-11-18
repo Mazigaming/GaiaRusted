@@ -172,6 +172,7 @@ impl UnsafeChecker {
             HirType::Bool |
             HirType::Char |
             HirType::String |
+            HirType::Range |
             HirType::Unknown => Ok(()),
         }
     }
