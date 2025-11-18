@@ -303,6 +303,26 @@ impl Parser {
         }
     }
 
+    /// Expect an identifier or keyword-like identifier (for field names, method names after dot)
+    pub fn expect_field_name(&mut self) -> ParseResult<String> {
+        match self.current() {
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(name)
+            }
+            // Allow certain keywords as field names (after a dot)
+            Token::Keyword(Keyword::Self_) => {
+                self.advance();
+                Ok("self".to_string())
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "field name".to_string(),
+                found: format!("{:?}", self.current()),
+            }),
+        }
+    }
+
     fn is_block_like_expression(&self, expr: &Expression) -> bool {
         matches!(expr,
             Expression::If { .. } |
@@ -1262,12 +1282,44 @@ impl Parser {
         )
     }
 
-    /// Parse postfix: expr.field, expr[index]
+    /// Parse postfix: expr.field, expr[index], expr(args)
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_primary()?;
 
         loop {
             match self.current() {
+                Token::LeftParen => {
+                    // Handle function calls on Path expressions like `Point::new(5, 10)`
+                    if let Expression::Path { segments, is_absolute } = expr {
+                        self.advance();
+                        let args = self.parse_arguments()?;
+                        self.consume(")")?;
+                        
+                        // Convert path to function call
+                        // For Type::method, use the full path as context
+                        if segments.len() > 1 {
+                            // Path-based call: Type::method(args)
+                            // For now, we'll represent this as a special case using GenericCall
+                            // with the path information encoded in the name
+                            let full_name = segments.join("::");
+                            expr = Expression::GenericCall {
+                                name: full_name,
+                                type_args: Vec::new(),
+                                args,
+                            };
+                        } else {
+                            // Simple function call
+                            expr = Expression::FunctionCall { 
+                                name: segments[0].clone(), 
+                                args 
+                            };
+                        }
+                    } else {
+                        return Err(ParseError::InvalidSyntax(
+                            "Unexpected '(' after non-callable expression".to_string(),
+                        ));
+                    }
+                }
                 Token::Dot => {
                     self.advance();
                     let field_or_method = match self.current() {
@@ -1276,7 +1328,7 @@ impl Parser {
                             self.advance();
                             n.to_string()
                         }
-                        _ => self.expect_identifier()?
+                        _ => self.expect_field_name()?
                     };
                     
                     if self.check(&Token::LeftParen) {
@@ -1381,7 +1433,7 @@ impl Parser {
                     self.consume(")")?;
                     Ok(Expression::FunctionCall { name: path[0].clone(), args })
                 } else if self.check(&Token::LeftBrace) && matches!(self.restrictions, Restrictions::None) && path.len() == 1 {
-                    // Struct literal: Name { field: value, ... }
+                    // Struct literal: Name { field: value, ... } or Name { field, ... } (shorthand)
                     // Only parse as struct literal if restrictions allow it
                     // (NoStructLiteral is used in contexts like `for x in EXPR {`, where the `{` is a loop body, not struct fields)
                     self.advance();
@@ -1389,8 +1441,16 @@ impl Parser {
                     
                     while !self.check(&Token::RightBrace) {
                         let field_name = self.expect_identifier()?;
-                        self.consume(":")?;
-                        let field_value = self.parse_expression()?;
+                        
+                        // Support shorthand field syntax: `field` is equivalent to `field: field`
+                        let field_value = if self.check(&Token::Colon) {
+                            self.advance();
+                            self.parse_expression()?
+                        } else {
+                            // Shorthand: field name only, expands to field: field
+                            Expression::Variable(field_name.clone())
+                        };
+                        
                         fields.push((field_name, field_value));
                         
                         if !self.check(&Token::RightBrace) {
@@ -1459,6 +1519,10 @@ impl Parser {
             Token::Keyword(Keyword::While) => self.parse_while_expression(),
             Token::Keyword(Keyword::For) => self.parse_for_loop(),
             Token::Keyword(Keyword::Unsafe) => self.parse_unsafe_block(),
+            Token::Keyword(Keyword::Self_) => {
+                self.advance();
+                Ok(Expression::Variable("self".to_string()))
+            }
             Token::Pipe | Token::OrOr => self.parse_closure(),
             Token::LeftBracket => self.parse_array(),
             _ => Err(ParseError::InvalidSyntax(format!(

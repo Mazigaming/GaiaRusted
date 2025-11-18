@@ -574,7 +574,17 @@ impl TypeChecker {
             }
 
             HirExpression::FieldAccess { object, field } => {
-                let obj_ty = self.infer_type(object)?;
+                let mut obj_ty = self.infer_type(object)?;
+
+                // Dereference references and mutable references for field access
+                loop {
+                    match &obj_ty {
+                        HirType::Reference(inner) | HirType::MutableReference(inner) => {
+                            obj_ty = (**inner).clone();
+                        }
+                        _ => break,
+                    }
+                }
 
                 match &obj_ty {
                     HirType::Named(struct_name) => {

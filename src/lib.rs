@@ -57,9 +57,14 @@ pub mod codegen;
 
 // Runtime: Execution Support
 pub mod runtime;
+pub mod async_await;
+
+// IDE & Tools Support
+pub mod lsp;
 
 // Compilation Pipeline
 pub mod compiler;
+pub mod compiler_incremental;
 pub mod config;
 pub mod compiler_integration;
 pub mod cargo_api;
@@ -67,6 +72,9 @@ pub mod cargo_api;
 // Standard Library
 pub mod stdlib;
 pub mod iterators;
+
+// Ecosystem (Package Manager, Registry, Workspace)
+pub mod ecosystem;
 
 // Testing Framework
 pub mod testing;

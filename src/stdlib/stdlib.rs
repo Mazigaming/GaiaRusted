@@ -1,8 +1,7 @@
 pub mod prelude {
-    pub use crate::stdlib::collections::vec::Vec;
+    pub use crate::stdlib::collections::Vec;
     pub use crate::stdlib::option::Option;
     pub use crate::stdlib::result::Result;
-    pub use crate::stdlib::string::String;
 }
 
 pub mod collections {

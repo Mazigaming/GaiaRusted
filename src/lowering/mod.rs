@@ -927,8 +927,26 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                     }
                 };
                 
+                // Extract bindings from the pattern and create let bindings in the arm body
+                let mut arm_body = Vec::new();
+                
+                // Add let bindings for pattern variables
+                if let Pattern::EnumVariant { path: _, data: Some(inner_pattern) } = &arm.pattern {
+                    // Extract variable name from inner pattern
+                    if let Pattern::Identifier(var_name) = &**inner_pattern {
+                        // Create a dummy binding for now - ideally we'd extract the actual value
+                        // For now, treat the variable as bound to the scrutinee value
+                        arm_body.push(HirStatement::Let {
+                            name: var_name.clone(),
+                            mutable: false,
+                            ty: HirType::Unknown,
+                            init: scrutinee_hir.clone(),
+                        });
+                    }
+                }
+                
                 let arm_body_expr = lower_expression(&arm.body)?;
-                let arm_body = vec![HirStatement::Expression(arm_body_expr)];
+                arm_body.push(HirStatement::Expression(arm_body_expr));
                 
                 result_expr = Some(HirExpression::If {
                     condition: Box::new(pattern_condition),
@@ -1261,10 +1279,30 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             })
         }
 
-        Expression::GenericCall { .. } => {
-            Err(LowerError {
-                message: "Generic function calls not yet fully supported".to_string(),
-            })
+        Expression::GenericCall { name, type_args: _, args } => {
+            // Handle generic-style calls like `Type::method(args)`
+            // Format: "Type::method" from the parser
+            let args_hir: Result<Vec<_>, _> =
+                args.iter().map(|arg| lower_expression(arg)).collect();
+            let args_final = args_hir?;
+            
+            // For path-based calls like Point::new, we need to handle them specially
+            // Split the name to get the type and method names
+            if name.contains("::") {
+                // This is an associated function call
+                // For now, keep the full qualified name - the codegen will need to handle this
+                // The name format is "Type::method"
+                Ok(HirExpression::Call {
+                    func: Box::new(HirExpression::Variable(name.clone())),
+                    args: args_final,
+                })
+            } else {
+                // Regular generic function call
+                Ok(HirExpression::Call {
+                    func: Box::new(HirExpression::Variable(name.clone())),
+                    args: args_final,
+                })
+            }
         }
 
         Expression::VecMacro { elements: _ } => {
@@ -1504,43 +1542,60 @@ fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
 
 /// Lower an item from AST to HIR
 fn lower_item(item: &Item) -> LowerResult<HirItem> {
-    match item {
-        Item::Function {
-            name,
-            generics: _,
-            params,
-            return_type,
-            body,
-            is_unsafe: _,
-            is_async: _,
-            is_pub: _,
-            attributes: _,
-            where_clause: _,
-            abi: _,
-        } => {
-            let params_hir: Result<Vec<_>, _> = params
-                .iter()
-                .map(|param: &Parameter| {
-                    let ptype_hir = lower_type(&param.ty)?;
-                    Ok((param.name.clone(), ptype_hir))
-                })
-                .collect();
+     match item {
+         Item::Function {
+             name,
+             generics: _,
+             params,
+             return_type,
+             body,
+             is_unsafe: _,
+             is_async: _,
+             is_pub: _,
+             attributes: _,
+             where_clause: _,
+             abi: _,
+         } => {
+             // Skip enum constructor functions (they have empty bodies with no statements/expression)
+             // These will be handled specially during codegen
+             if body.statements.is_empty() && body.expression.is_none() && name.contains("::") {
+                 // Check if this looks like an enum constructor (EnumName::VariantName)
+                 let parts: Vec<&str> = name.split("::").collect();
+                 if parts.len() == 2 {
+                     // This is likely an enum constructor - skip it
+                     // Create a dummy function that won't be called
+                     return Ok(HirItem::Function {
+                         name: format!("_enum_constructor_{}", name.replace("::", "_impl_")),
+                         params: vec![],
+                         return_type: None,
+                         body: vec![],
+                     });
+                 }
+             }
 
-            let ret_type_hir = if let Some(rt) = return_type {
-                Some(lower_type(rt)?)
-            } else {
-                None
-            };
+             let params_hir: Result<Vec<_>, _> = params
+                 .iter()
+                 .map(|param: &Parameter| {
+                     let ptype_hir = lower_type(&param.ty)?;
+                     Ok((param.name.clone(), ptype_hir))
+                 })
+                 .collect();
 
-            let body_hir = lower_block(body)?;
+             let ret_type_hir = if let Some(rt) = return_type {
+                 Some(lower_type(rt)?)
+             } else {
+                 None
+             };
 
-            Ok(HirItem::Function {
-                name: name.clone(),
-                params: params_hir?,
-                return_type: ret_type_hir,
-                body: body_hir,
-            })
-        }
+             let body_hir = lower_block(body)?;
+
+             Ok(HirItem::Function {
+                 name: name.clone(),
+                 params: params_hir?,
+                 return_type: ret_type_hir,
+                 body: body_hir,
+             })
+         }
 
         Item::Struct { name, generics: _, fields, is_pub: _, attributes: _, where_clause: _ } => {
             let fields_hir: Result<Vec<_>, _> = fields
@@ -1607,30 +1662,64 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
             attributes: _,
             where_clause: _,
         } => {
-            // Lower impl block methods properly
+            // Lower impl block methods with qualified names
+            // This allows them to be called as Type::method(args)
             let methods_hir: Result<Vec<_>, _> = methods
                 .iter()
                 .filter_map(|item| {
-                    if matches!(item, Item::Function { .. }) {
-                        Some(lower_item(item))
-                    } else {
-                        None
+                    if let Item::Function { name, params, return_type, body, .. } = item {
+                        let qualified_name = format!("{}::{}", struct_name, name);
+                        
+                        let params_hir: Result<Vec<_>, _> = params
+                            .iter()
+                            .map(|param: &Parameter| {
+                                let ptype_hir = lower_type(&param.ty);
+                                match ptype_hir {
+                                    Ok(t) => Ok((param.name.clone(), t)),
+                                    Err(e) => Err(e),
+                                }
+                            })
+                            .collect();
+
+                        let ret_type_hir = if let Some(rt) = return_type {
+                            Some(lower_type(rt).ok())
+                        } else {
+                            None
+                        };
+
+                        let body_hir = lower_block(body);
+
+                        return Some(match (params_hir, ret_type_hir, body_hir) {
+                            (Ok(p), Some(Some(r)), Ok(b)) => {
+                                Ok(HirItem::Function {
+                                    name: qualified_name,
+                                    params: p,
+                                    return_type: Some(r),
+                                    body: b,
+                                })
+                            }
+                            (Ok(p), None, Ok(b)) => {
+                                Ok(HirItem::Function {
+                                    name: qualified_name,
+                                    params: p,
+                                    return_type: None,
+                                    body: b,
+                                })
+                            }
+                            _ => Err(LowerError {
+                                message: format!("Failed to lower impl method {}", name),
+                            }),
+                        });
                     }
+                    None
                 })
                 .collect();
             
+            // Return a marker struct that impl was processed
+            // The actual method functions will be collected by the compiler
             Ok(HirItem::Struct {
                 name: format!("impl_{}", struct_name),
-                fields: methods_hir?
-                    .iter()
-                    .map(|m| {
-                        if let HirItem::Function { name, .. } = m {
-                            (name.clone(), HirType::Named(format!("impl_method")))
-                        } else {
-                            ("unknown".to_string(), HirType::Unknown)
-                        }
-                    })
-                    .collect(),
+                fields: vec![],
             })
         }
 
@@ -1705,6 +1794,51 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
     clear_enum_registry();
     
+    // Helper function to replace Self with actual struct name in types
+    fn replace_self_in_type(ty: &Type, struct_name: &str) -> Type {
+        match ty {
+            Type::Named(n) if n == "Self" => Type::Named(struct_name.to_string()),
+            Type::Reference { lifetime, mutable, inner } => {
+                Type::Reference {
+                    lifetime: lifetime.clone(),
+                    mutable: *mutable,
+                    inner: Box::new(replace_self_in_type(inner, struct_name)),
+                }
+            }
+            Type::Pointer { mutable, inner } => {
+                Type::Pointer {
+                    mutable: *mutable,
+                    inner: Box::new(replace_self_in_type(inner, struct_name)),
+                }
+            }
+            Type::Array { element, size } => {
+                Type::Array {
+                    element: Box::new(replace_self_in_type(element, struct_name)),
+                    size: size.clone(),
+                }
+            }
+            Type::Generic { name, type_args } => {
+                Type::Generic {
+                    name: name.clone(),
+                    type_args: type_args.iter().map(|p| replace_self_in_type(p, struct_name)).collect(),
+                }
+            }
+            other => other.clone(),
+        }
+    }
+    
+    // Helper function to replace Self in parameters
+    fn replace_self_in_param(param: &Parameter, struct_name: &str) -> Parameter {
+        Parameter {
+            name: param.name.clone(),
+            ty: replace_self_in_type(&param.ty, struct_name),
+            mutable: param.mutable,
+        }
+    }
+    
+    // First pass: register enums and collect impl methods
+    let mut all_items = ast.to_vec();
+    
     for item in ast {
         if let Item::Enum { name, variants, .. } = item {
             let variant_names: Vec<String> = variants
@@ -1719,7 +1853,124 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
         }
     }
     
-    ast.iter().map(lower_item).collect()
+    // Extract impl block methods and add them as regular functions with qualified names
+    let mut expanded_items = Vec::new();
+    for item in &all_items {
+        if let Item::Impl { struct_name, methods, .. } = item {
+            for method in methods {
+                if let Item::Function {
+                    name,
+                    generics,
+                    params,
+                    return_type,
+                    body,
+                    is_unsafe,
+                    is_async,
+                    is_pub,
+                    attributes,
+                    where_clause,
+                    abi,
+                } = method
+                {
+                    let qualified_name = format!("{}::{}", struct_name, name);
+                    // Replace Self in return type and parameters
+                    let new_return_type = return_type.as_ref().map(|rt| replace_self_in_type(rt, struct_name));
+                    let new_params: Vec<Parameter> = params.iter().map(|p| replace_self_in_param(p, struct_name)).collect();
+                    
+                    expanded_items.push(Item::Function {
+                        name: qualified_name,
+                        generics: generics.clone(),
+                        params: new_params,
+                        return_type: new_return_type,
+                        body: body.clone(),
+                        is_unsafe: *is_unsafe,
+                        is_async: *is_async,
+                        is_pub: *is_pub,
+                        attributes: attributes.clone(),
+                        where_clause: where_clause.clone(),
+                        abi: abi.clone(),
+                    });
+                }
+            }
+        }
+    }
+    
+    // Generate constructors for enum variants
+    for item in &all_items {
+        if let Item::Enum { name: enum_name, variants, generics, .. } = item {
+            for variant in variants {
+                match variant {
+                    EnumVariant::Unit(variant_name) => {
+                        // Unit variants don't need constructors, they're constants
+                    }
+                    EnumVariant::Tuple(variant_name, types) => {
+                        // Create a function: Variant(T1, T2, ...) -> EnumName
+                        let params: Vec<Parameter> = types
+                            .iter()
+                            .enumerate()
+                            .map(|(i, ty)| Parameter {
+                                name: format!("arg{}", i),
+                                ty: ty.clone(),
+                                mutable: false,
+                            })
+                            .collect();
+                        
+                        let return_type = Type::Named(enum_name.clone());
+                        
+                        expanded_items.push(Item::Function {
+                            name: format!("{}::{}", enum_name, variant_name),
+                            generics: generics.clone(),
+                            params,
+                            return_type: Some(return_type),
+                            body: Block { statements: vec![], expression: None }, // Empty body - lowering will handle
+                            is_unsafe: false,
+                            is_async: false,
+                            is_pub: true,
+                            attributes: vec![],
+                            where_clause: vec![],
+                            abi: None,
+                        });
+                    }
+                    EnumVariant::Struct(variant_name, fields) => {
+                        // Create a function with named parameters
+                        let params: Vec<Parameter> = fields
+                            .iter()
+                            .map(|field| Parameter {
+                                name: field.name.clone(),
+                                ty: field.ty.clone(),
+                                mutable: false,
+                            })
+                            .collect();
+                        
+                        let return_type = Type::Named(enum_name.clone());
+                        
+                        expanded_items.push(Item::Function {
+                            name: format!("{}::{}", enum_name, variant_name),
+                            generics: generics.clone(),
+                            params,
+                            return_type: Some(return_type),
+                            body: Block { statements: vec![], expression: None }, // Empty body - lowering will handle
+                            is_unsafe: false,
+                            is_async: false,
+                            is_pub: true,
+                            attributes: vec![],
+                            where_clause: vec![],
+                            abi: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    
+    // Add regular items (non-impl)
+    for item in &all_items {
+        if !matches!(item, Item::Impl { .. }) {
+            expanded_items.push(item.clone());
+        }
+    }
+    
+    expanded_items.iter().map(lower_item).collect()
 }
 
 #[cfg(test)]

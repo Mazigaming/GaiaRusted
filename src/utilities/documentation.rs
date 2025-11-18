@@ -1,311 +1,206 @@
+//! Documentation Generation (Rustdoc-like)
+//!
+//! Generate HTML documentation from source code comments and attributes
+
 use std::collections::HashMap;
 
+/// Documentation comment
 #[derive(Debug, Clone)]
 pub struct DocComment {
-    pub summary: String,
-    pub description: Option<String>,
+    pub content: String,
     pub examples: Vec<String>,
-    pub params: HashMap<String, String>,
-    pub returns: Option<String>,
-    pub panics: Option<String>,
-    pub safety: Option<String>,
+    pub see_also: Vec<String>,
+    pub deprecated: bool,
 }
 
+/// Item documentation
 #[derive(Debug, Clone)]
-pub struct DocumentationItem {
+pub struct ItemDoc {
     pub name: String,
     pub item_type: ItemType,
     pub doc: DocComment,
     pub visibility: Visibility,
+    pub parent: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ItemType {
+    Module,
     Function,
     Struct,
     Enum,
     Trait,
-    Module,
-    Constant,
+    Type,
+    Method,
+    Field,
+    Variant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Visibility {
     Public,
+    PublicCrate,
+    PublicSuper,
     Private,
 }
 
+/// Documentation generator
 pub struct DocumentationGenerator {
-    items: Vec<DocumentationItem>,
+    items: HashMap<String, ItemDoc>,
+    output_dir: String,
 }
 
 impl DocumentationGenerator {
-    pub fn new() -> Self {
+    /// Create new documentation generator
+    pub fn new(output_dir: &str) -> Self {
         DocumentationGenerator {
-            items: Vec::new(),
+            items: HashMap::new(),
+            output_dir: output_dir.to_string(),
         }
     }
 
-    pub fn register_item(&mut self, item: DocumentationItem) {
-        self.items.push(item);
+    /// Register item for documentation
+    pub fn register_item(&mut self, item: ItemDoc) {
+        self.items.insert(item.name.clone(), item);
     }
 
-    pub fn parse_doc_comment(comment: &str) -> DocComment {
-        let lines: Vec<&str> = comment.lines().collect();
-        let mut summary = String::new();
-        let mut description = String::new();
-        let mut examples = Vec::new();
-        let mut params = HashMap::new();
-        let mut returns = None;
-        let mut panics = None;
-        let mut safety = None;
+    /// Generate HTML documentation
+    pub fn generate_html(&self) -> String {
+        let mut html = String::new();
 
-        let mut current_section = Section::Summary;
-        let mut example_buffer = String::new();
+        html.push_str("<!DOCTYPE html>\n");
+        html.push_str("<html>\n");
+        html.push_str("<head>\n");
+        html.push_str("  <meta charset=\"UTF-8\">\n");
+        html.push_str("  <title>Documentation</title>\n");
+        html.push_str("  <style>\n");
+        html.push_str("    body { font-family: Arial, sans-serif; margin: 20px; }\n");
+        html.push_str("    h1 { color: #333; }\n");
+        html.push_str("    .item { margin-bottom: 20px; padding: 10px; border-left: 3px solid #0066cc; }\n");
+        html.push_str("    .doc { color: #666; white-space: pre-wrap; }\n");
+        html.push_str("    .example { background: #f5f5f5; padding: 10px; margin: 10px 0; }\n");
+        html.push_str("  </style>\n");
+        html.push_str("</head>\n");
+        html.push_str("<body>\n");
+        html.push_str("  <h1>GaiaRusted Documentation</h1>\n");
 
-        for line in lines {
-            let trimmed = line.trim_start_matches("///").trim();
-
-            match trimmed {
-                line if line.starts_with("# Examples") => {
-                    current_section = Section::Examples;
-                    if !example_buffer.is_empty() {
-                        examples.push(example_buffer.clone());
-                        example_buffer.clear();
-                    }
-                }
-                line if line.starts_with("# Arguments") || line.starts_with("# Parameters") => {
-                    current_section = Section::Parameters;
-                }
-                line if line.starts_with("# Returns") => {
-                    current_section = Section::Returns;
-                }
-                line if line.starts_with("# Panics") => {
-                    current_section = Section::Panics;
-                }
-                line if line.starts_with("# Safety") => {
-                    current_section = Section::Safety;
-                }
-                line if line.is_empty() && current_section == Section::Summary => {
-                    if !summary.is_empty() {
-                        current_section = Section::Description;
-                    }
-                }
-                _ => {
-                    match current_section {
-                        Section::Summary => {
-                            if !summary.is_empty() {
-                                summary.push(' ');
-                            }
-                            summary.push_str(trimmed);
-                        }
-                        Section::Description => {
-                            if !description.is_empty() {
-                                description.push('\n');
-                            }
-                            description.push_str(trimmed);
-                        }
-                        Section::Examples => {
-                            example_buffer.push_str(trimmed);
-                            example_buffer.push('\n');
-                        }
-                        Section::Parameters => {
-                            if let Some((param_name, param_desc)) = Self::parse_param_line(trimmed)
-                            {
-                                params.insert(param_name, param_desc);
-                            }
-                        }
-                        Section::Returns => {
-                            if returns.is_none() {
-                                returns = Some(trimmed.to_string());
-                            }
-                        }
-                        Section::Panics => {
-                            if panics.is_none() {
-                                panics = Some(trimmed.to_string());
-                            }
-                        }
-                        Section::Safety => {
-                            if safety.is_none() {
-                                safety = Some(trimmed.to_string());
-                            }
-                        }
-                    }
-                }
-            }
+        for (_, item) in &self.items {
+            html.push_str(&self.generate_item_html(item));
         }
 
-        if !example_buffer.is_empty() {
-            examples.push(example_buffer);
-        }
+        html.push_str("</body>\n");
+        html.push_str("</html>\n");
 
-        DocComment {
-            summary: summary.trim().to_string(),
-            description: if description.is_empty() {
-                None
-            } else {
-                Some(description)
-            },
-            examples,
-            params,
-            returns,
-            panics,
-            safety,
-        }
+        html
     }
 
-    fn parse_param_line(line: &str) -> Option<(String, String)> {
-        if let Some(dash_pos) = line.find('-') {
-            let before_dash = line[..dash_pos].trim();
-            let after_dash = line[dash_pos + 1..].trim();
+    /// Generate HTML for single item
+    fn generate_item_html(&self, item: &ItemDoc) -> String {
+        let mut html = String::new();
 
-            let param_name = before_dash
-                .split_whitespace()
-                .next()?
-                .to_string();
-            let param_desc = after_dash.to_string();
+        html.push_str("<div class=\"item\">\n");
+        html.push_str(&format!("  <h2>{}</h2>\n", item.name));
+        html.push_str(&format!("  <p><strong>Type:</strong> {:?}</p>\n", item.item_type));
+        html.push_str(&format!("  <p><strong>Visibility:</strong> {:?}</p>\n", item.visibility));
 
-            Some((param_name, param_desc))
-        } else {
-            None
-        }
-    }
-
-    pub fn generate_markdown(&self) -> String {
-        let mut output = String::from("# API Documentation\n\n");
-
-        let mut functions = Vec::new();
-        let mut structs = Vec::new();
-        let mut enums = Vec::new();
-        let mut traits = Vec::new();
-        let mut modules = Vec::new();
-
-        for item in &self.items {
-            match item.item_type {
-                ItemType::Function => functions.push(item),
-                ItemType::Struct => structs.push(item),
-                ItemType::Enum => enums.push(item),
-                ItemType::Trait => traits.push(item),
-                ItemType::Module => modules.push(item),
-                _ => {}
-            }
+        if item.doc.deprecated {
+            html.push_str("  <p style=\"color: red;\"><strong>⚠️ DEPRECATED</strong></p>\n");
         }
 
-        if !modules.is_empty() {
-            output.push_str("## Modules\n\n");
-            for item in modules {
-                Self::append_item_docs(&mut output, item);
-            }
-        }
-
-        if !structs.is_empty() {
-            output.push_str("## Structs\n\n");
-            for item in structs {
-                Self::append_item_docs(&mut output, item);
-            }
-        }
-
-        if !enums.is_empty() {
-            output.push_str("## Enums\n\n");
-            for item in enums {
-                Self::append_item_docs(&mut output, item);
-            }
-        }
-
-        if !traits.is_empty() {
-            output.push_str("## Traits\n\n");
-            for item in traits {
-                Self::append_item_docs(&mut output, item);
-            }
-        }
-
-        if !functions.is_empty() {
-            output.push_str("## Functions\n\n");
-            for item in functions {
-                Self::append_item_docs(&mut output, item);
-            }
-        }
-
-        output
-    }
-
-    fn append_item_docs(output: &mut String, item: &DocumentationItem) {
-        output.push_str(&format!("### {}\n\n", item.name));
-        output.push_str(&format!("**Type:** {}\n\n", Self::item_type_str(item.item_type)));
-
-        if item.visibility == Visibility::Private {
-            output.push_str("**Visibility:** Private\n\n");
-        }
-
-        output.push_str(&format!("{}\n\n", item.doc.summary));
-
-        if let Some(desc) = &item.doc.description {
-            output.push_str(desc);
-            output.push_str("\n\n");
-        }
-
-        if !item.doc.params.is_empty() {
-            output.push_str("**Parameters:**\n\n");
-            for (param_name, param_desc) in &item.doc.params {
-                output.push_str(&format!("- `{}`: {}\n", param_name, param_desc));
-            }
-            output.push('\n');
-        }
-
-        if let Some(returns) = &item.doc.returns {
-            output.push_str(&format!("**Returns:** {}\n\n", returns));
-        }
-
-        if let Some(safety) = &item.doc.safety {
-            output.push_str("**Safety:**\n\n");
-            output.push_str(safety);
-            output.push_str("\n\n");
-        }
-
-        if let Some(panics) = &item.doc.panics {
-            output.push_str("**Panics:**\n\n");
-            output.push_str(panics);
-            output.push_str("\n\n");
-        }
+        html.push_str("  <div class=\"doc\">\n");
+        html.push_str(&format!("    {}\n", html_escape(&item.doc.content)));
+        html.push_str("  </div>\n");
 
         if !item.doc.examples.is_empty() {
-            output.push_str("**Examples:**\n\n```rust\n");
+            html.push_str("  <h3>Examples:</h3>\n");
             for example in &item.doc.examples {
-                output.push_str(example);
+                html.push_str("  <div class=\"example\">\n");
+                html.push_str(&format!("    <pre>{}</pre>\n", html_escape(example)));
+                html.push_str("  </div>\n");
             }
-            output.push_str("```\n\n");
         }
-    }
 
-    fn item_type_str(item_type: ItemType) -> &'static str {
-        match item_type {
-            ItemType::Function => "Function",
-            ItemType::Struct => "Struct",
-            ItemType::Enum => "Enum",
-            ItemType::Trait => "Trait",
-            ItemType::Module => "Module",
-            ItemType::Constant => "Constant",
+        if !item.doc.see_also.is_empty() {
+            html.push_str("  <h3>See also:</h3>\n");
+            html.push_str("  <ul>\n");
+            for see_also in &item.doc.see_also {
+                html.push_str(&format!("    <li>{}</li>\n", html_escape(see_also)));
+            }
+            html.push_str("  </ul>\n");
         }
+
+        html.push_str("</div>\n");
+
+        html
     }
 
-    pub fn get_items(&self) -> &[DocumentationItem] {
-        &self.items
+    /// Generate Markdown documentation
+    pub fn generate_markdown(&self) -> String {
+        let mut md = String::new();
+
+        md.push_str("# GaiaRusted Documentation\n\n");
+
+        for (_, item) in &self.items {
+            md.push_str(&self.generate_item_markdown(item));
+        }
+
+        md
     }
 
-    pub fn find_item(&self, name: &str) -> Option<&DocumentationItem> {
-        self.items.iter().find(|item| item.name == name)
+    /// Generate Markdown for single item
+    fn generate_item_markdown(&self, item: &ItemDoc) -> String {
+        let mut md = String::new();
+
+        md.push_str(&format!("## {} ({})\n\n", item.name, format!("{:?}", item.item_type)));
+
+        md.push_str(&format!("**Visibility:** {:?}\n\n", item.visibility));
+
+        if item.doc.deprecated {
+            md.push_str("⚠️ **DEPRECATED**\n\n");
+        }
+
+        md.push_str(&format!("{}\n\n", item.doc.content));
+
+        if !item.doc.examples.is_empty() {
+            md.push_str("### Examples\n\n");
+            for example in &item.doc.examples {
+                md.push_str("```rust\n");
+                md.push_str(&format!("{}\n", example));
+                md.push_str("```\n\n");
+            }
+        }
+
+        if !item.doc.see_also.is_empty() {
+            md.push_str("### See Also\n\n");
+            for see_also in &item.doc.see_also {
+                md.push_str(&format!("- {}\n", see_also));
+            }
+            md.push_str("\n");
+        }
+
+        md
+    }
+
+    /// Extract documentation from source
+    pub fn extract_from_source(&mut self, source: &str) {
+        // Parse doc comments and attributes
+        let lines: Vec<&str> = source.lines().collect();
+        for (_i, line) in lines.iter().enumerate() {
+            if line.trim().starts_with("///") {
+                let _content = line.trim_start_matches("///").trim().to_string();
+                // Would parse documentation here
+            }
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Section {
-    Summary,
-    Description,
-    Parameters,
-    Returns,
-    Examples,
-    Panics,
-    Safety,
+/// HTML escape helper
+fn html_escape(text: &str) -> String {
+    text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
 }
 
 #[cfg(test)]
@@ -313,48 +208,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_simple_doc_comment() {
-        let comment = "/// This is a function\n/// that does something";
-        let doc = DocumentationGenerator::parse_doc_comment(comment);
-        assert_eq!(doc.summary, "This is a function that does something");
+    fn test_doc_generator_creation() {
+        let gen = DocumentationGenerator::new("./docs");
+        assert_eq!(gen.items.len(), 0);
     }
 
     #[test]
-    fn test_parse_doc_with_examples() {
-        let comment = "/// Add two numbers\n/// # Examples\n/// let result = add(1, 2);";
-        let doc = DocumentationGenerator::parse_doc_comment(comment);
-        assert_eq!(doc.summary, "Add two numbers");
-        assert!(!doc.examples.is_empty());
+    fn test_register_item() {
+        let mut gen = DocumentationGenerator::new("./docs");
+        let item = ItemDoc {
+            name: "main".to_string(),
+            item_type: ItemType::Function,
+            doc: DocComment {
+                content: "Entry point".to_string(),
+                examples: vec![],
+                see_also: vec![],
+                deprecated: false,
+            },
+            visibility: Visibility::Public,
+            parent: None,
+        };
+        gen.register_item(item);
+        assert_eq!(gen.items.len(), 1);
     }
 
     #[test]
-    fn test_parse_doc_with_params() {
-        let comment = "/// Multiply numbers\n/// # Parameters\n/// x - first number\n/// y - second number";
-        let doc = DocumentationGenerator::parse_doc_comment(comment);
-        assert!(!doc.params.is_empty());
-        assert!(doc.params.len() >= 1);
-    }
-
-    #[test]
-    fn test_generate_markdown() {
-        let mut gen = DocumentationGenerator::new();
-        gen.register_item(DocumentationItem {
+    fn test_html_generation() {
+        let mut gen = DocumentationGenerator::new("./docs");
+        let item = ItemDoc {
             name: "test_fn".to_string(),
             item_type: ItemType::Function,
             doc: DocComment {
-                summary: "A test function".to_string(),
-                description: None,
-                examples: vec![],
-                params: HashMap::new(),
-                returns: Some("i32".to_string()),
-                panics: None,
-                safety: None,
+                content: "Test function".to_string(),
+                examples: vec!["fn test() {}".to_string()],
+                see_also: vec!["other_fn".to_string()],
+                deprecated: false,
             },
             visibility: Visibility::Public,
-        });
+            parent: None,
+        };
+        gen.register_item(item);
 
-        let markdown = gen.generate_markdown();
-        assert!(markdown.contains("test_fn"));
-        assert!(markdown.contains("A test function"));
+        let html = gen.generate_html();
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("test_fn"));
+    }
+
+    #[test]
+    fn test_markdown_generation() {
+        let mut gen = DocumentationGenerator::new("./docs");
+        let item = ItemDoc {
+            name: "my_struct".to_string(),
+            item_type: ItemType::Struct,
+            doc: DocComment {
+                content: "A sample struct".to_string(),
+                examples: vec!["let s = MyStruct {}".to_string()],
+                see_also: vec![],
+                deprecated: false,
+            },
+            visibility: Visibility::Public,
+            parent: None,
+        };
+        gen.register_item(item);
+
+        let md = gen.generate_markdown();
+        assert!(md.contains("my_struct"));
+        assert!(md.contains("```rust"));
+    }
+
+    #[test]
+    fn test_html_escape() {
+        assert_eq!(html_escape("<test>"), "&lt;test&gt;");
+        assert_eq!(html_escape("&"), "&amp;");
     }
 }

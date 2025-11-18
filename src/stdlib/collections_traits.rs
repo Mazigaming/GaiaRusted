@@ -84,7 +84,7 @@ impl<K, V> std::iter::ExactSizeIterator for HashMapIterator<K, V> {
 
 pub mod vec_traits {
     use super::*;
-    use crate::stdlib::collections::vec::Vec;
+    use crate::stdlib::collections::Vec;
 
     impl<T: Clone + 'static> GaiaIntoIterator for Vec<T> {
         type Item = T;
@@ -112,7 +112,7 @@ pub mod vec_traits {
 
 pub mod hashmap_traits {
     use super::*;
-    use crate::stdlib::collections::hashmap::HashMap;
+    use crate::stdlib::collections::HashMap;
 
     impl<K, V> GaiaIntoIterator for HashMap<K, V>
     where

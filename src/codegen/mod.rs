@@ -23,6 +23,7 @@ pub mod object;
 pub mod monomorphization;
 pub mod backend;
 pub mod optimization;
+pub mod simd;
 
 use crate::mir::{Mir, MirFunction, Statement, Terminator};
 use crate::runtime;
@@ -396,9 +397,13 @@ impl Codegen {
         self.var_locations.clear();
         self.stack_offset = -8;
         
-        // Rename main to gaia_main for runtime wrapper
+        // Mangle function names for assembly compatibility
+        // Replace :: with _impl_ for qualified names like Point::new
         let func_name = if func.name == "main" {
             "gaia_main".to_string()
+        } else if func.name.contains("::") {
+            // Mangle qualified names: Point::new -> Point_impl_new
+            func.name.replace("::", "_impl_")
         } else {
             func.name.clone()
         };
@@ -840,66 +845,100 @@ impl Codegen {
                 }
             }
             crate::mir::Rvalue::Call(func_name, args) => {
-                let mut stack_adjust = 0;
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_val = self.operand_to_x86(arg)?;
-                    match i {
-                        0 => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::RDI),
-                                src: arg_val,
-                            });
-                        }
-                        1 => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::RSI),
-                                src: arg_val,
-                            });
-                        }
-                        2 => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::RDX),
-                                src: arg_val,
-                            });
-                        }
-                        3 => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::RCX),
-                                src: arg_val,
-                            });
-                        }
-                        4 => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::R8),
-                                src: arg_val,
-                            });
-                        }
-                        5 => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::R9),
-                                src: arg_val,
-                            });
-                        }
-                        _ => {
-                            self.instructions.push(X86Instruction::Mov {
-                                dst: X86Operand::Register(Register::RAX),
-                                src: arg_val,
-                            });
-                            self.instructions.push(X86Instruction::Push {
-                                reg: Register::RAX,
-                            });
-                            stack_adjust += 8;
+                // Check if this is an enum constructor (like Ok, Some, Err, None)
+                // Enum constructors start with a capital letter and may have a :: for path
+                let is_enum_constructor = {
+                    let parts: Vec<&str> = func_name.split("::").collect();
+                    let last_part = parts.last().map(|s| *s).unwrap_or(func_name.as_str());
+                    last_part.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) &&
+                    !last_part.starts_with("_enum_constructor")
+                };
+                
+                if is_enum_constructor && !args.is_empty() {
+                    // For enum constructors with arguments, just move the first argument to RAX
+                    // This is a simplified implementation - proper enums would wrap the value
+                    let arg_val = self.operand_to_x86(&args[0])?;
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: arg_val,
+                    });
+                } else if is_enum_constructor && args.is_empty() {
+                    // Unit enum variants - return 0 (or a special tag)
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(0),
+                    });
+                } else {
+                    // Regular function call
+                    // Mangle function names for assembly compatibility
+                    let mangled_func_name = if func_name.contains("::") {
+                        // Mangle qualified names: Point::new -> Point_impl_new
+                        func_name.replace("::", "_impl_")
+                    } else {
+                        func_name.clone()
+                    };
+                    
+                    let mut stack_adjust = 0;
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_val = self.operand_to_x86(arg)?;
+                        match i {
+                            0 => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RDI),
+                                    src: arg_val,
+                                });
+                            }
+                            1 => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RSI),
+                                    src: arg_val,
+                                });
+                            }
+                            2 => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RDX),
+                                    src: arg_val,
+                                });
+                            }
+                            3 => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RCX),
+                                    src: arg_val,
+                                });
+                            }
+                            4 => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::R8),
+                                    src: arg_val,
+                                });
+                            }
+                            5 => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::R9),
+                                    src: arg_val,
+                                });
+                            }
+                            _ => {
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RAX),
+                                    src: arg_val,
+                                });
+                                self.instructions.push(X86Instruction::Push {
+                                    reg: Register::RAX,
+                                });
+                                stack_adjust += 8;
+                            }
                         }
                     }
-                }
-                self.instructions.push(X86Instruction::Call {
-                    func: func_name.clone(),
-                });
-                if stack_adjust > 0 {
-                    self.instructions.push(X86Instruction::Add {
-                        dst: X86Operand::Register(Register::RSP),
-                        src: X86Operand::Immediate(stack_adjust),
+                    self.instructions.push(X86Instruction::Call {
+                        func: mangled_func_name,
                     });
+                    if stack_adjust > 0 {
+                        self.instructions.push(X86Instruction::Add {
+                            dst: X86Operand::Register(Register::RSP),
+                            src: X86Operand::Immediate(stack_adjust),
+                        });
+                    }
                 }
             }
             _ => {

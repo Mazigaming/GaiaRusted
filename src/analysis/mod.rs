@@ -8,7 +8,7 @@
 
 pub mod pattern_matching;
 pub mod advanced_patterns;
-pub mod advanced_traits;
+pub mod traits;  // Consolidated: sealed traits, advanced traits, trait definitions
 pub mod advanced_assoc_types;
 pub mod const_generics;
 pub mod generic_constraints;
@@ -21,7 +21,8 @@ pub mod lifetime_lexing;
 pub mod lifetime_parsing;
 pub mod lifetime_resolution;
 pub mod pattern_exhaustiveness;
-pub mod sealed_traits;
+pub mod error_propagation;
+pub mod associated_types;  // Associated types and where clauses
 
 pub use pattern_matching::{
     EnhancedPatternMatcher, PatternAnalyzer, PatternCompiler, ReachabilityChecker,
