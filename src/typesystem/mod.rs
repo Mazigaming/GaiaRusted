@@ -33,6 +33,9 @@ pub mod expression_typing;
 pub mod constraint_solver;
 pub mod ast_bridge;
 pub mod integrated_checker;
+pub mod advanced_types;
+pub mod trait_resolution;
+pub mod trait_defaults;
 
 // Re-export main types for convenient access
 pub use types::{
@@ -59,6 +62,16 @@ pub use ast_bridge::{
     BridgeError, TypeRegistry, StructTypeInfo, FunctionTypeInfo, ConversionContext,
 };
 pub use integrated_checker::{IntegratedTypeChecker, DetailedTypeError, TypeCheckReport};
+pub use advanced_types::{
+    HigherRankedType, AssociatedType, TypeBound, TypePredicate, TraitDefinition,
+    TraitMethod, TypeConstraintSet, TypeConstraintChecker,
+};
+pub use trait_resolution::{
+    TraitImpl, TraitResolver, TraitObject,
+};
+pub use trait_defaults::{
+    DefaultMethod, TraitWithDefaults, ImplWithDefaults, TraitDefaultResolver,
+};
 
 /// Type checking result
 pub type TypeCheckResult<T> = Result<T, String>;

@@ -5,8 +5,18 @@
 //! - Await expression handling
 //! - Future trait implementation
 //! - Task scheduling and execution
+//! - Advanced futures with combinators
 
-use crate::parser::ast::{Expression, Block};
+pub mod advanced_async;
+
+pub use advanced_async::{
+    Poll, SimpleWaker, PollContext, BoxedFuture, SimpleFuture, MapFuture, ThenFuture,
+    JoinFuture, RaceFuture, AsyncExecutor,
+};
+pub use advanced_async::Task as AdvancedTask;
+pub use advanced_async::TaskState as AdvancedTaskState;
+
+use crate::parser::ast::Expression;
 use crate::typesystem::types::Type;
 use std::collections::HashMap;
 

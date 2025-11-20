@@ -16,7 +16,25 @@ use crate::mir;
 use crate::codegen;
 use crate::codegen::backend::assembler::Assembler;
 
-/// Compilation error with detailed context
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    CodeIssue,
+    CompilerLimitation,
+    CompilerBug,
+    InternalError,
+}
+
+impl std::fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ErrorKind::CodeIssue => write!(f, "code issue"),
+            ErrorKind::CompilerLimitation => write!(f, "compiler limitation"),
+            ErrorKind::CompilerBug => write!(f, "compiler bug"),
+            ErrorKind::InternalError => write!(f, "internal error"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CompileError {
     pub phase: String,
@@ -26,6 +44,43 @@ pub struct CompileError {
     pub column: Option<usize>,
     pub suggestion: Option<String>,
     pub help: Option<String>,
+    pub kind: ErrorKind,
+}
+
+impl CompileError {
+    pub fn new(phase: &str, message: &str, kind: ErrorKind) -> Self {
+        CompileError {
+            phase: phase.to_string(),
+            message: message.to_string(),
+            file: None,
+            line: None,
+            column: None,
+            suggestion: None,
+            help: None,
+            kind,
+        }
+    }
+
+    pub fn with_file(mut self, file: PathBuf) -> Self {
+        self.file = Some(file);
+        self
+    }
+
+    pub fn with_location(mut self, line: usize, column: usize) -> Self {
+        self.line = Some(line);
+        self.column = Some(column);
+        self
+    }
+
+    pub fn with_suggestion(mut self, suggestion: &str) -> Self {
+        self.suggestion = Some(suggestion.to_string());
+        self
+    }
+
+    pub fn with_help(mut self, help: &str) -> Self {
+        self.help = Some(help.to_string());
+        self
+    }
 }
 
 impl std::fmt::Display for CompileError {
@@ -33,7 +88,7 @@ impl std::fmt::Display for CompileError {
         write!(f, "{}: {} ({})", self.phase, self.message, 
             self.file.as_ref()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "unknown".to_string()))
+                .unwrap_or_else(|| "unknown location".to_string()))
     }
 }
 
@@ -89,15 +144,7 @@ impl CompilationStats {
 pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, CompileError> {
     let total_start = Instant::now();
     
-    config.validate().map_err(|e| CompileError {
-        phase: "Configuration".to_string(),
-        message: e,
-        file: None,
-        line: None,
-        column: None,
-        suggestion: None,
-        help: None,
-    })?;
+    config.validate().map_err(|e| CompileError::new("Configuration", &e, ErrorKind::InternalError))?;
 
     let mut stats = CompilationStats::new();
     let mut errors = Vec::new();
@@ -139,30 +186,17 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     }
 
     let tc_start = Instant::now();
-    if let Err(e) = typechecker::check_types(&all_hir_items) {
-        errors.push(CompileError {
-            phase: "Type Checking".to_string(),
-            message: e.to_string(),
-            file: None,
-            line: None,
-            column: None,
-            suggestion: None,
-            help: None,
-        });
+    if let Err(mut e) = typechecker::check_types(&all_hir_items) {
+        if e.file.is_none() && !config.source_files.is_empty() {
+            e.file = Some(config.source_files[0].clone());
+        }
+        errors.push(e);
     }
     stats.typechecking_time_ms = tc_start.elapsed().as_millis();
 
     let bc_start = Instant::now();
     if let Err(e) = borrowchecker::check_borrows(&all_hir_items) {
-        errors.push(CompileError {
-            phase: "Borrow Checking".to_string(),
-            message: e.to_string(),
-            file: None,
-            line: None,
-            column: None,
-            suggestion: None,
-            help: None,
-        });
+        errors.push(CompileError::new("Borrow Checking", &e.to_string(), ErrorKind::CodeIssue));
     }
     stats.borrowchecking_time_ms = bc_start.elapsed().as_millis();
 
@@ -185,15 +219,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             let mir_opt_start = Instant::now();
             let mut optimized_mir = mir_items.clone();
             if let Err(e) = mir::optimize_mir(&mut optimized_mir, config.opt_level) {
-                errors.push(CompileError {
-                    phase: "MIR Optimization".to_string(),
-                    message: e.to_string(),
-                    file: None,
-                    line: None,
-                    column: None,
-                    suggestion: None,
-                    help: None,
-                });
+                errors.push(CompileError::new("MIR Optimization", &e.to_string(), ErrorKind::InternalError));
             }
             stats.mir_optimization_time_ms = mir_opt_start.elapsed().as_millis();
 
@@ -212,44 +238,20 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                             }
                             Err(e) => {
                                 stats.output_time_ms = output_start.elapsed().as_millis();
-                                errors.push(CompileError {
-                                    phase: "Output Generation".to_string(),
-                                    message: e,
-                                    file: None,
-                                    line: None,
-                                    column: None,
-                                    suggestion: None,
-                                    help: None,
-                                });
+                                errors.push(CompileError::new("Output Generation", &e, ErrorKind::InternalError));
                             }
                         }
                     }
                     Err(e) => {
                         stats.codegen_time_ms = codegen_start.elapsed().as_millis();
-                        errors.push(CompileError {
-                            phase: "Code Generation".to_string(),
-                            message: e.to_string(),
-                            file: None,
-                            line: None,
-                            column: None,
-                            suggestion: None,
-                            help: None,
-                        });
+                        errors.push(CompileError::new("Code Generation", &e.to_string(), ErrorKind::InternalError));
                     }
                 }
             }
         }
         Err(e) => {
             stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
-            errors.push(CompileError {
-                phase: "MIR Lowering".to_string(),
-                message: e.to_string(),
-                file: None,
-                line: None,
-                column: None,
-                suggestion: None,
-                help: None,
-            });
+            errors.push(CompileError::new("MIR Lowering", &e.to_string(), ErrorKind::InternalError));
         }
     }
 
@@ -270,51 +272,31 @@ fn compile_single_file(
     _config: &CompilationConfig,
     stats: &mut CompilationStats,
 ) -> Result<(Vec<lowering::HirItem>, usize), CompileError> {
-    let source = fs::read_to_string(source_file).map_err(|e| CompileError {
-        phase: "File Reading".to_string(),
-        message: format!("Failed to read file: {}", e),
-        file: Some(source_file.to_path_buf()),
-        line: None,
-        column: None,
-        suggestion: None,
-        help: None,
+    let source = fs::read_to_string(source_file).map_err(|e| {
+        CompileError::new("File Reading", &format!("Failed to read file: {}", e), ErrorKind::InternalError)
+            .with_file(source_file.to_path_buf())
     })?;
 
     let loc = source.lines().count();
 
     let lex_start = Instant::now();
-    let tokens = lexer::lex(&source).map_err(|e| CompileError {
-        phase: "Lexing".to_string(),
-        message: e.to_string(),
-        file: Some(source_file.to_path_buf()),
-        line: None,
-        column: None,
-        suggestion: None,
-        help: None,
+    let tokens = lexer::lex(&source).map_err(|e| {
+        CompileError::new("Lexing", &e.to_string(), ErrorKind::CodeIssue)
+            .with_file(source_file.to_path_buf())
     })?;
     stats.lexing_time_ms += lex_start.elapsed().as_millis();
 
     let parse_start = Instant::now();
-    let ast = parser::parse(tokens).map_err(|e| CompileError {
-        phase: "Parsing".to_string(),
-        message: e.to_string(),
-        file: Some(source_file.to_path_buf()),
-        line: None,
-        column: None,
-        suggestion: None,
-        help: None,
+    let ast = parser::parse(tokens).map_err(|e| {
+        CompileError::new("Parsing", &e.to_string(), ErrorKind::CodeIssue)
+            .with_file(source_file.to_path_buf())
     })?;
     stats.parsing_time_ms += parse_start.elapsed().as_millis();
 
     let lower_start = Instant::now();
-    let hir = lowering::lower(&ast).map_err(|e| CompileError {
-        phase: "Lowering".to_string(),
-        message: e.to_string(),
-        file: Some(source_file.to_path_buf()),
-        line: None,
-        column: None,
-        suggestion: None,
-        help: None,
+    let hir = lowering::lower(&ast).map_err(|e| {
+        CompileError::new("Lowering", &e.to_string(), ErrorKind::CodeIssue)
+            .with_file(source_file.to_path_buf())
     })?;
     stats.lowering_time_ms += lower_start.elapsed().as_millis();
 

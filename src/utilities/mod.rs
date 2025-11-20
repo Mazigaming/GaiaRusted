@@ -6,6 +6,7 @@
 //! - Built-in functions and types
 //! - Color output for terminal
 //! - Module system and visibility
+//! - DWARF debug information generation
 
 pub mod error_reporting;
 pub mod error_recovery;
@@ -15,9 +16,16 @@ pub mod colors;
 pub mod module_system;
 pub mod modules;
 pub mod module_visibility_enhanced;
+pub mod advanced_module_system;
 pub mod documentation;
+pub mod dwarf_debug;
+pub mod gdb_integration;
 
 pub use error_reporting::{Diagnostic, ErrorReporter, SourceLocation, Severity};
 pub use profiling::{Profiler, CompilationStats};
 pub use builtins::BuiltinFunction;
 pub use colors::{Color, Colored};
+pub use advanced_module_system::{
+    AdvancedModuleSystem, ModuleConstant, ModuleVisibility, ModuleReexport,
+    NamespaceAlias, ImportResolution,
+};

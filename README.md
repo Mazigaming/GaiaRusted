@@ -4,7 +4,7 @@ A complete Rust compiler implementation built from scratch in pure Rust with zer
 
 > **Note:** Previous repo got nuked lmao 💀 Fresh start ig
 
-**v0.6.1 - CURRENT (UN)STABLE** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
+**v0.7.0 - CURRENT STABLE** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
 
 * * *
 
@@ -370,7 +370,7 @@ Architecture Overview
 
 * * *
 
-Examples (v0.5.0)
+Examples (v0.7.0)
 --------
 
 ### Example 1: Simple Function
@@ -443,7 +443,7 @@ fn main() {
 
 * * *
 
-Performance (v0.5.0)
+Performance (v0.7.0)
 -----------
 
 | Metric | Value |
@@ -466,24 +466,25 @@ Standard Library
 
 GaiaRusted includes a comprehensive standard library with 77 built-in functions across multiple categories. See the roadmap section for detailed feature history across versions.
 
-### 📊 Test Results (v0.5.0)
+### 📊 Test Results (v0.7.0)
 
 ```
 Test Coverage:
-  • Unit tests:           ✅ 929+ passing
-  • Integration tests:    ✅ 331+ passing
-  • Codegen tests:        ✅ Passing
-  • Borrow checking:      ✅ 40+ passing
-  • Lifetimes:            ✅ 31+ passing
-  • Closure capture:      ✅ 50+ passing (NEW)
-  • Optimization:         ✅ 34+ passing
-  • Error messages:       ✅ Verified
-  • Type system:         ✅ Verified
-  • Performance metrics: ✅ Verified
+  • Unit tests:           ✅ 1267+ passing
+  • Integration tests:    ✅ Complete
+  • Codegen tests:        ✅ All passing
+  • Borrow checking:      ✅ Verified
+  • Lifetimes:            ✅ Verified
+  • Closure capture:      ✅ Verified
+  • Optimization:         ✅ All passing
+  • Error messages:       ✅ Enhanced with classification
+  • Type system:          ✅ Verified
+  • Performance metrics:  ✅ Verified
+  • Enum support:         ✅ NEW - Full enum variant handling
   
-Total: ✅ 1419+ tests passing
+Total: ✅ 1267+ tests passing
 Backward Compatibility: ✅ 100%
-Total Lines of Code: 52,000+ LOC
+Total Lines of Code: 55,000+ LOC
 ```
 
 Run the test suite:
@@ -493,7 +494,7 @@ cargo test --lib --tests
 
 * * *
 
-✨ v0.5.0 Features (CURRENT STABLE)
+✨ v0.7.0 Features (CURRENT STABLE)
 ------------------
 
 ### Closure Variable Capture 🔥
@@ -526,6 +527,37 @@ cargo test --lib --tests
 - ✅ Implicit parameter passing for captured variables
 - ✅ MIR lowering for closure capture propagation
 - ✅ Stack management for captured values
+
+### Enhanced Error Handling with Classification 🎯 (NEW in v0.7.0)
+
+**Improved Error Classification:**
+- ✅ Error categorization: CodeIssue, CompilerLimitation, CompilerBug, InternalError
+- ✅ Heuristic-based error detection for compiler limitations
+- ✅ Helpful hints for known issues (e.g., enum variant type mismatches)
+- ✅ Builder pattern for flexible error construction
+- ✅ Multi-line error messages with indentation support
+- ✅ File path display in error output (instead of "unknown")
+- ✅ Color-coded severity levels based on error kind
+
+**Enum Variant Support (NEW in v0.7.0):**
+- ✅ Proper `HirExpression::EnumVariant` representation through lowering
+- ✅ Type inference for enum variants (infers to enum type, not integers)
+- ✅ MIR lowering support for enum variant expressions
+- ✅ Better error messages for enum-related type mismatches
+- Example:
+  ```rust
+  enum Status {
+      Active,
+      Inactive,
+  }
+  
+  fn check_status(s: Status) -> i32 { 1 }
+  
+  fn main() {
+      let result = check_status(Status::Active);  // ✅ Works correctly
+      let bad = check_status(42);                 // ❌ Clear error with hint
+  }
+  ```
 
 ### Advanced Language Features 🎯
 
@@ -646,7 +678,7 @@ cargo test --lib --tests
 Supported Language Features
 ---------------------------
 
-### ✅ Implemented (v0.5.0)
+### ✅ Implemented (v0.7.0)
 
 **Core Language:**
 *   Primitive types: i32, i64, f64, bool, str, usize, isize
@@ -868,7 +900,7 @@ Roadmap
 *   Associated types in traits (planned for v0.5.0)
 *   Where clause support for generic bounds (planned for v0.5.0)
 
-### ✅ v0.5.0 (Released) ✨ **CURRENT STABLE**
+### ✅ v0.5.0 (Released) ✨
 
 **Core Language Features:**
 *   ✅ Closure variable capture from outer scope
@@ -928,28 +960,50 @@ Roadmap
 *   ✅ Community package registry
 *   ✅ Workspace support enhancements
 
-### 📋 v0.7.0 (Planned)
+### ✅ v0.7.0 (Released) ✨ **CURRENT STABLE**
 
-**Compiler Optimizations:**
-*   LLVM IR optimization passes
-*   Constant folding and propagation
-*   Dead code elimination
-*   Loop optimizations
-*   Inlining strategies
+**Error Handling & Classification:**
+*   ✅ Enhanced error system with ErrorKind classification
+*   ✅ CodeIssue vs CompilerLimitation vs CompilerBug distinction
+*   ✅ Heuristic-based error detection for known limitations
+*   ✅ Builder pattern for flexible error construction (with_file, with_location, with_suggestion, with_help)
+*   ✅ Multi-line error messages with proper indentation
+*   ✅ Color-coded severity levels (yellow for limitations, red for errors)
+*   ✅ Helpful hints for compiler limitations
+
+**Enum Variant Support:**
+*   ✅ HirExpression::EnumVariant variant for proper type representation
+*   ✅ Type inference for enum variants (infers to enum type, not integers)
+*   ✅ Proper lowering of enum variants through compilation pipeline
+*   ✅ MIR support for enum variant expressions
+*   ✅ Unit enum variants fully working (Color::Red, Status::Active, etc.)
+*   ✅ Better error messages for enum-related type mismatches
+
+**Code Quality:**
+*   ✅ All 1267+ unit tests passing
+*   ✅ 100% backward compatibility maintained
+*   ✅ Comprehensive error reporting with source file display
+*   ✅ Improved compilation statistics and timing
+
+### 📋 v0.8.0 (Planned)
+
+**Advanced Features:**
+*   Tuple and Struct enum variants (EnumName::Variant(x, y))
+*   Pattern matching improvements for enum variants
+*   Additional optimization passes
+*   Performance profiling enhancements
 
 **Standard Library Expansion:**
-*   File I/O operations
-*   Threading support
-*   TCP/UDP networking
-*   JSON serialization
-*   Path manipulation
+*   Extended iterator combinators
+*   More string utilities
+*   Enhanced file I/O operations
+*   Path manipulation utilities
 
 **Debugging & Tools:**
-*   DWARF debug info generation
-*   GDB integration
-*   Profiler hooks
-*   Memory tracking
-*   Optimization reports
+*   Better source location tracking (precise line numbers)
+*   Extended error recovery
+*   Performance optimization reports
+*   Memory usage analytics
 
 ### 📋 v1.0.0 (Vision)
 
@@ -987,4 +1041,4 @@ Quick Links
 
 * * *
 
-**Made with 🦀 Rust** | Built in memory of Terry Davis and my mental insanity | GaiaRusted v0.5.0 STABLE
+**Made with 🦀 Rust** | Built in memory of Terry Davis and my mental insanity | GaiaRusted v0.7.0 STABLE

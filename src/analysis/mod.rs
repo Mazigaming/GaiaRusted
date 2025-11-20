@@ -8,6 +8,7 @@
 
 pub mod pattern_matching;
 pub mod advanced_patterns;
+pub mod enhanced_patterns;
 pub mod traits;  // Consolidated: sealed traits, advanced traits, trait definitions
 pub mod advanced_assoc_types;
 pub mod const_generics;

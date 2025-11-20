@@ -18,10 +18,11 @@ use crate::lowering::{
     HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp, ClosureTrait,
 };
 use crate::iterators::IteratorMethodHandler;
+use crate::compiler::{CompileError, ErrorKind};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-/// Type checking error
+/// Type checking error (deprecated, use CompileError instead)
 #[derive(Debug, Clone)]
 pub struct TypeCheckError {
     pub message: String,
@@ -504,11 +505,28 @@ impl TypeChecker {
                                 if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
                                     substitutions.insert(gen_name, concrete_ty);
                                 } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
-                                    return Err(TypeCheckError {
-                                        message: format!(
+                                    let msg = if arg_ty == HirType::Int64 || arg_ty == HirType::Int32 {
+                                        if param_ty.to_string().chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                            format!(
+                                                "Argument {} has type {}, expected {}\n\
+                                                hint: enum variants are currently converted to integers; \
+                                                this is a known compiler limitation",
+                                                i, arg_ty, param_ty
+                                            )
+                                        } else {
+                                            format!(
+                                                "Argument {} has type {}, expected {}",
+                                                i, arg_ty, param_ty
+                                            )
+                                        }
+                                    } else {
+                                        format!(
                                             "Argument {} has type {}, expected {}",
                                             i, arg_ty, param_ty
-                                        ),
+                                        )
+                                    };
+                                    return Err(TypeCheckError {
+                                        message: msg,
                                     });
                                 }
                             }
@@ -764,6 +782,10 @@ impl TypeChecker {
                 let types: Result<Vec<_>, _> =
                     elements.iter().map(|e| self.infer_type(e)).collect();
                 Ok(HirType::Tuple(types?))
+            }
+
+            HirExpression::EnumVariant { enum_name, variant_name: _ } => {
+                Ok(HirType::Named(enum_name.clone()))
             }
 
             HirExpression::Range { start, end, .. } => {
@@ -1321,9 +1343,23 @@ impl TypeChecker {
 }
 
 /// Perform type checking on lowered HIR
-pub fn check_types(items: &[HirItem]) -> TypeCheckResult<()> {
+pub fn check_types(items: &[HirItem]) -> Result<(), CompileError> {
     let mut checker = TypeChecker::new();
-    checker.check_items(items)
+    checker.check_items(items).map_err(|e| {
+        let message = e.message.clone();
+        let kind = if message.contains("not yet supported") || 
+                      message.contains("not supported") ||
+                      message.contains("Indirect function calls not yet supported") ||
+                      message.contains("compiler limitation") ||
+                      (message.contains("Argument") && message.contains("has type") && 
+                       (message.contains("i32") || message.contains("i64")) &&
+                       message.contains("expected")) {
+            ErrorKind::CompilerLimitation
+        } else {
+            ErrorKind::CodeIssue
+        };
+        CompileError::new("Type Checking", &message, kind)
+    })
 }
 
 #[cfg(test)]

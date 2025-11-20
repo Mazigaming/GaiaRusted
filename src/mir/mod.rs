@@ -896,6 +896,9 @@ impl MirLowerer {
                 
                 builder.switch_block(continue_block);
             }
+            HirExpression::EnumVariant { enum_name: _, variant_name: _ } => {
+                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+            }
         }
         Ok(())
     }

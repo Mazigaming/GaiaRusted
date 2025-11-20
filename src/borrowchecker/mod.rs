@@ -615,11 +615,12 @@ impl BorrowChecker {
                 Ok(())
             }
 
-            // Literals don't need borrow checking
+            // Literals and enum variants don't need borrow checking
             HirExpression::Integer(_)
             | HirExpression::Float(_)
             | HirExpression::String(_)
-            | HirExpression::Bool(_) => Ok(()),
+            | HirExpression::Bool(_)
+            | HirExpression::EnumVariant { .. } => Ok(()),
 
             HirExpression::Closure { body, .. } => {
                 self.env.push_scope();

@@ -420,6 +420,12 @@ pub enum HirExpression {
     /// Tuple literal: (1, 2, 3)
     Tuple(Vec<HirExpression>),
 
+    /// Enum variant: Status::Active
+    EnumVariant {
+        enum_name: String,
+        variant_name: String,
+    },
+
     /// Range literal: 0..10, 1..=5
     Range {
         start: Option<Box<HirExpression>>,
@@ -1265,8 +1271,11 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 let enum_name = &segments[0];
                 let variant_name = &segments[1];
                 
-                if let Some(discriminant) = get_enum_variant(enum_name, variant_name) {
-                    Ok(HirExpression::Integer(discriminant))
+                if get_enum_variant(enum_name, variant_name).is_some() {
+                    Ok(HirExpression::EnumVariant {
+                        enum_name: enum_name.clone(),
+                        variant_name: variant_name.clone(),
+                    })
                 } else {
                     Ok(HirExpression::Variable(format!("{}::{}", enum_name, variant_name)))
                 }

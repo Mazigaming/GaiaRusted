@@ -113,7 +113,7 @@ pub mod modules {
 }
 
 pub use config::{CompilationConfig, OutputFormat};
-pub use compiler::{compile_files, CompilationResult, CompileError};
+pub use compiler::{compile_files, CompilationResult, CompileError, ErrorKind};
 pub use utilities::error_reporting::{Diagnostic, ErrorReporter, SourceLocation, Severity};
 pub use utilities::builtins::BuiltinFunction;
 pub use utilities::profiling::{Profiler, CompilationStats as ProfileStats};

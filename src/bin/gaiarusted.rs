@@ -48,7 +48,7 @@ impl CliArgs {
                     process::exit(0);
                 }
                 "--version" => {
-                    println!("GiaRusted Compiler v0.3.0");
+                    println!("GiaRusted Compiler v0.7.0");
                     process::exit(0);
                 }
                 "-o" | "--output" => {
@@ -139,7 +139,7 @@ impl CliArgs {
     }
 
     fn print_help() {
-        println!("GiaRusted Compiler - A Rust Compiler Built from Scratch (v0.3.0)");
+        println!("GiaRusted Compiler - A Rust Compiler Built from Scratch (v0.7.0)");
         println!();
         println!("USAGE:");
         println!("    gaiarusted [OPTIONS] <FILES>...");
@@ -246,19 +246,38 @@ fn print_detailed_error(error: &gaiarusted::CompileError, error_num: usize, tota
     let location = match (error.line, error.column) {
         (Some(line), Some(col)) => format!("{}:{}", line, col),
         (Some(line), None) => format!("{}:1", line),
-        _ => "unknown".to_string(),
+        _ => "unknown location".to_string(),
     };
     
     let file_location = if let Some(file) = &error.file {
         format!("{}:{}", file.display(), location)
     } else {
-        location
+        format!("[{}]", location)
     };
     
-    eprintln!("{}: {}: {}", 
-        format_error("error"),
+    let severity = match error.kind {
+        gaiarusted::ErrorKind::CodeIssue => format_error("error"),
+        gaiarusted::ErrorKind::CompilerLimitation => format_warning("limitation"),
+        gaiarusted::ErrorKind::CompilerBug => format_error("bug"),
+        gaiarusted::ErrorKind::InternalError => format_error("error"),
+    };
+    
+    let kind_suffix = if error.kind != gaiarusted::ErrorKind::CodeIssue {
+        format!(" [{}]", error.kind)
+    } else {
+        String::new()
+    };
+    
+    let message_lines: Vec<&str> = error.message.split('\n').collect();
+    eprintln!("{}: {}: {}{}", 
+        severity,
         file_location,
-        error.message);
+        message_lines[0],
+        kind_suffix);
+    
+    for line in &message_lines[1..] {
+        eprintln!("  {}", line);
+    }
     
     if let Some(file) = &error.file {
         if let Ok(source) = fs::read_to_string(file) {
@@ -395,7 +414,7 @@ fn main() {
         }
     }
 
-    println!("GiaRusted Compiler v0.3.0");
+    println!("GiaRusted Compiler v0.7.0");
     println!("==================================================");
     println!("Input files: {}", config.source_files.len());
     for file in &config.source_files {
