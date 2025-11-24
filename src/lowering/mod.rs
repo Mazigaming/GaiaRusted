@@ -192,6 +192,11 @@ fn collect_variables_from_expr(expr: &HirExpression, vars: &mut HashSet<String>)
                 collect_variables_from_expr(field_expr, vars);
             }
         }
+        HirExpression::EnumStructVariant { fields, .. } => {
+            for (_, field_expr) in fields {
+                collect_variables_from_expr(field_expr, vars);
+            }
+        }
         HirExpression::ArrayLiteral(exprs) => {
             for expr in exprs {
                 collect_variables_from_expr(expr, vars);
@@ -280,6 +285,12 @@ pub enum HirItem {
         name: String,
         fields: Vec<(String, HirType)>,
     },
+    /// Module definition
+    Module {
+        name: String,
+        items: Vec<HirItem>,
+        is_public: bool,
+    },
     /// Associated type in trait
     AssociatedType {
         name: String,
@@ -290,6 +301,21 @@ pub enum HirItem {
         path: Vec<String>,
         is_glob: bool,
         is_public: bool,
+    },
+    /// Const item: `const NAME: Type = value;`
+    Const {
+        name: String,
+        ty: HirType,
+        is_public: bool,
+        generics: Vec<GenericParam>,
+    },
+    /// Static item: `static NAME: Type = value;`
+    Static {
+        name: String,
+        ty: HirType,
+        is_mutable: bool,
+        is_public: bool,
+        generics: Vec<GenericParam>,
     },
 }
 
@@ -420,10 +446,18 @@ pub enum HirExpression {
     /// Tuple literal: (1, 2, 3)
     Tuple(Vec<HirExpression>),
 
-    /// Enum variant: Status::Active
+    /// Enum variant: Status::Active or Result::Ok(42) or Message::Text(x, y)
     EnumVariant {
         enum_name: String,
         variant_name: String,
+        args: Vec<HirExpression>,
+    },
+
+    /// Enum struct variant: Message::Text { content: "hello", id: 5 }
+    EnumStructVariant {
+        enum_name: String,
+        variant_name: String,
+        fields: Vec<(String, HirExpression)>,
     },
 
     /// Range literal: 0..10, 1..=5
@@ -688,12 +722,25 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
             let inner_hir = lower_type(inner)?;
             Ok(HirType::Pointer(Box::new(inner_hir)))
         }
-        Type::Array { element, size: _ } => {
+        Type::Array { element, size } => {
             let elem_hir = lower_type(element)?;
-            // For now, we ignore the size expression and treat as unknown size
+            // Extract the size from the expression if present
+            let size_value = if let Some(size_expr) = size {
+                if let Expression::Integer(n) = size_expr.as_ref() {
+                    Some(*n as usize)
+                } else if let Expression::Variable(_name) = size_expr.as_ref() {
+                    // For const generics, we'll treat as unknown for now
+                    None
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            
             Ok(HirType::Array {
                 element_type: Box::new(elem_hir),
-                size: None,
+                size: size_value,
             })
         }
         Type::Function {
@@ -764,6 +811,63 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
     }
 }
 
+/// Infer the type of a HirExpression for println argument type-awareness
+fn infer_hir_type(expr: &HirExpression) -> HirType {
+    match expr {
+        HirExpression::Integer(_) => HirType::Int64,
+        HirExpression::Float(_) => HirType::Float64,
+        HirExpression::String(_) => HirType::String,
+        HirExpression::Bool(_) => HirType::Bool,
+        HirExpression::Variable(_name) => {
+            // Try to look up the variable type from scope tracker
+            SCOPE_TRACKER.with(|tracker| {
+                let scopes = &tracker.borrow().scopes;
+                for scope in scopes.iter().rev() {
+                    if let Some(ty) = scope.get(_name) {
+                        return ty.clone();
+                    }
+                }
+                HirType::Unknown
+            })
+        }
+        HirExpression::Call { func, args } => {
+            // For method calls, try to infer from the method name
+            if let HirExpression::Variable(func_name) = &**func {
+                // Methods that return i64/usize
+                if func_name == "len" || func_name.contains("::len") {
+                    return HirType::Int64;
+                }
+                // Methods that return bool
+                if func_name == "contains" || func_name.contains("::contains") {
+                    return HirType::Bool;
+                }
+                if func_name == "is_empty" || func_name.contains("::is_empty") {
+                    return HirType::Bool;
+                }
+                // Methods that return the element type (we infer from context)
+                // pop, get, etc. should have their types inferred from the collection type
+                if (func_name == "pop" || func_name.contains("::pop")) && !args.is_empty() {
+                    // Try to infer from the receiver (first argument)
+                    let receiver_type = infer_hir_type(&args[0]);
+                    // For Vec::pop, return i64 (simplified assumption)
+                    if let HirType::Named(name) = receiver_type {
+                        if name.contains("Vec") {
+                            return HirType::Int64;
+                        }
+                    }
+                    return HirType::Int64; // Default assumption
+                }
+                if (func_name == "get" || func_name.contains("::get")) && !args.is_empty() {
+                    // Similar to pop, return i64 for now
+                    return HirType::Int64;
+                }
+            }
+            HirType::Unknown
+        }
+        _ => HirType::Unknown,
+    }
+}
+
 /// Lower an expression from AST to HIR
 fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
     match expr {
@@ -771,11 +875,11 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         Expression::Float(f) => Ok(HirExpression::Float(*f)),
         Expression::String(s) => Ok(HirExpression::String(s.clone())),
         Expression::Bool(b) => Ok(HirExpression::Bool(*b)),
-        Expression::Char(_c) => {
-            // For now, treat char as a single-character string
-            Err(LowerError {
-                message: "Char literals not yet supported".to_string(),
-            })
+        Expression::Char(c) => {
+            // Treat char as an integer representing its Unicode code point
+            // This is a simplified representation
+            let code_point = *c as u32 as i64;
+            Ok(HirExpression::Integer(code_point))
         }
 
         Expression::Variable(name) => Ok(HirExpression::Variable(name.clone())),
@@ -981,6 +1085,22 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 args.iter().map(|arg| lower_expression(arg)).collect();
             let mut args_final = args_hir?;
             
+            if name.contains("::") {
+                let parts: Vec<&str> = name.split("::").collect();
+                if parts.len() == 2 {
+                    let enum_name = parts[0].to_string();
+                    let variant_name = parts[1].to_string();
+                    
+                    if get_enum_variant(&enum_name, &variant_name).is_some() {
+                        return Ok(HirExpression::EnumVariant {
+                            enum_name,
+                            variant_name,
+                            args: args_final,
+                        });
+                    }
+                }
+            }
+            
             let func_name = match name.as_str() {
                 "println" => {
                     if args_final.len() > 1 {
@@ -989,6 +1109,25 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                             args_final[0] = HirExpression::String(printf_fmt);
                         }
                         "__builtin_printf".to_string()
+                    } else if args_final.len() == 1 {
+                        // Type-aware println: check argument type
+                        let arg_type = infer_hir_type(&args_final[0]);
+                        match arg_type {
+                            HirType::Int64 | HirType::Int32 | HirType::USize | HirType::ISize => {
+                                "gaia_print_i64".to_string()
+                            }
+                            HirType::Bool => {
+                                "gaia_print_bool".to_string()
+                            }
+                            HirType::Float64 => {
+                                // For now, cast to i64 and print as integer
+                                "gaia_print_i64".to_string()
+                            }
+                            _ => {
+                                // Default to string printing
+                                "__builtin_println".to_string()
+                            }
+                        }
                     } else {
                         "__builtin_println".to_string()
                     }
@@ -1060,6 +1199,25 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 .collect();
             Ok(HirExpression::StructLiteral {
                 name: struct_name.clone(),
+                fields: fields_hir?,
+            })
+        }
+
+        Expression::EnumStructLiteral {
+            enum_name,
+            variant_name,
+            fields,
+        } => {
+            let fields_hir: Result<Vec<_>, _> = fields
+                .iter()
+                .map(|(fname, fexpr)| {
+                    let expr_hir = lower_expression(fexpr)?;
+                    Ok((fname.clone(), expr_hir))
+                })
+                .collect();
+            Ok(HirExpression::EnumStructVariant {
+                enum_name: enum_name.clone(),
+                variant_name: variant_name.clone(),
                 fields: fields_hir?,
             })
         }
@@ -1157,7 +1315,7 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             }
         }
 
-        Expression::Closure { params, body, is_move } => {
+        Expression::Closure { params, return_type: ret_type_opt, body, is_move } => {
             let mut typed_params = Vec::new();
             let mut param_names = HashSet::new();
             
@@ -1170,7 +1328,10 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 param_names.insert(param_name.clone());
             }
             
-            let return_type = HirType::Unknown;
+            let return_type = match ret_type_opt {
+                Some(ty) => lower_type(ty)?,
+                None => HirType::Unknown,
+            };
             
             let lowered_body = lower_expression(body)?;
             
@@ -1275,6 +1436,7 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                     Ok(HirExpression::EnumVariant {
                         enum_name: enum_name.clone(),
                         variant_name: variant_name.clone(),
+                        args: Vec::new(),
                     })
                 } else {
                     Ok(HirExpression::Variable(format!("{}::{}", enum_name, variant_name)))
@@ -1300,12 +1462,21 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 args.iter().map(|arg| lower_expression(arg)).collect();
             let args_final = args_hir?;
             
-            // For path-based calls like Point::new, we need to handle them specially
-            // Split the name to get the type and method names
             if name.contains("::") {
-                // This is an associated function call
-                // For now, keep the full qualified name - the codegen will need to handle this
-                // The name format is "Type::method"
+                let parts: Vec<&str> = name.split("::").collect();
+                if parts.len() == 2 {
+                    let enum_name = parts[0].to_string();
+                    let variant_name = parts[1].to_string();
+                    
+                    if get_enum_variant(&enum_name, &variant_name).is_some() {
+                        return Ok(HirExpression::EnumVariant {
+                            enum_name,
+                            variant_name,
+                            args: args_final,
+                        });
+                    }
+                }
+                
                 Ok(HirExpression::Call {
                     func: Box::new(HirExpression::Variable(name.clone())),
                     args: args_final,
@@ -1397,7 +1568,8 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
             let ty = if let Some(t) = type_opt {
                 lower_type(t)?
             } else {
-                HirType::Unknown // Will be inferred in Phase 4
+                // Try to infer type from initializer expression
+                infer_hir_type(&init_hir)
             };
             add_binding(name.clone(), ty.clone());
             Ok(HirStatement::Let {
@@ -1629,16 +1801,22 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
         }
 
         Item::Enum { name, generics: _, variants, is_pub: _, attributes: _, where_clause: _ } => {
-            // Properly lower enum variants
-            let variant_names: Vec<(String, HirType)> = variants
+            // Register enum variants for later resolution (important for inner enums)
+            let variant_names_list: Vec<String> = variants
                 .iter()
-                .map(|v| {
-                    let variant_name = match v {
-                        EnumVariant::Unit(n) => n.clone(),
-                        EnumVariant::Tuple(n, _) => n.clone(),
-                        EnumVariant::Struct(n, _) => n.clone(),
-                    };
-                    (variant_name, HirType::Named(name.clone()))
+                .map(|v| match v {
+                    EnumVariant::Unit(n) => n.clone(),
+                    EnumVariant::Tuple(n, _) => n.clone(),
+                    EnumVariant::Struct(n, _) => n.clone(),
+                })
+                .collect();
+            register_enum_variants(name.clone(), variant_names_list.clone());
+            
+            // Properly lower enum variants
+            let variant_names: Vec<(String, HirType)> = variant_names_list
+                .iter()
+                .map(|variant_name| {
+                    (variant_name.clone(), HirType::Named(name.clone()))
                 })
                 .collect();
             
@@ -1741,12 +1919,16 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
             })
         }
 
-        Item::Module { name, items: _module_items, is_inline: _, is_pub: _, attributes: _ } => {
-            // For now, treat module as a struct with marker
-            // Full module lowering would recursively lower all items
-            Ok(HirItem::Struct {
-                name: format!("mod_{}", name),
-                fields: vec![(format!("_module_marker"), HirType::Tuple(vec![]))],
+        Item::Module { name, items: module_items, is_inline: _, is_pub, attributes: _ } => {
+            // Recursively lower all items in the module
+            let mut lowered_items = Vec::new();
+            for item in module_items {
+                lowered_items.push(lower_item(item)?);
+            }
+            Ok(HirItem::Module {
+                name: name.clone(),
+                items: lowered_items,
+                is_public: *is_pub,
             })
         }
 
@@ -1765,17 +1947,22 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
             })
         }
 
-        Item::Const { name, ty, value: _, is_pub: _, attributes: _ } => {
-            Ok(HirItem::Struct {
+        Item::Const { name, ty, value: _, is_pub, attributes: _ } => {
+            Ok(HirItem::Const {
                 name: name.clone(),
-                fields: vec![(format!("_const_val"), convert_type(ty))],
+                ty: convert_type(ty),
+                is_public: *is_pub,
+                generics: Vec::new(),
             })
         }
 
-        Item::Static { name, ty, value: _, is_mutable: _, is_pub: _, attributes: _ } => {
-            Ok(HirItem::Struct {
+        Item::Static { name, ty, value: _, is_mutable, is_pub, attributes: _ } => {
+            Ok(HirItem::Static {
                 name: name.clone(),
-                fields: vec![(format!("_static_val"), convert_type(ty))],
+                ty: convert_type(ty),
+                is_mutable: *is_mutable,
+                is_public: *is_pub,
+                generics: Vec::new(),
             })
         }
 

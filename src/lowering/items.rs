@@ -50,12 +50,14 @@ pub enum HirItem {
         name: String,
         ty: Type,
         generics: Vec<String>,
+        is_public: bool,
     },
     Static {
         name: String,
         ty: Type,
         is_mutable: bool,
         generics: Vec<String>,
+        is_public: bool,
     },
 }
 

@@ -21,9 +21,11 @@
 
 pub mod object;
 pub mod monomorphization;
+pub mod trait_monomorphization;
 pub mod backend;
 pub mod optimization;
 pub mod simd;
+pub mod iterator_fusion;
 
 use crate::mir::{Mir, MirFunction, Statement, Terminator};
 use crate::runtime;
@@ -333,6 +335,10 @@ pub struct Codegen {
     label_counter: usize,
     var_locations: HashMap<String, i64>,
     stack_offset: i64,
+    /// Minimum stack offset used by collections (don't allocate above this)
+    min_collection_offset: i64,
+    /// Size of the collection at min_collection_offset (for proper collision detection)
+    collection_size: i64,
     string_constants: HashMap<String, String>,
 }
 
@@ -344,6 +350,8 @@ impl Codegen {
             label_counter: 0,
             var_locations: HashMap::new(),
             stack_offset: -8,
+            min_collection_offset: i64::MAX,
+            collection_size: 0,
             string_constants: HashMap::new(),
         }
     }
@@ -368,9 +376,29 @@ impl Codegen {
             asm.push_str(&format!("{}\n", instr));
         }
         
-        // Add rodata section with string constants
-        if !self.string_constants.is_empty() {
+        // Add data section for mutable static variables
+        if mir.globals.iter().any(|g| g.is_static && g.is_mutable) {
+            asm.push_str("\n.section .data\n");
+            for global in &mir.globals {
+                if global.is_static && global.is_mutable {
+                    asm.push_str(&format!("    {}: .quad {}\n", global.name, global.value));
+                }
+            }
+        }
+        
+        // Add rodata section with string constants and const values
+        let has_rodata_globals = mir.globals.iter().any(|g| !g.is_static || !g.is_mutable);
+        if !self.string_constants.is_empty() || has_rodata_globals {
             asm.push_str("\n.section .rodata\n");
+            
+            // Add read-only globals (constants and immutable statics)
+            for global in &mir.globals {
+                if !global.is_static || !global.is_mutable {
+                    asm.push_str(&format!("    {}: .quad {}\n", global.name, global.value));
+                }
+            }
+            
+            // Add string constants
             for (string, label) in &self.string_constants {
                 let escaped = string
                     .replace("\\", "\\\\")
@@ -396,6 +424,8 @@ impl Codegen {
         // Reset per-function state
         self.var_locations.clear();
         self.stack_offset = -8;
+        self.min_collection_offset = i64::MAX;
+        self.collection_size = 0;
         
         // Mangle function names for assembly compatibility
         // Replace :: with _impl_ for qualified names like Point::new
@@ -419,6 +449,9 @@ impl Codegen {
             dst: X86Operand::Register(Register::RBP),
             src: X86Operand::Register(Register::RSP),
         });
+        
+        // Remember position of prologue so we can add stack allocation later
+        let prologue_end_idx = self.instructions.len();
         
         // Allocate space for locals (parameters)
         let mut allocator = RegisterAllocator::new();
@@ -485,6 +518,11 @@ impl Codegen {
                         dst: X86Operand::Register(Register::RAX),
                         src: X86Operand::Immediate(0),
                     });
+                    // Restore stack pointer before restoring RBP
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RSP),
+                        src: X86Operand::Register(Register::RBP),
+                    });
                     self.instructions.push(X86Instruction::Pop { reg: Register::RBP });
                     self.instructions.push(X86Instruction::Ret);
                 }
@@ -496,6 +534,11 @@ impl Codegen {
                             src: operand_x86,
                         });
                     }
+                    // Restore stack pointer before restoring RBP
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RSP),
+                        src: X86Operand::Register(Register::RBP),
+                    });
                     self.instructions.push(X86Instruction::Pop { reg: Register::RBP });
                     self.instructions.push(X86Instruction::Ret);
                 }
@@ -543,11 +586,32 @@ impl Codegen {
             }
         }
         
+        // If we've allocated local stack space, add sub rsp instruction
+        // The allocation must maintain 16-byte stack alignment before CALL instructions
+        // After push rbp, RSP % 16 == 8
+        // We need sub rsp with N where N % 16 == 0 to keep RSP % 16 == 8 before CALL
+        if self.stack_offset < 0 {
+            let mut total_alloc = -self.stack_offset;
+            
+            // Round up to nearest multiple of 16
+            if total_alloc % 16 != 0 {
+                total_alloc = ((total_alloc / 16) + 1) * 16;
+            }
+            
+            // Insert sub rsp instruction right after prologue
+            self.instructions.insert(prologue_end_idx, X86Instruction::Sub {
+                dst: X86Operand::Register(Register::RSP),
+                src: X86Operand::Immediate(total_alloc),
+            });
+        }
+        
         Ok(())
     }
 
     /// Generate code for a statement
     fn generate_statement(&mut self, stmt: &Statement, _allocator: &RegisterAllocator) -> CodegenResult<()> {
+        let mut skip_final_store = false;  // Track if we've already stored the result
+        
         match &stmt.rvalue {
             crate::mir::Rvalue::Use(operand) => {
                 match operand {
@@ -868,6 +932,347 @@ impl Codegen {
                         dst: X86Operand::Register(Register::RAX),
                         src: X86Operand::Immediate(0),
                     });
+                } else if func_name == "Vec::new" {
+                    // Vec constructor - allocate stack space and initialize
+                    // Vec layout: [capacity:i64][length:i64][data...]
+                    // Allocate 128 bytes (enough for ~15 i64 values + metadata)
+                    self.stack_offset -= 8; // First slot for Vec pointer
+                    let vec_ptr_offset = self.stack_offset; // Remember where we store the pointer
+                    
+                    self.stack_offset -= 128; // allocate space for vec data
+                    let vec_data_offset = self.stack_offset; // Start of actual vec data
+                    
+                    // CRITICAL: The Vec data area extends 128 bytes from vec_data_offset
+                    // So it occupies the range [vec_data_offset - 128, vec_data_offset]
+                    // We need to move stack_offset beyond this range to prevent temp allocation collisions
+                    // The Vec actually extends beyond vec_data_offset since it starts at vec_data_offset
+                    // and is 128 bytes large. So move stack_offset down by another 128 bytes total.
+                    // Actually, stack_offset is currently at -144 after the -= 128 above.
+                    // The 128 bytes we allocated are from -16 to -144.
+                    // But the Vec metadata is stored starting at -144, and the Vec data extends from there.
+                    // So we need to account for the FULL Vec size by additional decrement
+                    // Vec is 128 bytes, starting at -144, so it goes to -144-128 = -272
+                    // stack_offset is already at -144, which is the START of the Vec
+                    // We should not track min_collection_offset at -144, because we can't allocate AT that address.
+                    // Instead, we need allocate_var to skip the entire Vec region.
+                    
+                    // Track the collection for collision detection
+                    if vec_data_offset < self.min_collection_offset {
+                        self.min_collection_offset = vec_data_offset;
+                        self.collection_size = 128; // Vec uses 128 bytes
+                    }
+                    
+                    // Register this variable's location so subsequent statements can find it
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.var_locations.insert(var_name.clone(), vec_ptr_offset);
+                    }
+                    
+                    // Initialize capacity = 30 (space for 30 i64 values)
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset },
+                        src: X86Operand::Immediate(30),
+                    });
+                    
+                    // Initialize length = 0
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset + 8 },
+                        src: X86Operand::Immediate(0),
+                    });
+                    
+                    // Return address of vec metadata in RAX
+                    // Calculate: RAX = RBP + vec_data_offset
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(vec_data_offset),
+                    });
+                    
+                    // Store the pointer in the "variable slot" for this Vec
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: vec_ptr_offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                    skip_final_store = true;  // Don't store again at the end
+                    
+                } else if func_name == "HashMap::new" {
+                    // HashMap constructor - allocate stack space and initialize
+                    self.stack_offset -= 8; // First slot for HashMap pointer
+                    let hmap_ptr_offset = self.stack_offset;
+                    
+                    self.stack_offset -= 512; // allocate space for hashmap
+                    let hmap_data_offset = self.stack_offset;
+                    
+                    // Track minimum collection offset so temp variables don't collide
+                    if hmap_data_offset < self.min_collection_offset {
+                        self.min_collection_offset = hmap_data_offset;
+                        self.collection_size = 512; // HashMap uses 512 bytes
+                    }
+                    
+                    // Register this variable's location so subsequent statements can find it
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.var_locations.insert(var_name.clone(), hmap_ptr_offset);
+                    }
+                    
+                    // Initialize capacity = 16
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: hmap_data_offset },
+                        src: X86Operand::Immediate(16),
+                    });
+                    
+                    // Initialize size = 0
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: hmap_data_offset + 8 },
+                        src: X86Operand::Immediate(0),
+                    });
+                    
+                    // Return address of hashmap metadata in RAX
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(hmap_data_offset),
+                    });
+                    
+                    // Store pointer in variable slot
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: hmap_ptr_offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                    skip_final_store = true;
+                } else if func_name == "HashSet::new" {
+                    // HashSet constructor - allocate stack space and initialize
+                    self.stack_offset -= 8; // First slot for HashSet pointer
+                    let hset_ptr_offset = self.stack_offset;
+                    
+                    self.stack_offset -= 512; // allocate space for hashset
+                    let hset_data_offset = self.stack_offset;
+                    
+                    // Track minimum collection offset so temp variables don't collide
+                    if hset_data_offset < self.min_collection_offset {
+                        self.min_collection_offset = hset_data_offset;
+                        self.collection_size = 512; // HashSet uses 512 bytes
+                    }
+                    
+                    // Register this variable's location so subsequent statements can find it
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.var_locations.insert(var_name.clone(), hset_ptr_offset);
+                    }
+                    
+                    // Initialize capacity = 16
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: hset_data_offset },
+                        src: X86Operand::Immediate(16),
+                    });
+                    
+                    // Initialize size = 0
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: hset_data_offset + 8 },
+                        src: X86Operand::Immediate(0),
+                    });
+                    
+                    // Return address of hashset metadata in RAX
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(hset_data_offset),
+                    });
+                    
+                    // Store pointer in variable slot
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: hset_ptr_offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                    skip_final_store = true;
+                } else if func_name == "push" || func_name.contains("::push") {
+                    // Vec::push - call runtime function
+                    // rdi = self (vec pointer), rsi = value
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_push".to_string(),
+                    });
+                    // push() returns unit (void), don't store result
+                    skip_final_store = true;
+                } else if func_name == "pop" || func_name.contains("::pop") {
+                    // Vec::pop - call runtime function
+                    // rdi = self (vec pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_pop".to_string(),
+                    });
+                } else if func_name == "get" || func_name.contains("::get") {
+                    // Vec::get or HashMap::get - call runtime function
+                    // rdi = self (vec pointer), rsi = index
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    // For now assume Vec, can be improved with type info
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_get".to_string(),
+                    });
+                } else if (func_name == "insert" || func_name.contains("::insert")) && args.len() >= 3 {
+                    // HashMap::insert or collection insert - call appropriate runtime function
+                    // rdi = self, rsi = key/first_arg, rdx = value/second_arg
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    if args.len() >= 3 {
+                        let arg_val = self.operand_to_x86(&args[2])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDX),
+                            src: arg_val,
+                        });
+                    }
+                    if func_name.contains("HashSet") || args.len() == 2 {
+                        self.instructions.push(X86Instruction::Call {
+                            func: "gaia_hashset_insert".to_string(),
+                        });
+                    } else {
+                        self.instructions.push(X86Instruction::Call {
+                            func: "gaia_hashmap_insert".to_string(),
+                        });
+                    }
+                } else if (func_name == "insert" || func_name.contains("::insert")) && args.len() == 2 {
+                    // HashSet::insert (2 args: self + element)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_hashset_insert".to_string(),
+                    });
+                } else if func_name == "remove" || func_name.contains("::remove") {
+                    // Remove function
+                    // rdi = self (collection pointer), rsi = key/element
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    if func_name.contains("HashMap") {
+                        self.instructions.push(X86Instruction::Call {
+                            func: "gaia_hashmap_remove".to_string(),
+                        });
+                    } else {
+                        self.instructions.push(X86Instruction::Call {
+                            func: "gaia_hashset_remove".to_string(),
+                        });
+                    }
+                } else if func_name == "contains" || func_name.contains("::contains") {
+                    // HashSet::contains or collection contains - call runtime function
+                    // rdi = self (collection pointer), rsi = element
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_hashset_contains".to_string(),
+                    });
+                } else if func_name == "len" || func_name.contains("::len") {
+                    // Vec::len or collection length method
+                    // rdi = self (vec pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_len".to_string(),
+                    });
+                } else if func_name == "is_empty" || func_name.contains("::is_empty") {
+                    // Vec::is_empty, HashMap::is_empty, or HashSet::is_empty
+                    // All use same memory layout with size/length at offset +8
+                    // rdi = self (collection pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    // Use generic is_empty that works for all collections
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_collection_is_empty".to_string(),
+                    });
                 } else {
                     // Regular function call
                     // Mangle function names for assembly compatibility
@@ -946,12 +1351,14 @@ impl Codegen {
             }
         }
         
-        if let crate::mir::Place::Local(ref name) = stmt.place {
-            let offset = self.get_var_location(name);
-            self.instructions.push(X86Instruction::Mov {
-                dst: X86Operand::Memory { base: Register::RBP, offset },
-                src: X86Operand::Register(Register::RAX),
-            });
+        if !skip_final_store {
+            if let crate::mir::Place::Local(ref name) = stmt.place {
+                let offset = self.get_var_location(name);
+                self.instructions.push(X86Instruction::Mov {
+                    dst: X86Operand::Memory { base: Register::RBP, offset },
+                    src: X86Operand::Register(Register::RAX),
+                });
+            }
         }
         Ok(())
     }
@@ -997,6 +1404,19 @@ impl Codegen {
     /// Allocate stack space for a variable
     fn allocate_var(&mut self, var_name: String) -> i64 {
         if !self.var_locations.contains_key(&var_name) {
+            // Make sure we don't allocate in collection regions
+            // Collections can be large (Vec=128, HashMap/HashSet=512), so we need to skip past them
+            // If stack_offset is within or above the collection region, jump below it
+            if self.min_collection_offset < i64::MAX && self.collection_size > 0 {
+                // The collection occupies memory from min_collection_offset down to min_collection_offset - collection_size
+                // We need to ensure stack_offset stays below (more negative than) the collection
+                let collection_end = self.min_collection_offset - self.collection_size;
+                if self.stack_offset >= collection_end {
+                    // Allocate right below the collection
+                    self.stack_offset = collection_end - 8;
+                }
+            }
+            
             let offset = self.stack_offset;
             self.var_locations.insert(var_name, offset);
             self.stack_offset -= 8;

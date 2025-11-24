@@ -13,6 +13,7 @@ pub mod error_recovery;
 pub mod profiling;
 pub mod builtins;
 pub mod colors;
+pub mod string_methods;
 pub mod module_system;
 pub mod modules;
 pub mod module_visibility_enhanced;

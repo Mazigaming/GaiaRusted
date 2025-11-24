@@ -4,7 +4,7 @@ A complete Rust compiler implementation built from scratch in pure Rust with zer
 
 > **Note:** Previous repo got nuked lmao 💀 Fresh start ig
 
-**v0.7.0 - CURRENT STABLE** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
+**v0.8.0+ (DEVELOPMENT)** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
 
 * * *
 
@@ -158,27 +158,27 @@ src/
 ├── main.rs                      # Binary entry point
 ├── compiler.rs                  # Main compilation orchestrator
 │
-├── lexer/                       # Phase 1: Tokenization
+├── lexer/                       # Tokenization
 │   ├── mod.rs                   # Lexer implementation
 │   └── token.rs                 # Token definitions
 │
-├── parser/                      # Phase 2: Parsing
+├── parser/                      # Parsing
 │   ├── mod.rs                   # Parser implementation
 │   └── ast.rs                   # AST node definitions
 │
-├── lowering/                    # Phase 3: AST Lowering
+├── lowering/                    # AST Lowering
 │   └── mod.rs                   # HIR generation
 │
-├── typechecker/                 # Phase 4: Type Checking
+├── typechecker/                 # Type Checking
 │   └── mod.rs                   # Type inference & validation
 │
-├── borrowchecker/               # Phase 5: Borrow Checking
+├── borrowchecker/               # Borrow Checking
 │   └── mod.rs                   # Ownership & borrow analysis
 │
-├── mir/                         # Phase 6 & 7: MIR & Optimization
+├── mir/                         # MIR & Optimization
 │   └── mod.rs                   # Control flow graph construction
 │
-├── codegen/                     # Phase 8: Code Generation
+├── codegen/                     # Code Generation
 │   ├── mod.rs                   # x86-64 code generation
 │   └── object.rs                # ELF object file creation
 │
@@ -212,43 +212,43 @@ Object Writer ──────→ Output Format (ASM/OBJ/EXE/SH/LIB)
 Key Features
 ------------
 
-### Lexer (Phase 1)
+### Lexer
 *   ✅ Multi-character token recognition
 *   ✅ String and numeric literal parsing
 *   ✅ Keyword identification
 *   ✅ Comment handling
 
-### Parser (Phase 2)
+### Parser
 *   ✅ Recursive descent parsing
 *   ✅ Expression precedence handling
 *   ✅ Function and struct definitions
 *   ✅ Control flow constructs (if/else, loops)
 
-### Lowering (Phase 3)
+### Lowering
 *   ✅ Syntactic sugar removal (for loops → while)
 *   ✅ Pattern normalization
 *   ✅ Explicit type annotations
 *   ✅ Basic macro expansion
 
-### Type Checking (Phase 4)
+### Type Checking
 *   ✅ Type inference using Hindley-Milner algorithm
 *   ✅ Type unification
 *   ✅ Mismatch detection
 *   ✅ Function signature validation
 
-### Borrow Checking (Phase 5)
+### Borrow Checking
 *   ✅ Ownership tracking
 *   ✅ Move semantics enforcement
 *   ✅ Borrow validation (immutable & mutable)
 *   ✅ Use-after-move detection
 
-### MIR (Phase 6 & 7)
+### MIR & Optimization
 *   ✅ Control flow graph construction
 *   ✅ Basic block generation
 *   ✅ SSA-like form (each place assigned once)
 *   ✅ Terminator-based control flow
 
-### Code Generation (Phase 8)
+### Code Generation
 *   ✅ x86-64 instruction selection
 *   ✅ Register allocation (simplified)
 *   ✅ Stack frame management
@@ -304,7 +304,7 @@ cargo fmt && cargo clippy -- -D warnings
 Architecture Overview
 ---------------------
 
-### Phase Progression
+### Compilation Stages
 
 1. **Lexer** (src/lexer/mod.rs)
    - Input: Raw source code string
@@ -466,7 +466,7 @@ Standard Library
 
 GaiaRusted includes a comprehensive standard library with 77 built-in functions across multiple categories. See the roadmap section for detailed feature history across versions.
 
-### 📊 Test Results (v0.7.0)
+### 📊 Test Results (v0.8.0)
 
 ```
 Test Coverage:
@@ -480,11 +480,12 @@ Test Coverage:
   • Error messages:       ✅ Enhanced with classification
   • Type system:          ✅ Verified
   • Performance metrics:  ✅ Verified
-  • Enum support:         ✅ NEW - Full enum variant handling
+  • Enum variants:        ✅ Tuple variants fully working
+  • Pattern matching:     ✅ Works with all enum types
   
 Total: ✅ 1267+ tests passing
 Backward Compatibility: ✅ 100%
-Total Lines of Code: 55,000+ LOC
+Total Lines of Code: 56,000+ LOC
 ```
 
 Run the test suite:
@@ -494,7 +495,7 @@ cargo test --lib --tests
 
 * * *
 
-✨ v0.7.0 Features (CURRENT STABLE)
+✨ v0.8.0 Features (CURRENT STABLE)
 ------------------
 
 ### Closure Variable Capture 🔥
@@ -960,7 +961,7 @@ Roadmap
 *   ✅ Community package registry
 *   ✅ Workspace support enhancements
 
-### ✅ v0.7.0 (Released) ✨ **CURRENT STABLE**
+### ✅ v0.7.0 (Released) ✨
 
 **Error Handling & Classification:**
 *   ✅ Enhanced error system with ErrorKind classification
@@ -985,25 +986,117 @@ Roadmap
 *   ✅ Comprehensive error reporting with source file display
 *   ✅ Improved compilation statistics and timing
 
-### 📋 v0.8.0 (Planned)
+### ✅ v0.8.0 (Released) ✨ **CURRENT STABLE**
 
-**Advanced Features:**
-*   Tuple and Struct enum variants (EnumName::Variant(x, y))
-*   Pattern matching improvements for enum variants
-*   Additional optimization passes
-*   Performance profiling enhancements
+**Tuple Enum Variants:**
+*   ✅ Full support for tuple enum variants (EnumName::Variant(x, y))
+*   ✅ Multiple arguments per variant
+*   ✅ Type checking for tuple variant arguments
+*   ✅ Pattern matching on tuple variant arguments
+*   ✅ MIR lowering support for tuple variants
+*   Example: `Result::Ok(200)`, `Message::Text(10, 20)`
 
-**Standard Library Expansion:**
-*   Extended iterator combinators
-*   More string utilities
-*   Enhanced file I/O operations
-*   Path manipulation utilities
+**Struct Enum Variants:**
+*   ✅ Support for enum struct literal syntax (EnumName::Variant { field: value })
+*   ✅ Full lowering support for struct enum variants through compilation pipeline
+*   ✅ Enhanced HirExpression with EnumStructVariant variant
+*   ✅ Type checking and type inference for named enum fields
+*   ✅ Borrow checking integration for struct variants
+*   ✅ MIR lowering support with proper field evaluation
+*   Example: `Message::Text { content: "hello" }`, `Request::Post { url: "api.com", body: data }`
 
-**Debugging & Tools:**
-*   Better source location tracking (precise line numbers)
-*   Extended error recovery
-*   Performance optimization reports
-*   Memory usage analytics
+**Enhanced Pattern Matching:**
+*   ✅ Pattern matching works seamlessly with tuple and struct enum variants
+*   ✅ Argument extraction in match arms
+*   ✅ Exhaustiveness checking with variant arguments
+*   ✅ Guard expressions with tuple and struct variant patterns
+
+**Standard Library:**
+*   ✅ File I/O enhancements (create, append, truncate modes)
+*   ✅ Extended iterator combinators (zip, enumerate, skip_while)
+*   ✅ Additional string utilities (trim, split, replace, to_uppercase)
+*   ✅ Path manipulation utilities (create_dir, create_dir_all, etc.)
+*   ✅ Optimization infrastructure (constant folding, dead code elimination)
+*   ✅ Performance profiling enhancements and timing reports
+
+**Iterator Fusion Optimization (Complete)**
+*   ✅ Filter guard branching with conditional skipping
+*   ✅ Parameter substitution in closure inlining
+*   ✅ Variable renaming framework for closure locals
+*   ✅ Loop continuation blocks for proper control flow
+*   ✅ Multi-operation fusion (map, filter, fold chains)
+*   ✅ Specialized terminal operations (sum, count, any, all, collect)
+*   ✅ Closure body inlining with proper scoping
+*   ✅ Test suite: 100+ tests passing
+
+**Advanced Iterator Fusion Optimizations (Complete)**
+*   ✅ **Variable Conflict Resolution** - Auto-detect and rename shadowing variables
+*     - Detects conflicts between closure locals and loop variables
+*     - Automatic renaming (x → x_closure_0) 
+*     - Prevents variable shadowing bugs in multi-closure chains
+*   ✅ **SIMD Code Generation Framework** - Vectorization opportunity detection
+*     - Recognizes SIMD-friendly patterns (arithmetic chains)
+*     - Estimates speedup (4-16x potential)
+*     - Defaults to AVX2 (4x parallelism)
+*   ✅ **Loop Unrolling Infrastructure** - Adaptive unrolling
+*     - 1-2 ops: 1x (no unroll)
+*     - 3-4 ops: 2x unroll
+*     - 5+ ops: 4x unroll
+*     - Reduces branch misprediction penalties
+*   ✅ **Cross-Function Fusion Detection** - Inlineable function identification
+*     - Identifies functions that could be inlined into fusion chains
+*     - Safety analysis framework for function inlining
+*   ✅ Framework complete and tested
+
+**Compiler Type System Fixes:**
+*   ✅ Context-aware type inference for array literals
+*   ✅ Integer type coercion (i32 ↔ i64 with promotion to i64)
+*   ✅ Binary operation type checking with implicit casting
+*   ✅ Type annotation propagation through expression inference
+*   ✅ Fixed array element type mismatch errors
+
+**Examples & Testing:**
+*   ✅ 1267+ unit tests all passing
+*   ✅ Phase 3 iterator fusion tests: 100+ passing
+*   ✅ Phase 4 framework tests: All passing
+*   ✅ Comprehensive enum variant examples (simple_enum, enum_variants, struct_enum_variants, request_response, option_patterns, expression_eval)
+*   ✅ All examples compile successfully and generate efficient assembly
+*   ✅ Full backward compatibility with v0.7.0 code
+
+**Code Quality:**
+*   ✅ Zero compilation errors across all compiler phases
+*   ✅ Full integration testing completed
+*   ✅ Performance maintained (compilation time ~20-40ms)
+*   ✅ Clean architecture with modular phase handling
+*   ✅ 56,000+ lines of code total
+*   ✅ 450+ lines added for Phase 4 framework
+
+### 🚀 v0.9.0 (PLANNED)
+
+**Optimization Pipeline Extensions:**
+*   SIMD instruction emission (SSE2/AVX2 actual code generation)
+*   Tail loop generation for unrolled iterations
+*   Cross-function inlining into fusion chains
+*   Enhanced register pressure analysis
+*   Cache-aware loop tiling
+
+**Memory & Performance:**
+*   Escape analysis for stack vs heap allocation
+*   Reference counting optimization
+*   Lifetime-based memory pool allocation
+*   Performance regression detection in test suite
+
+**Language Features:**
+*   Impl blocks for types (e.g., `impl MyType { fn method() {} }`)
+*   Associated constants and type aliases
+*   Const evaluation and compile-time computation
+*   Type-level constraints and bounds
+
+**Tooling & Diagnostics:**
+*   Enhanced compiler diagnostics with fix suggestions
+*   Performance profiling integration
+*   Code coverage reporting
+*   Incremental compilation improvements
 
 ### 📋 v1.0.0 (Vision)
 
@@ -1041,4 +1134,4 @@ Quick Links
 
 * * *
 
-**Made with 🦀 Rust** | Built in memory of Terry Davis and my mental insanity | GaiaRusted v0.7.0 STABLE
+**Made with 🦀 Rust** | Built in memory of Terry Davis and my mental insanity | GaiaRusted v0.8.0+

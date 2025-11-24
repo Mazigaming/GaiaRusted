@@ -11,6 +11,7 @@
 pub mod option_result;
 pub mod collections_traits;
 pub mod io_operations;
+pub mod advanced_file_io;
 pub mod formatting;
 pub mod stdlib_expanded;
 pub mod smart_pointers;

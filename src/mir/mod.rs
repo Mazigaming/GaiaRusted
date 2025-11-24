@@ -245,10 +245,21 @@ impl fmt::Display for MirFunction {
     }
 }
 
+/// Global constant or static variable
+#[derive(Debug, Clone)]
+pub struct GlobalItem {
+    pub name: String,
+    pub is_static: bool,
+    pub is_mutable: bool,
+    pub value: i64,  // simplified: support i64 values for now
+    pub is_string: bool,  // if true, value is a string constant index
+}
+
 /// MIR for the entire program
 #[derive(Debug, Clone)]
 pub struct Mir {
     pub functions: Vec<MirFunction>,
+    pub globals: Vec<GlobalItem>,
 }
 
 /// MIR builder
@@ -319,6 +330,7 @@ pub struct MirLowerer {
     closure_counter: usize,
     generated_functions: Vec<MirFunction>,
     closure_vars: std::collections::HashMap<String, (String, Vec<(String, HirType)>)>, // Maps variable name -> (function name, captures)
+    available_functions: std::collections::HashSet<String>, // All functions that exist (including qualified names)
 }
 
 impl MirLowerer {
@@ -329,6 +341,7 @@ impl MirLowerer {
             closure_counter: 0,
             generated_functions: Vec::new(),
             closure_vars: std::collections::HashMap::new(),
+            available_functions: std::collections::HashSet::new(),
         }
     }
 
@@ -374,8 +387,81 @@ impl MirLowerer {
 
     /// Lower all items to MIR
     pub fn lower_items(&mut self, items: &[HirItem]) -> MirResult<Mir> {
+        // First pass: collect all available function names (including qualified ones)
+        self.collect_available_functions(items, "");
+        
         let mut functions = Vec::new();
+        let mut globals = Vec::new();
+        
+        // Collect global constants and statics
+        self.collect_globals_recursive(items, &mut globals)?;
+        
+        self.lower_items_recursive(items, "", &mut functions)?;
 
+        // Add any generated closure functions
+        functions.extend(self.generated_functions.drain(..));
+
+        Ok(Mir { functions, globals })
+    }
+
+    fn collect_available_functions(&mut self, items: &[HirItem], module_prefix: &str) {
+        for item in items {
+            match item {
+                HirItem::Function { name, .. } => {
+                    let full_name = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+                    self.available_functions.insert(full_name);
+                }
+                HirItem::Module { name, items: module_items, .. } => {
+                    let new_prefix = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+                    self.collect_available_functions(module_items, &new_prefix);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Collect global constants and static variables recursively
+    fn collect_globals_recursive(&mut self, items: &[HirItem], globals: &mut Vec<GlobalItem>) -> MirResult<()> {
+        for item in items {
+            match item {
+                HirItem::Const { name, ty: _, is_public: _, generics: _ } => {
+                    // For now, const values are compiled away (inlined)
+                    // We still track them for future reference
+                    globals.push(GlobalItem {
+                        name: name.clone(),
+                        is_static: false,
+                        is_mutable: false,
+                        value: 0,  // placeholder
+                        is_string: false,
+                    });
+                }
+                HirItem::Static { name, ty: _, is_mutable, is_public: _, generics: _ } => {
+                    globals.push(GlobalItem {
+                        name: name.clone(),
+                        is_static: true,
+                        is_mutable: *is_mutable,
+                        value: 0,  // placeholder
+                        is_string: false,
+                    });
+                }
+                HirItem::Module { items: module_items, .. } => {
+                    self.collect_globals_recursive(module_items, globals)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn lower_items_recursive(&mut self, items: &[HirItem], module_prefix: &str, functions: &mut Vec<MirFunction>) -> MirResult<()> {
         for item in items {
             match item {
                 HirItem::Function {
@@ -397,8 +483,14 @@ impl MirLowerer {
                         mir_builder.set_terminator(Terminator::Return(None));
                     }
 
+                    let full_name = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+
                     let func = MirFunction {
-                        name: name.clone(),
+                        name: full_name,
                         params: params.clone(),
                         return_type: return_type.clone().unwrap_or(HirType::Unknown),
                         basic_blocks: mir_builder.finish(),
@@ -407,17 +499,27 @@ impl MirLowerer {
                 }
                 HirItem::Struct { .. } => {
                 }
+                HirItem::Module { name, items: module_items, .. } => {
+                    let new_prefix = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+                    self.lower_items_recursive(module_items, &new_prefix, functions)?;
+                }
+                HirItem::Const { .. } => {
+                    // Constants don't generate code
+                }
+                HirItem::Static { .. } => {
+                    // Statics don't generate code in our simplified implementation
+                }
                 HirItem::AssociatedType { .. } => {
                 }
                 HirItem::Use { .. } => {
                 }
             }
         }
-
-        // Add any generated closure functions
-        functions.extend(self.generated_functions.drain(..));
-
-        Ok(Mir { functions })
+        Ok(())
     }
 
     /// Lower a statement
@@ -625,9 +727,37 @@ impl MirLowerer {
                 }
             }
 
-            HirStatement::Item(_) => {
-                // Nested items are not lowered to MIR at this level
-                // They are processed separately during compilation
+            HirStatement::Item(item) => {
+                // Extract inner functions and add them to generated functions
+                if let HirItem::Function {
+                    name,
+                    params,
+                    return_type,
+                    body,
+                    ..
+                } = &**item
+                {
+                    let mut inner_builder = MirBuilder::new();
+                    for stmt in body {
+                        self.lower_statement_in_builder(&mut inner_builder, stmt)?;
+                    }
+                    
+                    if matches!(inner_builder.blocks[inner_builder.current_block].terminator, Terminator::Unreachable) {
+                        inner_builder.set_terminator(Terminator::Return(None));
+                    }
+                    
+                    let func = MirFunction {
+                        name: name.clone(),
+                        params: params.clone(),
+                        return_type: return_type.clone().unwrap_or(HirType::Unknown),
+                        basic_blocks: inner_builder.finish(),
+                    };
+                    
+                    // Register the inner function as an available function
+                    self.available_functions.insert(name.clone());
+                    self.generated_functions.push(func);
+                }
+                // Other nested items are ignored for now
             }
         }
         Ok(())
@@ -686,10 +816,53 @@ impl MirLowerer {
                     }
                 }
                 
+                // Check if this is an unresolved method call
+                // Try to find a qualified version: if we call "foo" and it's not in available_functions,
+                // check if it's actually a method call
+                if !self.available_functions.contains(&func_name) && !func_name.contains("::") {
+                    // This might be a method call. Check if first argument can resolve the type
+                    if !args.is_empty() {
+                        // Try to infer the type of the first argument from available qualified methods
+                        // Look for Type::func_name pattern
+                        for available_func in &self.available_functions {
+                            if available_func.ends_with(&format!("::{}", func_name)) {
+                                func_name = available_func.clone();
+                                break;
+                            }
+                        }
+                    }
+                }
+                
                 for arg in args {
-                    let temp = builder.gen_temp();
-                    self.lower_expression_to_place(builder, arg, Place::Local(temp.clone()))?;
-                    mir_args.push(Operand::Copy(Place::Local(temp)));
+                    // Optimization: Skip creating temps for simple variable references and literals
+                    match arg {
+                        HirExpression::Variable(var_name) => {
+                            // It's just a variable reference, use it directly
+                            mir_args.push(Operand::Copy(Place::Local(var_name.clone())));
+                        }
+                        HirExpression::Integer(n) => {
+                            // It's a constant integer, use directly without temp
+                            mir_args.push(Operand::Constant(Constant::Integer(*n)));
+                        }
+                        HirExpression::Float(f) => {
+                            // It's a constant float, use directly without temp
+                            mir_args.push(Operand::Constant(Constant::Float(*f)));
+                        }
+                        HirExpression::String(s) => {
+                            // It's a constant string, use directly without temp
+                            mir_args.push(Operand::Constant(Constant::String(s.clone())));
+                        }
+                        HirExpression::Bool(b) => {
+                            // It's a constant bool, use directly without temp
+                            mir_args.push(Operand::Constant(Constant::Bool(*b)));
+                        }
+                        _ => {
+                            // Need to evaluate the expression
+                            let temp = builder.gen_temp();
+                            self.lower_expression_to_place(builder, arg, Place::Local(temp.clone()))?;
+                            mir_args.push(Operand::Copy(Place::Local(temp)));
+                        }
+                    }
                 }
 
                 builder.add_statement(place, Rvalue::Call(func_name, mir_args));
@@ -896,7 +1069,18 @@ impl MirLowerer {
                 
                 builder.switch_block(continue_block);
             }
-            HirExpression::EnumVariant { enum_name: _, variant_name: _ } => {
+            HirExpression::EnumVariant { enum_name: _, variant_name: _, args } => {
+                for arg in args {
+                    let temp = builder.gen_temp();
+                    self.lower_expression_to_place(builder, arg, Place::Local(temp))?;
+                }
+                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+            }
+            HirExpression::EnumStructVariant { enum_name: _, variant_name: _, fields } => {
+                for (_, field_expr) in fields {
+                    let temp = builder.gen_temp();
+                    self.lower_expression_to_place(builder, field_expr, Place::Local(temp))?;
+                }
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
             }
         }

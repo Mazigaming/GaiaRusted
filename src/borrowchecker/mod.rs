@@ -363,6 +363,13 @@ impl BorrowChecker {
                 }
                 HirItem::Struct { .. } => {
                 }
+                HirItem::Module { items, .. } => {
+                    self.check_items(items)?;
+                }
+                HirItem::Const { .. } => {
+                }
+                HirItem::Static { .. } => {
+                }
                 HirItem::AssociatedType { .. } => {
                 }
                 HirItem::Use { .. } => {
@@ -574,6 +581,13 @@ impl BorrowChecker {
             }
 
             HirExpression::StructLiteral { fields, .. } => {
+                for (_, expr) in fields {
+                    self.check_expression(expr)?;
+                }
+                Ok(())
+            }
+
+            HirExpression::EnumStructVariant { fields, .. } => {
                 for (_, expr) in fields {
                     self.check_expression(expr)?;
                 }

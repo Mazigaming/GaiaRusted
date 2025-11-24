@@ -349,6 +349,27 @@ impl Parser {
 
     /// Parse a top-level item (function, struct, enum, trait, impl, mod, use)
     fn parse_item(&mut self) -> ParseResult<Item> {
+        // Skip attributes (#[...])
+        while self.check(&Token::Hash) {
+            self.advance(); // consume #
+            if self.check(&Token::LeftBracket) {
+                self.advance(); // consume [
+                // Skip until we find the matching ]
+                let mut bracket_depth = 1;
+                while bracket_depth > 0 && self.current() != &Token::Eof {
+                    match self.current() {
+                        Token::LeftBracket => bracket_depth += 1,
+                        Token::RightBracket => bracket_depth -= 1,
+                        _ => {}
+                    }
+                    self.advance();
+                }
+            } else {
+                // Malformed attribute, but continue parsing
+                break;
+            }
+        }
+
         // Handle visibility modifiers (pub, etc.)
         let is_pub = if self.check(&Token::Keyword(Keyword::Pub)) {
             self.advance();
@@ -356,6 +377,15 @@ impl Parser {
         } else {
             false
         };
+
+        // Handle extern functions (skip the ABI string)
+        if self.check(&Token::Keyword(Keyword::Extern)) {
+            self.advance();
+            // Skip the ABI string (e.g., "C")
+            if let Token::String(_) = self.current() {
+                self.advance();
+            }
+        }
 
         match self.current() {
             Token::Keyword(Keyword::Fn) => self.parse_function(),
@@ -365,9 +395,11 @@ impl Parser {
             Token::Keyword(Keyword::Impl) => self.parse_impl(),
             Token::Keyword(Keyword::Mod) => self.parse_module(),
             Token::Keyword(Keyword::Use) => self.parse_use(is_pub),
+            Token::Keyword(Keyword::Const) => self.parse_const_item(is_pub),
+            Token::Keyword(Keyword::Static) => self.parse_static_item(is_pub),
             Token::Keyword(Keyword::MacroRules) => self.parse_macro_rules_item(),
             _ => Err(ParseError::InvalidSyntax(
-                "Expected function, struct, enum, trait, impl, mod, use, or macro_rules definition".to_string(),
+                "Expected function, struct, enum, trait, impl, mod, use, const, static, or macro_rules definition".to_string(),
             )),
         }
     }
@@ -603,6 +635,68 @@ impl Parser {
     /// Parse a type
     fn parse_type(&mut self) -> ParseResult<Type> {
         match self.current() {
+            Token::Keyword(Keyword::Impl) => {
+                // Parse impl Trait syntax: impl Trait, impl Trait1 + Trait2
+                self.advance();
+                
+                let mut bounds = Vec::new();
+                
+                // Parse first trait bound
+                if let Token::Identifier(trait_name) = self.current() {
+                    bounds.push(trait_name.clone());
+                    self.advance();
+                } else {
+                    return Err(ParseError::InvalidSyntax("Expected trait name after 'impl'".to_string()));
+                }
+                
+                // Parse additional trait bounds
+                while self.check(&Token::Plus) {
+                    self.advance();
+                    
+                    if let Token::Identifier(trait_name) = self.current() {
+                        bounds.push(trait_name.clone());
+                        self.advance();
+                    } else {
+                        return Err(ParseError::InvalidSyntax("Expected trait name after '+'".to_string()));
+                    }
+                }
+                
+                Ok(Type::ImplTrait { bounds })
+            }
+            Token::Keyword(Keyword::Dyn) => {
+                // Parse dyn Trait syntax: dyn Trait, dyn Trait + OtherTrait, dyn Trait + 'a
+                self.advance();
+                
+                let mut bounds = Vec::new();
+                let mut lifetime = None;
+                
+                // Parse first trait bound
+                if let Token::Identifier(trait_name) = self.current() {
+                    bounds.push(trait_name.clone());
+                    self.advance();
+                } else {
+                    return Err(ParseError::InvalidSyntax("Expected trait name after 'dyn'".to_string()));
+                }
+                
+                // Parse additional bounds and lifetime
+                while self.check(&Token::Plus) {
+                    self.advance();
+                    
+                    // Check for lifetime
+                    if let Token::Lifetime(lt) = self.current() {
+                        lifetime = Some(lt.clone());
+                        self.advance();
+                    } else if let Token::Identifier(trait_name) = self.current() {
+                        // Another trait bound
+                        bounds.push(trait_name.clone());
+                        self.advance();
+                    } else {
+                        return Err(ParseError::InvalidSyntax("Expected trait name or lifetime after '+'".to_string()));
+                    }
+                }
+                
+                Ok(Type::TraitObject { bounds, lifetime })
+            }
             Token::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
@@ -661,9 +755,28 @@ impl Parser {
             Token::LeftBracket => {
                 self.advance();
                 let element = Box::new(self.parse_type()?);
-                // Simple array without size for now
+                
+                // Check for sized array [T; N]
+                let size = if self.check(&Token::Semicolon) {
+                    self.advance();
+                    // Parse the size expression - could be a literal or identifier
+                    if let Token::Integer(n, _) = self.current() {
+                        let size_val = *n;
+                        self.advance();
+                        Some(Box::new(Expression::Integer(size_val)))
+                    } else if let Token::Identifier(name) = self.current() {
+                        let size_name = name.clone();
+                        self.advance();
+                        Some(Box::new(Expression::Variable(size_name)))
+                    } else {
+                        return Err(ParseError::InvalidSyntax("Expected array size (integer or identifier)".to_string()));
+                    }
+                } else {
+                    None
+                };
+                
                 self.consume("]")?;
-                Ok(Type::Array { element, size: None })
+                Ok(Type::Array { element, size })
             }
             Token::Star => {
                 self.advance();
@@ -1466,15 +1579,18 @@ impl Parser {
                             "Expected '(' or '[' after macro '!'".to_string(),
                         ));
                     }
-                } else if self.check(&Token::LeftParen) && path.len() == 1 {
+                } else if self.check(&Token::LeftParen) {
+                    // Handle function calls: simple `func()` or associated `Type::func()`
                     self.advance();
                     let args = self.parse_arguments()?;
                     self.consume(")")?;
-                    Ok(Expression::FunctionCall { name: path[0].clone(), args })
-                } else if self.check(&Token::LeftBrace) && matches!(self.restrictions, Restrictions::None) && path.len() == 1 {
-                    // Struct literal: Name { field: value, ... } or Name { field, ... } (shorthand)
-                    // Only parse as struct literal if restrictions allow it
-                    // (NoStructLiteral is used in contexts like `for x in EXPR {`, where the `{` is a loop body, not struct fields)
+                    // For now, join path with :: to create a qualified name
+                    let func_name = path.join("::");
+                    Ok(Expression::FunctionCall { name: func_name, args })
+                } else if self.check(&Token::LeftBrace) && matches!(self.restrictions, Restrictions::None) {
+                    // Struct literal or Enum struct literal
+                    // Struct literal: Name { field: value, ... } (path.len() == 1)
+                    // Enum struct literal: EnumName::VariantName { field: value, ... } (path.len() == 2)
                     self.advance();
                     let mut fields = Vec::new();
                     
@@ -1498,10 +1614,23 @@ impl Parser {
                     }
                     
                     self.consume("}")?;
-                    Ok(Expression::StructLiteral {
-                        struct_name: path[0].clone(),
-                        fields,
-                    })
+                    
+                    if path.len() == 1 {
+                        Ok(Expression::StructLiteral {
+                            struct_name: path[0].clone(),
+                            fields,
+                        })
+                    } else if path.len() == 2 {
+                        Ok(Expression::EnumStructLiteral {
+                            enum_name: path[0].clone(),
+                            variant_name: path[1].clone(),
+                            fields,
+                        })
+                    } else {
+                        Err(ParseError::InvalidSyntax(
+                            "Invalid struct literal path".to_string(),
+                        ))
+                    }
                 } else if path.len() > 1 {
                     Ok(Expression::Path {
                         segments: path,
@@ -1729,8 +1858,20 @@ impl Parser {
                         let inner = if self.check(&Token::RightParen) {
                             None
                         } else {
-                            let pat = self.parse_pattern()?;
-                            Some(Box::new(pat))
+                            // Parse multiple patterns for tuple variants
+                            let mut patterns = Vec::new();
+                            patterns.push(self.parse_pattern()?);
+                            while !self.check(&Token::RightParen) && self.check(&Token::Comma) {
+                                self.advance(); // consume comma
+                                if !self.check(&Token::RightParen) {
+                                    patterns.push(self.parse_pattern()?);
+                                }
+                            }
+                            if patterns.len() == 1 {
+                                Some(Box::new(patterns.pop().unwrap()))
+                            } else {
+                                Some(Box::new(Pattern::Tuple(patterns)))
+                            }
                         };
                         self.consume(")")?;
                         inner
@@ -1747,8 +1888,20 @@ impl Parser {
                     let inner_pattern = if self.check(&Token::RightParen) {
                         None
                     } else {
-                        let pat = self.parse_pattern()?;
-                        Some(Box::new(pat))
+                        // Parse multiple patterns for tuple variants
+                        let mut patterns = Vec::new();
+                        patterns.push(self.parse_pattern()?);
+                        while !self.check(&Token::RightParen) && self.check(&Token::Comma) {
+                            self.advance(); // consume comma
+                            if !self.check(&Token::RightParen) {
+                                patterns.push(self.parse_pattern()?);
+                            }
+                        }
+                        if patterns.len() == 1 {
+                            Some(Box::new(patterns.pop().unwrap()))
+                        } else {
+                            Some(Box::new(Pattern::Tuple(patterns)))
+                        }
                     };
                     self.consume(")")?;
                     Pattern::EnumVariant {
@@ -1907,9 +2060,17 @@ impl Parser {
             self.consume("|")?;
         }
         
+        // Check for return type annotation: -> Type
+        let return_type = if self.check(&Token::Arrow) {
+            self.advance();
+            Some(Box::new(self.parse_type()?))
+        } else {
+            None
+        };
+        
         let body = Box::new(self.parse_expression()?);
         
-        Ok(Expression::Closure { params, body, is_move })
+        Ok(Expression::Closure { params, return_type, body, is_move })
     }
 
     /// Parse enum definition: `enum Name { Variant1, Variant2(Type), ... }`
@@ -2176,6 +2337,51 @@ impl Parser {
             path,
             is_glob,
             is_public,
+            attributes: Vec::new(),
+        })
+    }
+
+    /// Parse a const item: const NAME: Type = value;
+    fn parse_const_item(&mut self, is_public: bool) -> ParseResult<Item> {
+        self.expect_keyword(Keyword::Const)?;
+        let name = self.expect_identifier()?;
+        self.consume(":")?;
+        let ty = self.parse_type()?;
+        self.consume("=")?;
+        let value = self.parse_expression()?;
+        self.consume(";")?;
+        
+        Ok(Item::Const {
+            name,
+            ty,
+            value,
+            is_pub: is_public,
+            attributes: Vec::new(),
+        })
+    }
+
+    /// Parse a static item: static NAME: Type = value; or static mut NAME: Type = value;
+    fn parse_static_item(&mut self, is_public: bool) -> ParseResult<Item> {
+        self.expect_keyword(Keyword::Static)?;
+        let is_mutable = if self.check(&Token::Keyword(Keyword::Mut)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        let name = self.expect_identifier()?;
+        self.consume(":")?;
+        let ty = self.parse_type()?;
+        self.consume("=")?;
+        let value = self.parse_expression()?;
+        self.consume(";")?;
+        
+        Ok(Item::Static {
+            name,
+            ty,
+            value,
+            is_mutable,
+            is_pub: is_public,
             attributes: Vec::new(),
         })
     }

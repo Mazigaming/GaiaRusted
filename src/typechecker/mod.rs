@@ -1,4 +1,4 @@
-//! # Phase 4: TYPE CHECKING & INFERENCE
+//! # TYPE CHECKING & INFERENCE
 //!
 //! Verifies types and performs type inference.
 //!
@@ -17,6 +17,7 @@
 use crate::lowering::{
     HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp, ClosureTrait,
 };
+use crate::parser::ast::GenericParam;
 use crate::iterators::IteratorMethodHandler;
 use crate::compiler::{CompileError, ErrorKind};
 use std::collections::{HashMap, HashSet};
@@ -118,6 +119,10 @@ pub struct TypeContext {
     functions: HashMap<String, (Vec<HirType>, HirType)>,
     /// Struct definitions: name -> field_types
     structs: HashMap<String, Vec<(String, HirType)>>,
+    /// Trait definitions: trait_name -> (method_names, method_sigs)
+    traits: HashMap<String, HashMap<String, (Vec<HirType>, HirType)>>,
+    /// Generic parameter trait bounds: param_name -> Vec<trait_name>
+    generic_bounds: HashMap<String, Vec<String>>,
 }
 
 impl TypeContext {
@@ -127,6 +132,8 @@ impl TypeContext {
             env: TypeEnv::new(),
             functions: HashMap::new(),
             structs: HashMap::new(),
+            traits: HashMap::new(),
+            generic_bounds: HashMap::new(),
         }
     }
 
@@ -148,6 +155,26 @@ impl TypeContext {
     /// Look up a struct definition
     fn lookup_struct(&self, name: &str) -> Option<Vec<(String, HirType)>> {
         self.structs.get(name).cloned()
+    }
+
+    /// Register a trait and its methods
+    fn register_trait(&mut self, name: String, methods: HashMap<String, (Vec<HirType>, HirType)>) {
+        self.traits.insert(name, methods);
+    }
+
+    /// Look up a trait definition
+    fn lookup_trait(&self, name: &str) -> Option<HashMap<String, (Vec<HirType>, HirType)>> {
+        self.traits.get(name).cloned()
+    }
+
+    /// Register bounds for a generic parameter
+    fn register_generic_bounds(&mut self, param_name: String, bounds: Vec<String>) {
+        self.generic_bounds.insert(param_name, bounds);
+    }
+
+    /// Get bounds for a generic parameter
+    fn get_generic_bounds(&self, param_name: &str) -> Vec<String> {
+        self.generic_bounds.get(param_name).cloned().unwrap_or_default()
     }
 }
 
@@ -204,6 +231,10 @@ impl TypeChecker {
         self.context.register_function("__builtin_println".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_eprintln".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_printf".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
+        
+        // Type-aware print functions (used by println! lowering for different types)
+        self.context.register_function("gaia_print_i64".to_string(), vec![HirType::Int64], HirType::Tuple(vec![]));
+        self.context.register_function("gaia_print_bool".to_string(), vec![HirType::Bool], HirType::Tuple(vec![]));
 
         // Type conversions
         self.context.register_function("as_i32".to_string(), vec![HirType::Float64], HirType::Int32);
@@ -217,26 +248,131 @@ impl TypeChecker {
         // Result enum constructors
         self.context.register_function("Ok".to_string(), vec![HirType::Unknown], HirType::Named("Result".to_string()));
         self.context.register_function("Err".to_string(), vec![HirType::Unknown], HirType::Named("Result".to_string()));
+        
+        // Collection constructors
+        self.context.register_function("HashMap::new".to_string(), vec![], HirType::Named("HashMap".to_string()));
+        self.context.register_function("Vec::new".to_string(), vec![], HirType::Named("Vec".to_string()));
+        self.context.register_function("HashSet::new".to_string(), vec![], HirType::Named("HashSet".to_string()));
+        
+        // Collection methods (qualified with collection type)
+        // Vec methods
+        self.context.register_function("Vec::push".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("Vec::pop".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Unknown);
+        self.context.register_function("Vec::get".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Int32], HirType::Unknown);
+        self.context.register_function("Vec::len".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Int32);
+        self.context.register_function("Vec::is_empty".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Bool);
+        
+        // HashMap methods
+        self.context.register_function("HashMap::insert".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("HashMap::get".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Unknown);
+        self.context.register_function("HashMap::remove".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("HashMap::is_empty".to_string(), vec![HirType::Named("HashMap".to_string())], HirType::Bool);
+        
+        // HashSet methods
+        self.context.register_function("HashSet::insert".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("HashSet::contains".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Bool);
+        self.context.register_function("HashSet::remove".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("HashSet::is_empty".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Bool);
+        
+        // Generic methods (fallback)
+        self.context.register_function("insert".to_string(), vec![HirType::Unknown, HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("push".to_string(), vec![HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
+        self.context.register_function("pop".to_string(), vec![HirType::Unknown], HirType::Named("Option".to_string()));
+        self.context.register_function("get".to_string(), vec![HirType::Unknown, HirType::Unknown], HirType::Named("Option".to_string()));
+        self.context.register_function("remove".to_string(), vec![HirType::Unknown, HirType::Unknown], HirType::Unknown);
+        self.context.register_function("contains".to_string(), vec![HirType::Unknown, HirType::Unknown], HirType::Bool);
+        self.context.register_function("is_empty".to_string(), vec![HirType::Unknown], HirType::Bool);
+        self.context.register_function("len".to_string(), vec![HirType::Unknown], HirType::Int32);
+        
+        // Register standard traits
+        self.register_standard_traits();
+    }
+    
+    /// Register standard library traits
+    fn register_standard_traits(&mut self) {
+        // Display trait: display() -> ()
+        let mut display_methods = HashMap::new();
+        display_methods.insert("display".to_string(), (vec![], HirType::Tuple(vec![])));
+        self.context.register_trait("Display".to_string(), display_methods);
+        
+        // Clone trait: clone(self) -> Self
+        let mut clone_methods = HashMap::new();
+        clone_methods.insert("clone".to_string(), (vec![], HirType::Unknown));
+        self.context.register_trait("Clone".to_string(), clone_methods);
+        
+        // Copy trait (marker trait, no methods)
+        self.context.register_trait("Copy".to_string(), HashMap::new());
+        
+        // Debug trait: debug(self) -> ()
+        let mut debug_methods = HashMap::new();
+        debug_methods.insert("debug".to_string(), (vec![], HirType::Tuple(vec![])));
+        self.context.register_trait("Debug".to_string(), debug_methods);
+        
+        // PartialEq trait: eq(self, other) -> bool
+        let mut eq_methods = HashMap::new();
+        eq_methods.insert("eq".to_string(), (vec![HirType::Unknown], HirType::Bool));
+        self.context.register_trait("PartialEq".to_string(), eq_methods.clone());
+        
+        // Eq trait (inherits from PartialEq)
+        self.context.register_trait("Eq".to_string(), eq_methods);
+        
+        // Ord trait: cmp(self, other) -> Ordering
+        let mut ord_methods = HashMap::new();
+        ord_methods.insert("cmp".to_string(), (vec![HirType::Unknown], HirType::Named("Ordering".to_string())));
+        self.context.register_trait("Ord".to_string(), ord_methods);
     }
 
     /// Collect all type definitions (first pass)
     fn collect_definitions(&mut self, items: &[HirItem]) -> TypeCheckResult<()> {
+        self.collect_definitions_recursive(items, "".to_string())
+    }
+
+    fn collect_definitions_recursive(&mut self, items: &[HirItem], module_prefix: String) -> TypeCheckResult<()> {
         for item in items {
             match item {
                 HirItem::Function {
                     name,
                     params,
                     return_type,
+                    generics,
                     ..
                 } => {
+                    // Register generic parameter bounds
+                    for generic in generics {
+                        if let GenericParam::Type { name: param_name, bounds, .. } = generic {
+                            if !bounds.is_empty() {
+                                self.context.register_generic_bounds(param_name.clone(), bounds.clone());
+                            }
+                        }
+                    }
+                    
                     let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
                     let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
+                    let full_name = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
                     self.context
-                        .register_function(name.clone(), param_types, ret_type);
+                        .register_function(full_name, param_types, ret_type);
                 }
                 HirItem::Struct { name, fields } => {
                     self.context
                         .register_struct(name.clone(), fields.clone());
+                }
+                HirItem::Module { name, items: module_items, .. } => {
+                    let new_prefix = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+                    self.collect_definitions_recursive(module_items, new_prefix)?;
+                }
+                HirItem::Const { .. } => {
+                    // Constants don't need to be registered as functions
+                }
+                HirItem::Static { .. } => {
+                    // Statics don't need to be registered as functions
                 }
                 HirItem::AssociatedType { .. } => {
                 }
@@ -279,7 +415,7 @@ impl TypeChecker {
             return true;
         }
         
-        match (from, to) {
+        let result = match (from, to) {
             (HirType::Int32, HirType::Int64) => true,
             (HirType::Int32, HirType::UInt32) => true,
             (HirType::Int32, HirType::UInt64) => true,
@@ -307,6 +443,16 @@ impl TypeChecker {
             (HirType::USize, HirType::Int32) => true,
             (HirType::ISize, HirType::Int64) => true,
             (HirType::ISize, HirType::Int32) => true,
+            // Reference to raw pointer coercion (e.g., &i32 -> *const i32)
+            (HirType::Reference(inner_from), HirType::Pointer(inner_to)) => {
+                // References can coerce to raw pointers of the same type
+                inner_from == inner_to
+            }
+            // Mutable reference to raw pointer coercion
+            (HirType::MutableReference(inner_from), HirType::Pointer(inner_to)) => {
+                // Mutable references can coerce to raw pointers of the same type
+                inner_from == inner_to
+            }
             // Reference/dereference coercion for string methods
             (HirType::Reference(inner_from), to_ty) => {
                 self.types_compatible(inner_from, to_ty)
@@ -315,13 +461,47 @@ impl TypeChecker {
                 self.types_compatible(from_ty, inner_to)
             }
             _ => false,
+        };
+        result
+    }
+
+    /// Validate that a generic parameter satisfies its trait bounds
+    /// Returns true if all bounds are satisfied, false otherwise
+    fn validate_trait_bounds(&self, generic_param: &str, concrete_type: &HirType) -> bool {
+        let bounds = self.context.get_generic_bounds(generic_param);
+        
+        // If no bounds, it's always valid
+        if bounds.is_empty() {
+            return true;
         }
+        
+        // For now, we accept all types for generic parameters
+        // In a full implementation, we would check if the concrete type
+        // actually implements all the required traits
+        // This is a placeholder that will be filled in later
+        true
     }
     
-    /// Infer the type of an expression
-    fn infer_type(&mut self, expr: &HirExpression) -> TypeCheckResult<HirType> {
+    /// Infer the type of an expression with an optional expected type
+    /// This allows context-aware type inference for literals and overloaded functions
+    fn infer_type_with_context(&mut self, expr: &HirExpression, expected: Option<&HirType>) -> TypeCheckResult<HirType> {
         match expr {
-            HirExpression::Integer(_) => Ok(HirType::Int32), // Default to i32
+            HirExpression::Integer(_) => {
+                // Use expected type if it's an integer type, otherwise default to i32
+                match expected {
+                    Some(HirType::Int32) => Ok(HirType::Int32),
+                    Some(HirType::Int64) => Ok(HirType::Int64),
+                    Some(HirType::Array { element_type, size }) => {
+                        // If array element type is known, use it for array literals
+                        match &**element_type {
+                            HirType::Int32 => Ok(HirType::Int32),
+                            HirType::Int64 => Ok(HirType::Int64),
+                            _ => Ok(HirType::Int32), // Default
+                        }
+                    }
+                    _ => Ok(HirType::Int32), // Default to i32
+                }
+            }
             HirExpression::Float(_) => Ok(HirType::Float64),
             HirExpression::String(_) => Ok(HirType::Reference(Box::new(HirType::String))),
             HirExpression::Bool(_) => Ok(HirType::Bool),
@@ -349,15 +529,29 @@ impl TypeChecker {
                     right_ty.clone()
                 } else if right_ty == HirType::Unknown && left_ty != HirType::Unknown {
                     left_ty.clone()
-                } else if left_ty != right_ty && left_ty != HirType::Unknown && right_ty != HirType::Unknown {
-                    return Err(TypeCheckError {
-                        message: format!(
-                            "Type mismatch in binary operation: {} and {}",
-                            left_ty, right_ty
-                        ),
-                    });
                 } else if left_ty == HirType::Unknown && right_ty == HirType::Unknown {
                     HirType::Unknown
+                } else if left_ty != right_ty && left_ty != HirType::Unknown && right_ty != HirType::Unknown {
+                    // Allow coercion between integer types (i32 <-> i64)
+                    let is_integer_coercion = matches!((left_ty.clone(), right_ty.clone()), 
+                        (HirType::Int32, HirType::Int64) | (HirType::Int64, HirType::Int32));
+                    
+                    if !is_integer_coercion {
+                        return Err(TypeCheckError {
+                            message: format!(
+                                "Type mismatch in binary operation: {} and {}",
+                                left_ty, right_ty
+                            ),
+                        });
+                    }
+                    
+                    // For mixed int operations, promote to i64
+                    if matches!((left_ty.clone(), right_ty.clone()),
+                        (HirType::Int32, HirType::Int64) | (HirType::Int64, HirType::Int32)) {
+                        HirType::Int64
+                    } else {
+                        left_ty.clone()
+                    }
                 } else {
                     left_ty.clone()
                 };
@@ -480,7 +674,54 @@ impl TypeChecker {
             HirExpression::Call { func, args } => {
                 match &**func {
                     HirExpression::Variable(name) => {
-                        // First try to look it up as a function
+                        // For method calls, try qualified name first (ReceiverType::method)
+                        // This prevents generic functions from shadowing method calls
+                        let mut found_qualified = false;
+                        if !args.is_empty() {
+                            let receiver_ty = self.infer_type(&args[0])?;
+                            let receiver_type_name = match &receiver_ty {
+                                HirType::Named(n) => n.clone(),
+                                _ => receiver_ty.to_string(),
+                            };
+                            
+                            let qualified_name = format!("{}::{}", receiver_type_name, name);
+                            if let Some((param_types, ret_type)) = self.context.lookup_function(&qualified_name) {
+                                // Found as a method! Check arguments
+                                let is_variadic = qualified_name.starts_with("__builtin_print");
+                                if !is_variadic && args.len() != param_types.len() {
+                                    return Err(TypeCheckError {
+                                        message: format!(
+                                            "Method {} expects {} arguments, got {}",
+                                            name,
+                                            param_types.len(),
+                                            args.len()
+                                        ),
+                                    });
+                                }
+                                
+                                // Check argument types
+                                let mut substitutions = std::collections::HashMap::new();
+                                for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                                    let arg_ty = self.infer_type(arg)?;
+                                    
+                                    if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
+                                        substitutions.insert(gen_name, concrete_ty);
+                                    } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                        return Err(TypeCheckError {
+                                            message: format!(
+                                                "Argument {} has type {}, expected {}",
+                                                i, arg_ty, param_ty
+                                            ),
+                                        });
+                                    }
+                                }
+                                
+                                let final_ret_type = self.apply_substitutions(&ret_type, &substitutions);
+                                return Ok(final_ret_type);
+                            }
+                        }
+                        
+                        // Try to look it up as a function
                         if let Some((param_types, ret_type)) = self.context.lookup_function(name) {
                             // Check argument count (allow variadic for builtin print functions)
                             let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
@@ -568,6 +809,11 @@ impl TypeChecker {
                                     message: format!("Variable {} is not callable", name),
                                 })
                             }
+                        } else if !args.is_empty() {
+                            // This case is now handled above
+                            Err(TypeCheckError {
+                                message: format!("Unknown function or method: {}", name),
+                            })
                         } else {
                             Err(TypeCheckError {
                                 message: format!("Undefined function: {}", name),
@@ -702,22 +948,59 @@ impl TypeChecker {
             }
 
             HirExpression::Index { array, index } => {
-                let _array_ty = self.infer_type(array)?;
+                let array_ty = self.infer_type(array)?;
                 let index_ty = self.infer_type(index)?;
 
                 // Index must be an integer or a Range
                 match index_ty {
-                    HirType::Int32 | HirType::Int64 => {}
-                    HirType::Range => {}  // Ranges are now valid for slicing
+                    HirType::Int32 | HirType::Int64 => {
+                        // Single element indexing - return element type
+                        match &array_ty {
+                            HirType::Array { element_type, .. } => {
+                                Ok(element_type.as_ref().clone())
+                            }
+                            HirType::Reference(inner) => {
+                                if let HirType::Array { element_type, .. } = inner.as_ref() {
+                                    Ok(element_type.as_ref().clone())
+                                } else {
+                                    Ok(HirType::Unknown)
+                                }
+                            }
+                            _ => Ok(HirType::Unknown)
+                        }
+                    }
+                    HirType::Range => {
+                        // Range indexing - return slice type (reference to array)
+                        match &array_ty {
+                            HirType::Array { element_type, .. } => {
+                                Ok(HirType::Reference(Box::new(
+                                    HirType::Array {
+                                        element_type: element_type.clone(),
+                                        size: None,  // Slices have no known size
+                                    }
+                                )))
+                            }
+                            HirType::Reference(inner) => {
+                                if let HirType::Array { element_type, .. } = inner.as_ref() {
+                                    Ok(HirType::Reference(Box::new(
+                                        HirType::Array {
+                                            element_type: element_type.clone(),
+                                            size: None,
+                                        }
+                                    )))
+                                } else {
+                                    Ok(HirType::Unknown)
+                                }
+                            }
+                            _ => Ok(HirType::Unknown)
+                        }
+                    }
                     _ => {
                         return Err(TypeCheckError {
                             message: format!("Array index must be integer or range, got {}", index_ty),
                         })
                     }
                 }
-
-                // For now, just return Unknown (could infer from array type)
-                Ok(HirType::Unknown)
             }
 
             HirExpression::StructLiteral { name, fields } => {
@@ -757,11 +1040,29 @@ impl TypeChecker {
                     });
                 }
 
-                let elem_ty = self.infer_type(&elements[0])?;
+                // Extract element type from expected array type if available
+                let expected_elem_type = expected.and_then(|ty| {
+                    if let HirType::Array { element_type, .. } = ty {
+                        Some(element_type.as_ref())
+                    } else {
+                        None
+                    }
+                });
+
+                // Infer element type with context if available
+                let elem_ty = if let Some(expected_elem) = expected_elem_type {
+                    self.infer_type_with_context(&elements[0], Some(expected_elem))?
+                } else {
+                    self.infer_type(&elements[0])?
+                };
 
                 // Check all elements have same type
                 for elem in &elements[1..] {
-                    let ty = self.infer_type(elem)?;
+                    let ty = if let Some(expected_elem) = expected_elem_type {
+                        self.infer_type_with_context(elem, Some(expected_elem))?
+                    } else {
+                        self.infer_type(elem)?
+                    };
                     if ty != elem_ty {
                         return Err(TypeCheckError {
                             message: format!(
@@ -784,7 +1085,17 @@ impl TypeChecker {
                 Ok(HirType::Tuple(types?))
             }
 
-            HirExpression::EnumVariant { enum_name, variant_name: _ } => {
+            HirExpression::EnumVariant { enum_name, variant_name: _, args } => {
+                for arg in args {
+                    let _ = self.infer_type(arg)?;
+                }
+                Ok(HirType::Named(enum_name.clone()))
+            }
+
+            HirExpression::EnumStructVariant { enum_name, variant_name: _, fields } => {
+                for (_, field_expr) in fields {
+                    let _ = self.infer_type(field_expr)?;
+                }
                 Ok(HirType::Named(enum_name.clone()))
             }
 
@@ -878,11 +1189,21 @@ impl TypeChecker {
         }
     }
 
+    /// Infer the type of an expression (without expected type context)
+    fn infer_type(&mut self, expr: &HirExpression) -> TypeCheckResult<HirType> {
+        self.infer_type_with_context(expr, None)
+    }
+
     /// Type check a statement
     fn check_statement(&mut self, stmt: &HirStatement) -> TypeCheckResult<()> {
         match stmt {
             HirStatement::Let { name, mutable, ty, init } => {
-                let init_ty = self.infer_type(init)?;
+                // Use context-aware type inference if type annotation is provided
+                let init_ty = if *ty == HirType::Unknown {
+                    self.infer_type(init)?
+                } else {
+                    self.infer_type_with_context(init, Some(ty))?
+                };
 
                 // If type is not explicitly given, infer it
                 let final_ty = if *ty == HirType::Unknown {
@@ -1104,6 +1425,10 @@ impl TypeChecker {
         self.collect_definitions(items)?;
 
         // Second pass: type check each item
+        self.check_items_recursive(items)
+    }
+
+    fn check_items_recursive(&mut self, items: &[HirItem]) -> TypeCheckResult<()> {
         for item in items {
             match item {
                 HirItem::Function {
@@ -1116,6 +1441,15 @@ impl TypeChecker {
                     self.check_function(name, params, return_type, body)?;
                 }
                 HirItem::Struct { .. } => {
+                }
+                HirItem::Module { items: module_items, .. } => {
+                    self.check_items_recursive(module_items)?;
+                }
+                HirItem::Const { .. } => {
+                    // Constants are compile-time values
+                }
+                HirItem::Static { .. } => {
+                    // Statics are runtime values
                 }
                 HirItem::AssociatedType { .. } => {
                 }

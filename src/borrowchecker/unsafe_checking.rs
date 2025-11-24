@@ -317,6 +317,14 @@ impl UnsafeChecker {
                 Ok(())
             }
             HirItem::Struct { .. } => Ok(()),
+            HirItem::Module { items, .. } => {
+                for item in items {
+                    self.check_item(item)?;
+                }
+                Ok(())
+            }
+            HirItem::Const { .. } => Ok(()),
+            HirItem::Static { .. } => Ok(()),
             HirItem::AssociatedType { .. } => Ok(()),
             HirItem::Use { .. } => Ok(()),
         }

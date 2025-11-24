@@ -346,7 +346,27 @@ impl Lexer {
         if self.current_char() == Some('\'') {
             if let Some(next_ch) = self.peek_char(1) {
                 match next_ch {
-                    'a'..='z' | 'A'..='Z' | '_' => true,
+                    'a'..='z' | 'A'..='Z' | '_' => {
+                        // Check if this is actually a lifetime (no closing quote following)
+                        // Lifetimes like 'a, 'static, '_ don't have a closing quote immediately after the identifier
+                        // Character literals like 'a', 'z' have a closing quote
+                        
+                        // Look ahead to check if there's a closing quote after the identifier
+                        let mut pos = 2; // Skip the opening quote and first letter
+                        while let Some(ch) = self.peek_char(pos) {
+                            if ch.is_alphanumeric() || ch == '_' {
+                                pos += 1;
+                            } else if ch == '\'' {
+                                // Found closing quote - this is a character literal, not a lifetime
+                                return false;
+                            } else {
+                                // Found something else - this is a lifetime
+                                return true;
+                            }
+                        }
+                        // No closing quote found - this is a lifetime
+                        true
+                    }
                     _ => false,
                 }
             } else {

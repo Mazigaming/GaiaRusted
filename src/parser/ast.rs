@@ -310,6 +310,13 @@ pub enum Expression {
         fields: Vec<(String, Expression)>,
     },
 
+    // Enum struct literal: `Message::Text { content: "hello" }`
+    EnumStructLiteral {
+        enum_name: String,
+        variant_name: String,
+        fields: Vec<(String, Expression)>,
+    },
+
     // Field access: `point.x`
     FieldAccess {
         object: Box<Expression>,
@@ -342,9 +349,10 @@ pub enum Expression {
         body: Block,
     },
 
-    // Closure/Lambda: `|x, y| x + y` or `|x: i32| x + 1`
+    // Closure/Lambda: `|x, y| x + y` or `|x: i32| x + 1` or `|x: i32| -> i32 { x + 1 }`
     Closure {
         params: Vec<(String, Option<Type>)>,
+        return_type: Option<Box<Type>>,
         body: Box<Expression>,
         is_move: bool,
     },

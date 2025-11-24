@@ -48,7 +48,7 @@ impl CliArgs {
                     process::exit(0);
                 }
                 "--version" => {
-                    println!("GiaRusted Compiler v0.7.0");
+                    println!("GiaRusted Compiler v0.8.0");
                     process::exit(0);
                 }
                 "-o" | "--output" => {
@@ -139,7 +139,7 @@ impl CliArgs {
     }
 
     fn print_help() {
-        println!("GiaRusted Compiler - A Rust Compiler Built from Scratch (v0.7.0)");
+        println!("GiaRusted Compiler - A Rust Compiler Built from Scratch (v0.8.0)");
         println!();
         println!("USAGE:");
         println!("    gaiarusted [OPTIONS] <FILES>...");
@@ -414,7 +414,7 @@ fn main() {
         }
     }
 
-    println!("GiaRusted Compiler v0.7.0");
+    println!("GiaRusted Compiler v0.8.0");
     println!("==================================================");
     println!("Input files: {}", config.source_files.len());
     for file in &config.source_files {
