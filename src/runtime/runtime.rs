@@ -12,12 +12,14 @@ pub fn generate_runtime_assembly() -> String {
 .section .rodata
     format_str: .string "%ld\n"
     format_str_bool: .string "%d\n"
+    format_str_f64: .string "%f\n"
     print_string_fmt: .string "%s"
     print_str_newline: .string "%s\n"
 
 .section .text
 .globl gaia_print_i64
 .globl gaia_print_bool
+.globl gaia_print_f64
 .globl gaia_print_str
 .globl __builtin_println
 .globl gaia_vec_new
@@ -65,9 +67,26 @@ gaia_print_bool:
     pop rbp
     ret
 
+gaia_print_f64:
+    push rbp
+    mov rbp, rsp
+    # rdi contains the float value (64-bit, as i64 bits)
+    # We need to move it to xmm0 and call printf with proper format
+    lea rax, [rip + format_str_f64]
+    movq xmm0, rdi        # Move 64-bit integer bits to xmm0 (as float bits)
+    mov rdi, rax          # format string in rdi
+    mov rax, 1            # printf needs 1 xmm argument
+    sub rsp, 8            # Align stack to 16 bytes
+    call printf
+    add rsp, 8
+    mov rsp, rbp
+    pop rbp
+    ret
+
 gaia_print_str:
     push rbp
     mov rbp, rsp
+    sub rsp, 8          # Align stack to 16-byte boundary for printf
     mov rsi, rdi
     lea rdi, [rip + print_string_fmt]
     call printf
@@ -78,6 +97,7 @@ gaia_print_str:
 __builtin_println:
     push rbp
     mov rbp, rsp
+    sub rsp, 8          # Align stack to 16-byte boundary for printf
     mov rsi, rdi
     lea rdi, [rip + print_str_newline]
     call printf
@@ -88,6 +108,23 @@ __builtin_println:
 __builtin_printf:
     push rbp
     mov rbp, rsp
+    sub rsp, 8          # Align stack to 16-byte boundary for printf
+    call printf
+    mov rsp, rbp
+    pop rbp
+    ret
+
+# gaia_printf_float: Helper for printing floats
+# rdi = format string address
+# rsi = float value as 64-bit integer (bits representation)
+gaia_printf_float:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16         # Allocate 16 bytes for alignment (8 for float, 8 for alignment)
+    # Store the float bits to stack
+    mov [rbp - 8], rsi  # Store float bits on stack
+    # Load from stack into xmm0 as double-precision float
+    movsd xmm0, [rbp - 8]  # Load 64-bit float into xmm0
     call printf
     mov rsp, rbp
     pop rbp

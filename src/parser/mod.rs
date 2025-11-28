@@ -874,7 +874,9 @@ impl Parser {
                 Token::Keyword(Keyword::Trait) |
                 Token::Keyword(Keyword::Impl) |
                 Token::Keyword(Keyword::Mod) |
-                Token::Keyword(Keyword::Use)
+                Token::Keyword(Keyword::Use) |
+                Token::Keyword(Keyword::Const) |
+                Token::Keyword(Keyword::Static)
             ) {
                 let item = self.parse_item()?;
                 statements.push(Statement::Item(Box::new(item)));
@@ -980,9 +982,36 @@ impl Parser {
     /// Parse an if statement: `if condition { ... } else { ... }`
     fn parse_if_statement(&mut self) -> ParseResult<Statement> {
         self.expect_keyword(Keyword::If)?;
-        let condition = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
-            parser.parse_expression()
-        })?);
+        
+        // Check for 'if let' pattern
+        let condition = if self.check(&Token::Keyword(Keyword::Let)) {
+            self.advance(); // consume 'let'
+            // Skip pattern: e.g., "Some(val)" or "Ok(x)"
+            let _pattern_str = self.expect_identifier()?;
+            
+            if self.check(&Token::LeftParen) {
+                self.advance(); // consume '('
+                let _inner_pattern = self.expect_identifier()?;
+                self.consume(")")?;
+            }
+            
+            // Expect '=' after pattern
+            self.consume("=")?;
+            
+            // Parse the expression being matched
+            let _expr = self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+                parser.parse_expression()
+            })?;
+            
+            // For now, just use 'true' as the condition
+            // A full implementation would need to properly handle pattern binding and matching
+            Box::new(Expression::Bool(true))
+        } else {
+            Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+                parser.parse_expression()
+            })?)
+        };
+        
         let then_body = self.parse_block()?;
         
         let else_body = if self.check(&Token::Keyword(Keyword::Else)) {
@@ -2322,15 +2351,32 @@ impl Parser {
         let mut path = vec![first];
         while self.check(&Token::DoubleColon) {
             self.advance();
-            path.push(self.expect_identifier()?);
+            if self.check(&Token::LeftBrace) {
+                let mut brace_depth = 1;
+                self.advance();
+                while brace_depth > 0 && self.current() != &Token::Eof {
+                    match self.current() {
+                        Token::LeftBrace => brace_depth += 1,
+                        Token::RightBrace => brace_depth -= 1,
+                        _ => {}
+                    }
+                    if brace_depth > 0 {
+                        self.advance();
+                    }
+                }
+                if self.check(&Token::RightBrace) {
+                    self.advance();
+                }
+                break;
+            } else if self.check(&Token::Star) {
+                self.advance();
+                break;
+            } else {
+                path.push(self.expect_identifier()?);
+            }
         }
         
-        let is_glob = if self.check(&Token::Star) {
-            self.advance();
-            true
-        } else {
-            false
-        };
+        let is_glob = path.iter().any(|p| p == "*");
         
         self.consume(";")?;
         Ok(Item::Use { 

@@ -268,6 +268,68 @@ fn convert_rust_format_to_printf(rust_fmt: &str) -> String {
     result
 }
 
+fn convert_rust_format_to_printf_with_types(rust_fmt: &str, arg_types: &[HirType]) -> String {
+    let mut result = String::new();
+    let mut chars = rust_fmt.chars().peekable();
+    let mut arg_index = 0;
+    
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            if chars.peek() == Some(&'}') {
+                chars.next();
+                if arg_index < arg_types.len() {
+                    let ty = &arg_types[arg_index];
+                    let fmt_spec = get_printf_format_spec(ty);
+                    result.push_str(fmt_spec);
+                    arg_index += 1;
+                } else {
+                    result.push_str("%ld");
+                }
+            } else {
+                result.push(ch);
+            }
+        } else if ch == '\\' {
+            if let Some(next_ch) = chars.next() {
+                match next_ch {
+                    'n' => result.push('\n'),
+                    't' => result.push('\t'),
+                    'r' => result.push('\r'),
+                    '\\' => result.push('\\'),
+                    c => {
+                        result.push('\\');
+                        result.push(c);
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    
+    result.push('\n');
+    result
+}
+
+fn get_printf_format_spec(ty: &HirType) -> &'static str {
+    match ty {
+        HirType::Float64 => "%f",
+        HirType::String => "%s",
+        HirType::Bool => "%d",
+        HirType::Int32 => "%d",
+        HirType::Int64 => "%ld",
+        HirType::USize => "%lu",
+        HirType::ISize => "%ld",
+        HirType::Reference(inner) => get_printf_format_spec(inner),
+        HirType::Pointer(inner) => {
+            match &**inner {
+                HirType::String => "%s",
+                _ => "%p",
+            }
+        }
+        _ => "%ld",
+    }
+}
+
 /// High-Level Intermediate Representation (HIR)
 /// Similar to AST but with syntactic sugar removed
 #[derive(Debug, Clone)]
@@ -413,6 +475,13 @@ pub enum HirExpression {
     /// Function call
     Call {
         func: Box<HirExpression>,
+        args: Vec<HirExpression>,
+    },
+
+    /// Method call: obj.method(args)
+    MethodCall {
+        receiver: Box<HirExpression>,
+        method: String,
         args: Vec<HirExpression>,
     },
 
@@ -814,7 +883,7 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
 /// Infer the type of a HirExpression for println argument type-awareness
 fn infer_hir_type(expr: &HirExpression) -> HirType {
     match expr {
-        HirExpression::Integer(_) => HirType::Int64,
+        HirExpression::Integer(_) => HirType::Int32,
         HirExpression::Float(_) => HirType::Float64,
         HirExpression::String(_) => HirType::String,
         HirExpression::Bool(_) => HirType::Bool,
@@ -829,6 +898,22 @@ fn infer_hir_type(expr: &HirExpression) -> HirType {
                 }
                 HirType::Unknown
             })
+        }
+        HirExpression::BinaryOp { left, right, .. } => {
+            // Infer from operands
+            let left_ty = infer_hir_type(left);
+            let right_ty = infer_hir_type(right);
+            
+            // If either operand is a float, result is float
+            if left_ty == HirType::Float64 || right_ty == HirType::Float64 {
+                HirType::Float64
+            } else if left_ty != HirType::Unknown {
+                left_ty
+            } else if right_ty != HirType::Unknown {
+                right_ty
+            } else {
+                HirType::Unknown
+            }
         }
         HirExpression::Call { func, args } => {
             // For method calls, try to infer from the method name
@@ -1102,10 +1187,30 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             }
             
             let func_name = match name.as_str() {
-                "println" => {
+                "__builtin_println" | "println" => {
                     if args_final.len() > 1 {
                         if let HirExpression::String(fmt_str) = &args_final[0] {
-                            let printf_fmt = convert_rust_format_to_printf(fmt_str);
+                            // For format strings with arguments, try to use type-aware format specs
+                            let arg_types: Vec<HirType> = args_final[1..].iter().map(infer_hir_type).collect();
+                            
+                            // Check if we have a definite float type or a BinaryOp that produces a float
+                            let has_float = arg_types.iter().any(|t| t == &HirType::Float64);
+                            let has_binop_float = args_final[1..].iter().any(|expr| {
+                                matches!(expr, HirExpression::BinaryOp { .. }) &&
+                                infer_hir_type(expr) == HirType::Float64
+                            });
+                            
+                            if (has_float || has_binop_float) && args_final.len() == 2 {
+                                // Single float argument with format string
+                                // Use gaia_print_f64 instead of printf (which requires XMM0)
+                                let func_name = "gaia_print_f64".to_string();
+                                return Ok(HirExpression::Call {
+                                    func: Box::new(HirExpression::Variable(func_name)),
+                                    args: vec![args_final[1].clone()],
+                                });
+                            }
+                            
+                            let printf_fmt = convert_rust_format_to_printf_with_types(fmt_str, &arg_types);
                             args_final[0] = HirExpression::String(printf_fmt);
                         }
                         "__builtin_printf".to_string()
@@ -1120,8 +1225,8 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                                 "gaia_print_bool".to_string()
                             }
                             HirType::Float64 => {
-                                // For now, cast to i64 and print as integer
-                                "gaia_print_i64".to_string()
+                                // For floats, use dedicated print function
+                                "gaia_print_f64".to_string()
                             }
                             _ => {
                                 // Default to string printing
@@ -1136,7 +1241,8 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                     if args_final.len() > 1 {
                         if let HirExpression::String(fmt_str) = &args_final[0] {
                             let printf_fmt_no_newline = {
-                                let fmt = convert_rust_format_to_printf(fmt_str);
+                                let arg_types: Vec<HirType> = args_final[1..].iter().map(infer_hir_type).collect();
+                                let fmt = convert_rust_format_to_printf_with_types(fmt_str, &arg_types);
                                 if fmt.ends_with("\n") {
                                     fmt[..fmt.len()-1].to_string()
                                 } else {
@@ -1154,7 +1260,8 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 "__builtin_println_args" => {
                     if !args_final.is_empty() {
                         if let HirExpression::String(fmt_str) = &args_final[0] {
-                            let printf_fmt = convert_rust_format_to_printf(fmt_str);
+                            let arg_types: Vec<HirType> = args_final[1..].iter().map(infer_hir_type).collect();
+                            let printf_fmt = convert_rust_format_to_printf_with_types(fmt_str, &arg_types);
                             args_final[0] = HirExpression::String(printf_fmt);
                         }
                     }
@@ -1380,15 +1487,15 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         // New Expression variants from expanded AST
         Expression::MethodCall { receiver, method, type_args: _, args } => {
             let receiver_hir = lower_expression(receiver)?;
-            let mut all_args: Vec<HirExpression> = vec![receiver_hir];
+            let args_hir: Result<Vec<_>, _> = args
+                .iter()
+                .map(lower_expression)
+                .collect();
             
-            for arg in args {
-                all_args.push(lower_expression(arg)?);
-            }
-            
-            Ok(HirExpression::Call {
-                func: Box::new(HirExpression::Variable(method.clone())),
-                args: all_args,
+            Ok(HirExpression::MethodCall {
+                receiver: Box::new(receiver_hir),
+                method: method.clone(),
+                args: args_hir?,
             })
         }
 

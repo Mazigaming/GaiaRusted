@@ -1,6 +1,8 @@
 // GaiaRusted v0.9.0 Feature Demonstration
 // Tests all newly implemented features from this session
 
+use std::fmt::Display;
+
 // ===============================================
 // Feature 1: Trait Bounds in Generic Parameters
 // ===============================================
@@ -20,7 +22,7 @@ fn demonstrate_dyn_parsing(obj: &dyn Display) {
 // ===============================================
 fn get_impl_trait() -> impl Display {
     println!("impl Trait return");
-    0
+    42
 }
 
 fn main() {

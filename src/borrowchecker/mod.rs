@@ -647,6 +647,14 @@ impl BorrowChecker {
                 self.check_expression(value)?;
                 Ok(())
             }
+
+            HirExpression::MethodCall { receiver, args, .. } => {
+                self.check_expression(receiver)?;
+                for arg in args {
+                    self.check_expression(arg)?;
+                }
+                Ok(())
+            }
         }
     }
 }

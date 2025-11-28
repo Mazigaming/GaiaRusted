@@ -235,6 +235,7 @@ impl TypeChecker {
         // Type-aware print functions (used by println! lowering for different types)
         self.context.register_function("gaia_print_i64".to_string(), vec![HirType::Int64], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_bool".to_string(), vec![HirType::Bool], HirType::Tuple(vec![]));
+        self.context.register_function("gaia_print_f64".to_string(), vec![HirType::Float64], HirType::Tuple(vec![]));
 
         // Type conversions
         self.context.register_function("as_i32".to_string(), vec![HirType::Float64], HirType::Int32);
@@ -348,7 +349,9 @@ impl TypeChecker {
                     
                     let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
                     let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
-                    let full_name = if module_prefix.is_empty() {
+                    let full_name = if name.contains("::") {
+                        name.clone()
+                    } else if module_prefix.is_empty() {
                         name.clone()
                     } else {
                         format!("{}::{}", module_prefix, name)
@@ -445,13 +448,13 @@ impl TypeChecker {
             (HirType::ISize, HirType::Int32) => true,
             // Reference to raw pointer coercion (e.g., &i32 -> *const i32)
             (HirType::Reference(inner_from), HirType::Pointer(inner_to)) => {
-                // References can coerce to raw pointers of the same type
-                inner_from == inner_to
+                // References can coerce to raw pointers, with type compatibility for inner types
+                self.types_compatible(inner_from, inner_to)
             }
             // Mutable reference to raw pointer coercion
             (HirType::MutableReference(inner_from), HirType::Pointer(inner_to)) => {
-                // Mutable references can coerce to raw pointers of the same type
-                inner_from == inner_to
+                // Mutable references can coerce to raw pointers, with type compatibility for inner types
+                self.types_compatible(inner_from, inner_to)
             }
             // Reference/dereference coercion for string methods
             (HirType::Reference(inner_from), to_ty) => {
@@ -581,19 +584,41 @@ impl TypeChecker {
             }
 
             HirExpression::UnaryOp { op, operand } => {
-                let operand_ty = self.infer_type(operand)?;
-
                 match op {
-                    UnaryOp::Negate | UnaryOp::BitwiseNot => Ok(operand_ty),
-                    UnaryOp::Not => Ok(HirType::Bool),
-                    UnaryOp::Reference | UnaryOp::MutableReference => Ok(HirType::Reference(Box::new(operand_ty))),
-                    UnaryOp::Dereference => {
-                        match &operand_ty {
-                            HirType::Reference(inner) => Ok((**inner).clone()),
-                            HirType::Pointer(inner) => Ok((**inner).clone()),
-                            _ => Err(TypeCheckError {
-                                message: format!("Cannot dereference type: {}", operand_ty),
-                            }),
+                    UnaryOp::Reference | UnaryOp::MutableReference => {
+                        // For references, check if the expected type is a pointer
+                        // If so, extract the inner type and use it for operand inference
+                        let operand_expected = if let Some(HirType::Pointer(inner)) = expected {
+                            Some((**inner).clone())
+                        } else if let Some(HirType::Reference(inner)) = expected {
+                            Some((**inner).clone())
+                        } else {
+                            None
+                        };
+                        
+                        let operand_ty = if let Some(exp_ty) = operand_expected {
+                            self.infer_type_with_context(operand, Some(&exp_ty))?
+                        } else {
+                            self.infer_type(operand)?
+                        };
+                        
+                        Ok(HirType::Reference(Box::new(operand_ty)))
+                    }
+                    _ => {
+                        let operand_ty = self.infer_type(operand)?;
+                        match op {
+                            UnaryOp::Negate | UnaryOp::BitwiseNot => Ok(operand_ty),
+                            UnaryOp::Not => Ok(HirType::Bool),
+                            UnaryOp::Dereference => {
+                                match &operand_ty {
+                                    HirType::Reference(inner) => Ok((**inner).clone()),
+                                    HirType::Pointer(inner) => Ok((**inner).clone()),
+                                    _ => Err(TypeCheckError {
+                                        message: format!("Cannot dereference type: {}", operand_ty),
+                                    }),
+                                }
+                            }
+                            _ => unreachable!(),
                         }
                     }
                 }
@@ -1184,6 +1209,64 @@ impl TypeChecker {
                             value_ty
                         ),
                     }),
+                }
+            }
+
+            HirExpression::MethodCall { receiver, method, args } => {
+                let receiver_ty = self.infer_type(receiver)?;
+                
+                if let HirType::Named(struct_name) = &receiver_ty {
+                    let qualified_name = format!("{}::{}", struct_name, method);
+                    
+                    if let Some((param_types, ret_type)) = self.context.lookup_function(&qualified_name) {
+                        // Check if this is a static method (no self parameter)
+                        if param_types.is_empty() {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Cannot call static method {} on instance of type {}. Use {}::{} instead.",
+                                    method, struct_name, struct_name, method
+                                ),
+                            });
+                        }
+                        
+                        // For instance methods, first param is implicit self, rest are explicit args
+                        let expected_args = param_types.len() - 1;
+                        if args.len() != expected_args {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Method {} expects {} arguments, got {}",
+                                    method,
+                                    expected_args,
+                                    args.len()
+                                ),
+                            });
+                        }
+                        
+                        for (i, (arg, param_ty)) in args.iter().zip(param_types.iter().skip(1)).enumerate() {
+                            let arg_ty = self.infer_type(arg)?;
+                            if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument {} has type {}, expected {}",
+                                        i, arg_ty, param_ty
+                                    ),
+                                });
+                            }
+                        }
+                        
+                        Ok(ret_type)
+                    } else {
+                        Err(TypeCheckError {
+                            message: format!("Unknown method {} for type {}", method, struct_name),
+                        })
+                    }
+                } else {
+                    Err(TypeCheckError {
+                        message: format!(
+                            "Method {} can only be called on named types, got {}",
+                            method, receiver_ty
+                        ),
+                    })
                 }
             }
         }

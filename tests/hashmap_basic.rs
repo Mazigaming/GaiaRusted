@@ -1,5 +1,7 @@
 // Basic HashMap test
 
+use std::collections::HashMap;
+
 fn main() {
     println!("=== HashMap Test ===\n");
     

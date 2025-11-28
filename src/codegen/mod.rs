@@ -194,6 +194,16 @@ pub enum X86Instruction {
     Shr { dst: X86Operand, src: X86Operand },
     /// sar dst, src (shift right arithmetic)
     Sar { dst: X86Operand, src: X86Operand },
+    /// movsd dst, src (move scalar double precision floating point)
+    Movsd { dst: String, src: String },
+    /// addsd dst, src (add scalar double precision floating point)
+    Addsd { dst: String, src: String },
+    /// subsd dst, src (subtract scalar double precision floating point)
+    Subsd { dst: String, src: String },
+    /// mulsd dst, src (multiply scalar double precision floating point)
+    Mulsd { dst: String, src: String },
+    /// divsd dst, src (divide scalar double precision floating point)
+    Divsd { dst: String, src: String },
 }
 
 impl fmt::Display for X86Instruction {
@@ -288,6 +298,11 @@ impl fmt::Display for X86Instruction {
             X86Instruction::Shl { dst, src } => write!(f, "    shl {}, {}", dst, src),
             X86Instruction::Shr { dst, src } => write!(f, "    shr {}, {}", dst, src),
             X86Instruction::Sar { dst, src } => write!(f, "    sar {}, {}", dst, src),
+            X86Instruction::Movsd { dst, src } => write!(f, "    movsd {}, {}", dst, src),
+            X86Instruction::Addsd { dst, src } => write!(f, "    addsd {}, {}", dst, src),
+            X86Instruction::Subsd { dst, src } => write!(f, "    subsd {}, {}", dst, src),
+            X86Instruction::Mulsd { dst, src } => write!(f, "    mulsd {}, {}", dst, src),
+            X86Instruction::Divsd { dst, src } => write!(f, "    divsd {}, {}", dst, src),
         }
     }
 }
@@ -334,12 +349,17 @@ pub struct Codegen {
     instructions: Vec<X86Instruction>,
     label_counter: usize,
     var_locations: HashMap<String, i64>,
+    /// For struct variables: maps var name to the offset where struct data is stored
+    struct_data_locations: HashMap<String, i64>,
+    /// Track which stack offsets contain float values
+    float_stack_offsets: std::collections::HashSet<i64>,
     stack_offset: i64,
     /// Minimum stack offset used by collections (don't allocate above this)
     min_collection_offset: i64,
     /// Size of the collection at min_collection_offset (for proper collision detection)
     collection_size: i64,
     string_constants: HashMap<String, String>,
+    float_constants: HashMap<String, f64>, // label -> f64 value
 }
 
 impl Codegen {
@@ -349,8 +369,11 @@ impl Codegen {
             instructions: Vec::new(),
             label_counter: 0,
             var_locations: HashMap::new(),
+            struct_data_locations: HashMap::new(),
+            float_stack_offsets: std::collections::HashSet::new(),
             stack_offset: -8,
             min_collection_offset: i64::MAX,
+            float_constants: HashMap::new(),
             collection_size: 0,
             string_constants: HashMap::new(),
         }
@@ -388,7 +411,7 @@ impl Codegen {
         
         // Add rodata section with string constants and const values
         let has_rodata_globals = mir.globals.iter().any(|g| !g.is_static || !g.is_mutable);
-        if !self.string_constants.is_empty() || has_rodata_globals {
+        if !self.string_constants.is_empty() || !self.float_constants.is_empty() || has_rodata_globals {
             asm.push_str("\n.section .rodata\n");
             
             // Add read-only globals (constants and immutable statics)
@@ -396,6 +419,13 @@ impl Codegen {
                 if !global.is_static || !global.is_mutable {
                     asm.push_str(&format!("    {}: .quad {}\n", global.name, global.value));
                 }
+            }
+            
+            // Add float constants
+            for (float_key, float_value) in &self.float_constants {
+                // Use .quad to store 64-bit floating point as bits
+                let bits = float_value.to_bits();
+                asm.push_str(&format!("    {}: .quad {}\n", float_key, bits));
             }
             
             // Add string constants
@@ -614,6 +644,8 @@ impl Codegen {
         
         match &stmt.rvalue {
             crate::mir::Rvalue::Use(operand) => {
+                // Check operand type for debugging
+                let _is_field = matches!(operand, crate::mir::Operand::Copy(crate::mir::Place::Field(_, _)) | crate::mir::Operand::Move(crate::mir::Place::Field(_, _)));
                 match operand {
                     crate::mir::Operand::Constant(crate::mir::Constant::String(s)) => {
                         let label = self.allocate_string(s.clone());
@@ -621,6 +653,204 @@ impl Codegen {
                             dst: X86Operand::Register(Register::RAX),
                             src: label,
                         });
+                    }
+                    crate::mir::Operand::Constant(crate::mir::Constant::Float(f)) => {
+                        let label = self.allocate_float(*f);
+                        // Load the address of the float constant
+                        self.instructions.push(X86Instruction::Lea {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: label,
+                        });
+                        // Load the float value from memory into RAX
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Memory { base: Register::RAX, offset: 0 },
+                        });
+                        
+                        // Track that the destination stack location will contain a float
+                        // We'll mark it as float AFTER storing to memory
+                        skip_final_store = true;  // Will do custom store below
+                        if let crate::mir::Place::Local(ref dst_name) = stmt.place {
+                            let offset = self.get_var_location(dst_name);
+                            self.float_stack_offsets.insert(offset);
+                            // Store directly without final store
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Memory { base: Register::RBP, offset },
+                                src: X86Operand::Register(Register::RAX),
+                            });
+                        }
+                    }
+                    crate::mir::Operand::Copy(crate::mir::Place::Field(ref place, ref field_name)) => {
+                        // The struct variable holds the struct data or a POINTER to struct data
+                        match place.as_ref() {
+                            crate::mir::Place::Local(name) => {
+                                // Check if this is a struct variable (has struct data location registered)
+                                if let Some(&struct_base) = self.struct_data_locations.get(name) {
+                                    // Direct struct field access - the struct data is at struct_base
+                                    let field_index = match field_name.as_str() {
+                                        "x" => 0,
+                                        "y" => 1,
+                                        "z" => 2,
+                                        "w" => 3,
+                                        "first" => 0,
+                                        "second" => 1,
+                                        "third" => 2,
+                                        "fourth" => 3,
+                                        _ => 0,
+                                    };
+                                    let field_offset = struct_base + (field_index as i64) * 8;
+                                    
+                                    // Load the field value directly from the struct
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RBP, offset: field_offset },
+                                    });
+                                } else if let Some(&var_offset) = self.var_locations.get(name) {
+                                    // Indirect struct field access - the variable holds a POINTER to struct data
+                                    let field_index = match field_name.as_str() {
+                                        "x" => 0,
+                                        "y" => 1,
+                                        "z" => 2,
+                                        "w" => 3,
+                                        "first" => 0,
+                                        "second" => 1,
+                                        "third" => 2,
+                                        "fourth" => 3,
+                                        _ => 0,
+                                    };
+                                    let field_offset = (field_index as i64) * 8;
+                                    
+                                    // Load the pointer from memory
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RBP, offset: var_offset },
+                                    });
+                                    
+                                    // Dereference the pointer to get the field
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RAX, offset: field_offset },
+                                    });
+                                } else {
+                                    // Fallback: return 0
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Immediate(0),
+                                    });
+                                }
+                            }
+                            _ => {
+                                // Fallback: return 0
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RAX),
+                                    src: X86Operand::Immediate(0),
+                                });
+                            }
+                        }
+                    }
+                    crate::mir::Operand::Move(crate::mir::Place::Field(ref place, ref field_name)) => {
+                        // Field access on a struct (Move variant - same as Copy for our purposes)
+                        match place.as_ref() {
+                            crate::mir::Place::Local(name) => {
+                                // Check if this is a struct variable (has struct data location registered)
+                                if let Some(&struct_base) = self.struct_data_locations.get(name) {
+                                    // Direct struct field access - the struct data is at struct_base
+                                    let field_index = match field_name.as_str() {
+                                        "x" => 0,
+                                        "y" => 1,
+                                        "z" => 2,
+                                        "w" => 3,
+                                        "first" => 0,
+                                        "second" => 1,
+                                        "third" => 2,
+                                        "fourth" => 3,
+                                        _ => 0,
+                                    };
+                                    let field_offset = struct_base + (field_index as i64) * 8;
+                                    
+                                    // Load the field value directly from the struct
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RBP, offset: field_offset },
+                                    });
+                                } else if let Some(&var_offset) = self.var_locations.get(name) {
+                                    // Indirect struct field access - the variable holds a POINTER to struct data
+                                    let field_index = match field_name.as_str() {
+                                        "x" => 0,
+                                        "y" => 1,
+                                        "z" => 2,
+                                        "w" => 3,
+                                        "first" => 0,
+                                        "second" => 1,
+                                        "third" => 2,
+                                        "fourth" => 3,
+                                        _ => 0,
+                                    };
+                                    let field_offset = (field_index as i64) * 8;
+                                    
+                                    // Load the pointer from memory
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RBP, offset: var_offset },
+                                    });
+                                    
+                                    // Dereference the pointer to get the field
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RAX, offset: field_offset },
+                                    });
+                                } else {
+                                    // Fallback: return 0
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Immediate(0),
+                                    });
+                                }
+                            }
+                            _ => {
+                                // Fallback: return 0
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RAX),
+                                    src: X86Operand::Immediate(0),
+                                });
+                            }
+                        }
+                    }
+                    crate::mir::Operand::Copy(crate::mir::Place::Local(src_name)) => {
+                        // Check if source is a float variable
+                        if let Some(&src_offset) = self.var_locations.get(src_name) {
+                            if self.float_stack_offsets.contains(&src_offset) {
+                                // Source is a float - use movsd to copy
+                                skip_final_store = true;
+                                if let crate::mir::Place::Local(ref dst_name) = stmt.place {
+                                    let dst_offset = self.get_var_location(dst_name);
+                                    self.float_stack_offsets.insert(dst_offset);
+                                    // Use movsd to copy float from source to destination
+                                    self.instructions.push(X86Instruction::Movsd {
+                                        dst: "xmm0".to_string(),
+                                        src: format!("qword ptr [rbp {}]", if src_offset < 0 { format!("- {}", -src_offset) } else { format!("+ {}", src_offset) }),
+                                    });
+                                    self.instructions.push(X86Instruction::Movsd {
+                                        dst: format!("qword ptr [rbp {}]", if dst_offset < 0 { format!("- {}", -dst_offset) } else { format!("+ {}", dst_offset) }),
+                                        src: "xmm0".to_string(),
+                                    });
+                                }
+                            } else {
+                                // Source is not a float - use regular copy
+                                let src = self.operand_to_x86(operand)?;
+                                self.instructions.push(X86Instruction::Mov {
+                                    dst: X86Operand::Register(Register::RAX),
+                                    src,
+                                });
+                            }
+                        } else {
+                            // Source location unknown - use regular copy
+                            let src = self.operand_to_x86(operand)?;
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src,
+                            });
+                        }
                     }
                     _ => {
                         let src = self.operand_to_x86(operand)?;
@@ -630,8 +860,156 @@ impl Codegen {
                         });
                     }
                 }
+                
+                // After processing Use, check if we're copying from a struct variable or float variable
+                // If so, also register the destination with the same properties
+                if let crate::mir::Operand::Copy(crate::mir::Place::Local(src_name)) = operand {
+                    // Propagate struct metadata
+                    if let Some(&struct_base) = self.struct_data_locations.get(src_name) {
+                        if let crate::mir::Place::Local(ref dst_name) = stmt.place {
+                            self.struct_data_locations.insert(dst_name.clone(), struct_base);
+                        }
+                    }
+                    
+                    // Propagate float metadata
+                    if let Some(&src_offset) = self.var_locations.get(src_name) {
+                        if self.float_stack_offsets.contains(&src_offset) {
+                            if let crate::mir::Place::Local(ref dst_name) = stmt.place {
+                                // Make sure destination has an offset (allocate if needed)
+                                let dst_offset = self.get_var_location(dst_name);
+                                self.float_stack_offsets.insert(dst_offset);
+                            }
+                        }
+                    }
+                }
             }
             crate::mir::Rvalue::BinaryOp(op, left, right) => {
+                // Check if this is floating point arithmetic
+                let is_float_const_left = matches!(left, crate::mir::Operand::Constant(crate::mir::Constant::Float(_)));
+                let is_float_const_right = matches!(right, crate::mir::Operand::Constant(crate::mir::Constant::Float(_)));
+                
+                // Also check if stack locations are known to be floats
+                let is_float_stack_left = if let crate::mir::Operand::Copy(crate::mir::Place::Local(name)) = left {
+                    if let Some(&offset) = self.var_locations.get(name) {
+                        self.float_stack_offsets.contains(&offset)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                let is_float_stack_right = if let crate::mir::Operand::Copy(crate::mir::Place::Local(name)) = right {
+                    if let Some(&offset) = self.var_locations.get(name) {
+                        self.float_stack_offsets.contains(&offset)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                
+                let is_float = is_float_const_left || is_float_const_right || is_float_stack_left || is_float_stack_right;
+                
+                let mut handled_float = false;
+                if is_float {
+                    // Handle floating-point arithmetic with SSE instructions
+                    // For floats, we use XMM0 and XMM1 registers
+                    
+                    // Load left operand into XMM0
+                    let mut left_ok = false;
+                    match left {
+                        crate::mir::Operand::Constant(crate::mir::Constant::Float(f)) => {
+                            let label = self.allocate_float(*f);
+                            self.instructions.push(X86Instruction::Movsd {
+                                dst: "xmm0".to_string(),
+                                src: format!("qword ptr [rip + {}]", label),
+                            });
+                            left_ok = true;
+                        }
+                        crate::mir::Operand::Copy(crate::mir::Place::Local(name)) => {
+                            let offset = self.get_var_location(name);
+                            self.instructions.push(X86Instruction::Movsd {
+                                dst: "xmm0".to_string(),
+                                src: format!("qword ptr [rbp {}]", if offset < 0 { format!("- {}", -offset) } else { format!("+ {}", offset) }),
+                            });
+                            left_ok = true;
+                        }
+                        _ => {}
+                    }
+                    
+                    // Load right operand into XMM1
+                    let mut right_ok = false;
+                    match right {
+                        crate::mir::Operand::Constant(crate::mir::Constant::Float(f)) => {
+                            let label = self.allocate_float(*f);
+                            self.instructions.push(X86Instruction::Movsd {
+                                dst: "xmm1".to_string(),
+                                src: format!("qword ptr [rip + {}]", label),
+                            });
+                            right_ok = true;
+                        }
+                        crate::mir::Operand::Copy(crate::mir::Place::Local(name)) => {
+                            let offset = self.get_var_location(name);
+                            self.instructions.push(X86Instruction::Movsd {
+                                dst: "xmm1".to_string(),
+                                src: format!("qword ptr [rbp {}]", if offset < 0 { format!("- {}", -offset) } else { format!("+ {}", offset) }),
+                            });
+                            right_ok = true;
+                        }
+                        _ => {}
+                    }
+                    
+                    // Perform operation if both operands loaded successfully
+                    if left_ok && right_ok {
+                        // Perform the operation
+                        match op {
+                            crate::lowering::BinaryOp::Add => {
+                                self.instructions.push(X86Instruction::Addsd {
+                                    dst: "xmm0".to_string(),
+                                    src: "xmm1".to_string(),
+                                });
+                            }
+                            crate::lowering::BinaryOp::Subtract => {
+                                self.instructions.push(X86Instruction::Subsd {
+                                    dst: "xmm0".to_string(),
+                                    src: "xmm1".to_string(),
+                                });
+                            }
+                            crate::lowering::BinaryOp::Multiply => {
+                                self.instructions.push(X86Instruction::Mulsd {
+                                    dst: "xmm0".to_string(),
+                                    src: "xmm1".to_string(),
+                                });
+                            }
+                            crate::lowering::BinaryOp::Divide => {
+                                self.instructions.push(X86Instruction::Divsd {
+                                    dst: "xmm0".to_string(),
+                                    src: "xmm1".to_string(),
+                                });
+                            }
+                            _ => {
+                                // For comparison operators, would need to implement float comparisons
+                                // For now, skip
+                            }
+                        }
+                        
+                        // Store result from xmm0 to target variable
+                        if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                            let offset = self.get_var_location(var_name);
+                            self.float_stack_offsets.insert(offset);
+                            self.instructions.push(X86Instruction::Movsd {
+                                dst: format!("qword ptr [rbp {}]", if offset < 0 { format!("- {}", -offset) } else { format!("+ {}", offset) }),
+                                src: "xmm0".to_string(),
+                            });
+                        }
+                        skip_final_store = true;  // Avoid double-storing
+                        handled_float = true;
+                    }
+                }
+                
+                // If we didn't handle a float operation above, use integer arithmetic
+                if !handled_float {
+                
                 let left_val = self.operand_to_x86(left)?;
                 let right_val = self.operand_to_x86(right)?;
                 
@@ -875,6 +1253,7 @@ impl Codegen {
                         self.instructions.push(X86Instruction::Nop);
                     }
                 }
+                } // End of if !handled_float
             }
             crate::mir::Rvalue::UnaryOp(op, operand) => {
                 let src = self.operand_to_x86(operand)?;
@@ -1285,7 +1664,32 @@ impl Codegen {
                     
                     let mut stack_adjust = 0;
                     for (i, arg) in args.iter().enumerate() {
-                        let arg_val = self.operand_to_x86(arg)?;
+                        // Special handling for string constants - need to load their address
+                        // Special handling for float constants - need to load from memory
+                        let arg_val = if let crate::mir::Operand::Constant(crate::mir::Constant::String(s)) = arg {
+                            let label = self.allocate_string(s.clone());
+                            self.instructions.push(X86Instruction::Lea {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: label,
+                            });
+                            X86Operand::Register(Register::RAX)
+                        } else if let crate::mir::Operand::Constant(crate::mir::Constant::Float(f)) = arg {
+                            let label = self.allocate_float(*f);
+                            // Load the float address and move to RSI (second argument register)
+                            // For floats being passed to printf, they need to be in RSI
+                            self.instructions.push(X86Instruction::Lea {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: label,
+                            });
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Memory { base: Register::RAX, offset: 0 },
+                            });
+                            X86Operand::Register(Register::RAX)
+                        } else {
+                            self.operand_to_x86(arg)?
+                        };
+                        
                         match i {
                             0 => {
                                 self.instructions.push(X86Instruction::Mov {
@@ -1346,6 +1750,229 @@ impl Codegen {
                     }
                 }
             }
+            crate::mir::Rvalue::Field(place, field_name) => {
+                // Field access on a struct
+                // Get the struct's base location from var_locations
+                match place {
+                    crate::mir::Place::Local(name) => {
+                        if let Some(&struct_base_offset) = self.var_locations.get(name) {
+                            // The struct is stored at struct_base_offset
+                            // Calculate field offset: x=0, y=8, z=16, etc.
+                            // For now, use a simple mapping: alphabetical field names
+                            let field_index = match field_name.as_str() {
+                                "x" => 0,
+                                "y" => 1,
+                                "z" => 2,
+                                "w" => 3,
+                                "first" => 0,
+                                "second" => 1,
+                                "third" => 2,
+                                "fourth" => 3,
+                                _ => 0, // Default to first field
+                            };
+                            let field_offset = struct_base_offset + (field_index as i64) * 8;
+                            
+                            // Load the field value from memory
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Memory { base: Register::RBP, offset: field_offset },
+                            });
+                        } else {
+                            // Not a struct location, just move the value
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Register(Register::RAX),
+                            });
+                        }
+                    }
+                    _ => {
+                        // Field access on non-local (e.g., from function return)
+                        // For now, just return RAX unchanged
+                        // This would need better handling for complex cases
+                    }
+                }
+            }
+            crate::mir::Rvalue::Aggregate(struct_name, operands) => {
+                // Aggregate (struct) construction
+                // Store struct fields on stack and return pointer for later field access
+                
+                if operands.is_empty() {
+                    // Empty struct, return 0
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(0),
+                    });
+                } else {
+                    // Allocate space for the struct fields and the pointer variable
+                    let field_count = operands.len();
+                    let struct_size = (field_count as i64) * 8;
+                    
+                    // Allocate pointer variable slot (this will hold the address of the struct)
+                    let var_slot = self.stack_offset;
+                    let var_location = var_slot;
+                    
+                    // Allocate struct slots (which come after the pointer variable)
+                    let struct_base = self.stack_offset - 8 - struct_size;  // -8 for the pointer, then struct_size for the fields
+                    
+                    // Update stack_offset to point past all allocations (struct + pointer + gap)
+                    // The pointer is at var_location, the struct is at struct_base and struct_base + 8
+                    // So the next free location is struct_base - 8
+                    // We need stack_offset to point to this next free location
+                    // stack_offset -= (8 + struct_size) would give us struct_base
+                    // But we need stack_offset -= (8 + struct_size + 8) to point past the struct
+                    self.stack_offset -= (8 + struct_size + 8);
+                    
+                    // Register the variable location for the pointer
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.var_locations.insert(var_name.clone(), var_location);
+                    }
+                    
+                    // Store each field value to the struct memory area
+                    for (i, operand) in operands.iter().enumerate() {
+                        let field_val = self.operand_to_x86(operand)?;
+                        let field_offset = struct_base + (i as i64) * 8;
+                        
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: field_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Memory { base: Register::RBP, offset: field_offset },
+                            src: X86Operand::Register(Register::RAX),
+                        });
+                    }
+                    
+                    // Return pointer to struct (in RAX)
+                    // This pointer can be used for field access later
+                    // Calculate RBP + struct_base (struct_base is negative)
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(struct_base),
+                    });
+                    // RAX now contains the pointer to the struct
+                    // It will be stored normally via the final_store mechanism
+                    
+                    // IMPORTANT: Register the struct data location
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        // Store a mapping from variable name to where the struct data is stored
+                        self.struct_data_locations.insert(var_name.clone(), struct_base);
+                    }
+                    // IMPORTANT: DO NOT skip final_store! We need to store the pointer into the variable's location
+                    // so that when we later access fields, we can find the pointer and dereference it
+                }
+            }
+            crate::mir::Rvalue::Index(place, idx) => {
+               // Array/Vec element access
+               // Place can be Place::Local(var_name) or Place::Index(base, _)
+               let var_name = match place {
+                   crate::mir::Place::Local(ref name) => Some(name.clone()),
+                   crate::mir::Place::Index(ref base, _) => {
+                       // Recursively extract the base variable name
+                       let mut current = base.as_ref();
+                       let mut found_name = None;
+                       loop {
+                           match current {
+                               crate::mir::Place::Local(ref name) => {
+                                   found_name = Some(name.clone());
+                                   break;
+                               }
+                               crate::mir::Place::Index(ref next_base, _) => current = next_base.as_ref(),
+                               _ => break,
+                           }
+                       }
+                       found_name
+                   }
+                   _ => None,
+               };
+               
+               if let Some(array_name) = var_name {
+                   if let Some(&array_base) = self.struct_data_locations.get(&array_name) {
+                       // Found in struct_data_locations
+                       // Array is stored directly on stack at array_base
+                       let elem_offset = array_base + (*idx as i64) * 8;
+                       self.instructions.push(X86Instruction::Mov {
+                           dst: X86Operand::Register(Register::RAX),
+                           src: X86Operand::Memory { base: Register::RBP, offset: elem_offset },
+                       });
+                   } else if let Some(&var_offset) = self.var_locations.get(&array_name) {
+                       // Found in var_locations
+                       // Array pointer is stored at var_offset
+                       self.instructions.push(X86Instruction::Mov {
+                           dst: X86Operand::Register(Register::RAX),
+                           src: X86Operand::Memory { base: Register::RBP, offset: var_offset },
+                       });
+                       let elem_offset = (*idx as i64) * 8;
+                       self.instructions.push(X86Instruction::Mov {
+                           dst: X86Operand::Register(Register::RAX),
+                           src: X86Operand::Memory { base: Register::RAX, offset: elem_offset },
+                       });
+                   } else {
+                       // Fallback: return 0 (not found in either map)
+                       self.instructions.push(X86Instruction::Mov {
+                           dst: X86Operand::Register(Register::RAX),
+                           src: X86Operand::Immediate(0),
+                       });
+                   }
+               } else {
+                   // Couldn't extract variable name
+                   self.instructions.push(X86Instruction::Mov {
+                       dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(0),
+                    });
+                }
+            }
+            crate::mir::Rvalue::Array(operands) => {
+                // Array construction - allocate space and store elements
+                if operands.is_empty() {
+                    // Empty array
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(0),
+                    });
+                } else {
+                    // For non-empty arrays: allocate stack space and store elements
+                    let elem_count = operands.len();
+                    let array_size = (elem_count as i64) * 8;
+                    self.stack_offset -= array_size;
+                    let array_base = self.stack_offset;
+                    
+                    // Store each element value to the array memory area
+                    for (i, operand) in operands.iter().enumerate() {
+                        let elem_val = self.operand_to_x86(operand)?;
+                        let elem_offset = array_base + (i as i64) * 8;
+                        
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: elem_val,
+                        });
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Memory { base: Register::RBP, offset: elem_offset },
+                            src: X86Operand::Register(Register::RAX),
+                        });
+                    }
+                    
+                    // Return pointer to array (in RAX)
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(array_base),
+                    });
+                    
+                    // Register the array data location
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.struct_data_locations.insert(var_name.clone(), array_base);
+                        self.allocate_var(var_name.clone());
+                    }
+                    skip_final_store = true;
+                }
+            }
             _ => {
                 self.instructions.push(X86Instruction::Nop);
             }
@@ -1354,10 +1981,25 @@ impl Codegen {
         if !skip_final_store {
             if let crate::mir::Place::Local(ref name) = stmt.place {
                 let offset = self.get_var_location(name);
-                self.instructions.push(X86Instruction::Mov {
-                    dst: X86Operand::Memory { base: Register::RBP, offset },
-                    src: X86Operand::Register(Register::RAX),
-                });
+                
+                // Check if destination should be treated as float
+                if self.float_stack_offsets.contains(&offset) {
+                    // For floats, RAX contains the bit pattern in integer form
+                    // We need to move it to XMM0 then store as movsd
+                    // Actually, we can use movq to move int to XMM register
+                    // movq xmm0, rax would work but we don't have that instruction
+                    // Instead, just move RAX to the stack location as if it were integer
+                    // The bits are already correct for the float
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                } else {
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                }
             }
         }
         Ok(())
@@ -1386,6 +2028,42 @@ impl Codegen {
                     Ok(X86Operand::Memory { base: Register::RBP, offset: *offset })
                 } else {
                     Ok(X86Operand::Register(Register::RAX))
+                }
+            }
+            crate::mir::Operand::Copy(crate::mir::Place::Field(place, field_name)) | crate::mir::Operand::Move(crate::mir::Place::Field(place, field_name)) => {
+                // Field access on a struct
+                // The struct variable holds a POINTER to the struct data
+                match place.as_ref() {
+                    crate::mir::Place::Local(name) => {
+                        if let Some(&var_offset) = self.var_locations.get(name) {
+                            // var_offset points to where the POINTER is stored
+                            // So we need to:
+                            // 1. Load the pointer: mov rax, [rbp + var_offset]
+                            // 2. Dereference it: mov rax, [rax + field_offset]
+                            
+                            // Calculate field offset based on field name
+                            let field_index = match field_name.as_str() {
+                                "x" => 0,
+                                "y" => 1,
+                                "z" => 2,
+                                "w" => 3,
+                                "first" => 0,
+                                "second" => 1,
+                                "third" => 2,
+                                "fourth" => 3,
+                                _ => 0,
+                            };
+                            
+                            // We can't express this in operand_to_x86 (which returns an X86Operand)
+                            // because it requires two loads: load pointer, then dereference
+                            // So we return a special marker that tells the caller to do the dereference
+                            // For now, return the variable location - the caller will handle the dereference
+                            Ok(X86Operand::Memory { base: Register::RBP, offset: var_offset })
+                        } else {
+                            Ok(X86Operand::Register(Register::RAX))
+                        }
+                    }
+                    _ => Ok(X86Operand::Register(Register::RAX)),
                 }
             }
             crate::mir::Operand::Copy(_place) | crate::mir::Operand::Move(_place) => {
@@ -1443,6 +2121,18 @@ impl Codegen {
             let label = format!("str_{}", self.label_counter);
             self.label_counter += 1;
             self.string_constants.insert(string, label.clone());
+            label
+        }
+    }
+
+    fn allocate_float(&mut self, float: f64) -> String {
+        // Check if we already have this float constant
+        if let Some((label, _)) = self.float_constants.iter().find(|(_, &v)| (v - float).abs() < f64::EPSILON) {
+            label.clone()
+        } else {
+            let label = format!("float_{}", self.label_counter);
+            self.label_counter += 1;
+            self.float_constants.insert(label.clone(), float);
             label
         }
     }

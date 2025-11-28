@@ -190,10 +190,30 @@ impl MacroExpansionPass {
                 for arg in args {
                     expanded_args.push(self.expand_expression(arg)?);
                 }
-                Ok(Expression::FunctionCall {
-                    name: name.clone(),
-                    args: expanded_args,
-                })
+                
+                // Check if this is a macro call (builtin macros like vec!, println!, etc.)
+                match name.as_str() {
+                    "vec" | "println" | "print" | "eprintln" | "format" | "assert" | 
+                    "assert_eq" | "assert_ne" | "panic" | "dbg" => {
+                        // This is a macro, expand it
+                        let expanded_stmts = self.expand_macro_invocation(name, &expanded_args)?;
+                        expanded_stmts
+                            .into_iter()
+                            .next()
+                            .map(|stmt| match stmt {
+                                Statement::Expression(e) => Ok(e),
+                                _ => Err("Macro expansion resulted in non-expression".to_string()),
+                            })
+                            .ok_or_else(|| "Macro expansion resulted in no output".to_string())?
+                    }
+                    _ => {
+                        // Regular function call
+                        Ok(Expression::FunctionCall {
+                            name: name.clone(),
+                            args: expanded_args,
+                        })
+                    }
+                }
             }
             _ => Ok(expr.clone()),
         }

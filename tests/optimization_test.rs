@@ -27,6 +27,7 @@ fn test_constant_folding_binary_add() {
                 )))),
             }],
         }],
+        globals: vec![],
     };
 
     let original_rvalue = mir.functions[0].basic_blocks[0].statements[0].rvalue.clone();
@@ -67,6 +68,7 @@ fn test_constant_folding_multiply() {
                 terminator: Terminator::Return(Some(Operand::Copy(Place::Local("result".to_string())))),
             }],
         }],
+        globals: vec![],
     };
 
     optimize_mir(&mut mir, 1).expect("Optimization failed");
@@ -98,6 +100,7 @@ fn test_constant_folding_unary_negate() {
                 terminator: Terminator::Return(Some(Operand::Copy(Place::Local("result".to_string())))),
             }],
         }],
+        globals: vec![],
     };
 
     optimize_mir(&mut mir, 1).expect("Optimization failed");
@@ -130,6 +133,7 @@ fn test_constant_folding_comparison() {
                 terminator: Terminator::Return(Some(Operand::Copy(Place::Local("result".to_string())))),
             }],
         }],
+        globals: vec![],
     };
 
     optimize_mir(&mut mir, 1).expect("Optimization failed");
@@ -166,6 +170,7 @@ fn test_dead_code_elimination() {
                 )))),
             }],
         }],
+        globals: vec![],
     };
 
     let original_stmt_count = mir.functions[0].basic_blocks[0].statements.len();
@@ -206,6 +211,7 @@ fn test_no_optimization_level_0() {
                 terminator: Terminator::Return(None),
             }],
         }],
+        globals: vec![],
     };
 
     let original_rvalue = mir.functions[0].basic_blocks[0].statements[0].rvalue.clone();
@@ -243,6 +249,7 @@ fn test_simplify_goto_chain() {
                 },
             ],
         }],
+        globals: vec![],
     };
 
     optimize_mir(&mut mir, 2).expect("Optimization failed");
@@ -291,6 +298,7 @@ fn test_copy_propagation() {
                 )))),
             }],
         }],
+        globals: vec![],
     };
 
     optimize_mir(&mut mir, 3).expect("Optimization failed");
@@ -339,6 +347,7 @@ fn test_optimization_cumulative_effect() {
                 )))),
             }],
         }],
+        globals: vec![],
     };
 
     let original_count = mir.functions[0].basic_blocks[0].statements.len();
