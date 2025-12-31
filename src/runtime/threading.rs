@@ -230,13 +230,30 @@ impl Drop for ThreadPool {
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Self {
         let thread = thread::spawn(move || loop {
-            let message = receiver.lock().unwrap().recv().unwrap();
-
-            match message {
-                Message::NewJob(job) => {
-                    job();
+            // Handle potential mutex poisoning and channel disconnection gracefully
+            let receiver_guard = match receiver.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    eprintln!("[Worker {}] ERROR: Mutex poisoned, attempting recovery", id);
+                    // Try to recover from poisoned mutex
+                    poisoned.into_inner()
                 }
-                Message::Terminate => {
+            };
+            
+            match receiver_guard.recv() {
+                Ok(message) => {
+                    match message {
+                        Message::NewJob(job) => {
+                            job();
+                        }
+                        Message::Terminate => {
+                            break;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Channel disconnected - sender has been dropped
+                    eprintln!("[Worker {}] Channel disconnected, terminating", id);
                     break;
                 }
             }

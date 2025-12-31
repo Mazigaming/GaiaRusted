@@ -223,7 +223,7 @@ impl Diagnostic {
 
         // Source context
         if let (Some(source), Some(loc)) = (source, self.location) {
-            output.push_str("\n");
+            output.push('\n');
             let lines: Vec<&str> = source.lines().collect();
             
             // Display context lines
@@ -243,14 +243,14 @@ impl Diagnostic {
                         let caret_line = format!("    | {}\x1b[31m^\x1b[0m", 
                             " ".repeat(loc.column.saturating_sub(1)));
                         output.push_str(&caret_line);
-                        output.push_str("\n");
+                        output.push('\n');
                     } else {
                         output.push_str(&format!("  {} | {}\n", 
                             format!("{:4}", line_num), line));
                     }
                 }
             }
-            output.push_str("\n");
+            output.push('\n');
         }
 
         // Context information
@@ -413,7 +413,7 @@ impl ErrorReporter {
                 for (idx, diagnostic) in diags.iter().enumerate() {
                     output.push_str(&diagnostic.format_detailed(self.source.as_deref()));
                     if idx < diags.len() - 1 {
-                        output.push_str("\n");
+                        output.push('\n');
                     }
                 }
             }
@@ -425,7 +425,7 @@ impl ErrorReporter {
         let note_count = self.diagnostics.iter()
             .filter(|d| d.severity == Severity::Note).count();
         
-        output.push_str("\n");
+        output.push('\n');
         output.push_str("═══════════════════════════════════════════════\n");
         
         let mut summary_parts = Vec::new();
@@ -446,7 +446,7 @@ impl ErrorReporter {
         }
         
         output.push_str(&summary_parts.join(", "));
-        output.push_str("\n");
+        output.push('\n');
 
         output
     }

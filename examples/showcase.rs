@@ -195,10 +195,10 @@ fn demo_option_and_result() {
     let some_value = Some(42);
     println!("  Option(Some(42)): {}", "Some variant");
     
-    let ok_value = Ok(100);
+    let ok_value: Result<i32, i32> = Ok(100);
     println!("  Result(Ok(100)): {}", "Ok variant");
     
-    let err_value = Err(404);
+    let err_value: Result<i32, i32> = Err(404);
     println!("  Result(Err(404)): {}\n", "Err variant");
 }
 

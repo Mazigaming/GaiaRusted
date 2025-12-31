@@ -36,6 +36,8 @@ pub fn generate_runtime_assembly() -> String {
 .globl gaia_hashset_insert
 .globl gaia_hashset_contains
 .globl gaia_hashset_remove
+.globl __into_iter
+.globl __next
 
 gaia_print_i64:
     push rbp
@@ -412,6 +414,85 @@ gaia_hashset_remove:
     
     call gaia_hashmap_remove
     
+    mov rsp, rbp
+    pop rbp
+    ret
+
+# Iterator protocol support
+.data
+    __current_iter_ptr: .quad 0   # Current iterator collection pointer
+    __current_iter_idx: .quad 0   # Current index in iteration
+
+.section .text
+
+__into_iter:
+    # Initialize iterator for a collection
+    # rdi = collection pointer (vec metadata: capacity:i64, length:i64, data...)
+    # Returns: collection pointer (same as input)
+    push rbp
+    mov rbp, rsp
+    
+    # Store the collection pointer in global state
+    lea rax, [rip + __current_iter_ptr]
+    mov qword ptr [rax], rdi
+    
+    # Initialize index to 0
+    lea rax, [rip + __current_iter_idx]
+    mov qword ptr [rax], 0
+    
+    # Return the collection pointer
+    mov rax, rdi
+    mov rsp, rbp
+    pop rbp
+    ret
+
+__next:
+    # Get next element from iterator
+    # rdi = iterator/collection pointer (must match what was passed to __into_iter)
+    # Returns: next element value or 0 (indicating end of iteration)
+    push rbp
+    mov rbp, rsp
+    sub rsp, 32
+    
+    # Load current index
+    lea rax, [rip + __current_iter_idx]
+    mov r8, qword ptr [rax]
+    mov qword ptr [rbp - 8], r8
+    
+    # Load collection length (at offset 8 from rdi)
+    mov r9, qword ptr [rdi + 8]
+    mov qword ptr [rbp - 16], r9
+    
+    # Check if index < length
+    cmp r8, r9
+    jge __next_end                  # if index >= length, return 0
+    
+    # Get element at data[index]
+    # data starts at rdi + 16
+    # element = *(rdi + 16 + index*8)
+    lea rax, [rdi + 16]             # rax = data pointer
+    mov rcx, qword ptr [rbp - 8]    # rcx = index
+    mov r10, 8
+    imul rcx, r10                   # rcx = index * 8
+    add rax, rcx                    # rax = data + index*8
+    mov rax, qword ptr [rax]        # rax = element value
+    mov qword ptr [rbp - 24], rax
+    
+    # Increment and store index
+    mov r8, qword ptr [rbp - 8]
+    add r8, 1
+    lea rcx, [rip + __current_iter_idx]
+    mov qword ptr [rcx], r8
+    
+    # Return element
+    mov rax, qword ptr [rbp - 24]
+    mov rsp, rbp
+    pop rbp
+    ret
+    
+__next_end:
+    # Return 0 to indicate end of iteration
+    xor rax, rax
     mov rsp, rbp
     pop rbp
     ret

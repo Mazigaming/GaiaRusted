@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 thread_local! {
     static ENUM_REGISTRY: RefCell<HashMap<String, HashMap<String, i64>>> = RefCell::new(HashMap::new());
     static SCOPE_TRACKER: RefCell<ScopeTracker> = RefCell::new(ScopeTracker::new());
+    static STRUCT_REGISTRY: RefCell<HashMap<String, Vec<(String, HirType)>>> = RefCell::new(HashMap::new());
 }
 
 /// Tracks available variables in the current scope
@@ -96,6 +97,37 @@ fn register_enum_variants(enum_name: String, variants: Vec<String>) {
 
 fn clear_enum_registry() {
     ENUM_REGISTRY.with(|registry| {
+        registry.borrow_mut().clear();
+    });
+}
+
+fn register_struct_fields(struct_name: String, fields: Vec<(String, HirType)>) {
+    STRUCT_REGISTRY.with(|registry| {
+        registry.borrow_mut().insert(struct_name, fields);
+    });
+}
+
+fn get_struct_field_type(struct_name: &str, field_name: &str) -> Option<HirType> {
+    STRUCT_REGISTRY.with(|registry| {
+        registry.borrow().get(struct_name).and_then(|fields| {
+            fields.iter()
+                .find(|(fname, _)| fname == field_name)
+                .map(|(_, ty)| ty.clone())
+        })
+    })
+}
+
+pub fn get_struct_field_index(struct_name: &str, field_name: &str) -> Option<usize> {
+    STRUCT_REGISTRY.with(|registry| {
+        registry.borrow().get(struct_name).and_then(|fields| {
+            fields.iter()
+                .position(|(fname, _)| fname == field_name)
+        })
+    })
+}
+
+fn clear_struct_registry() {
+    STRUCT_REGISTRY.with(|registry| {
         registry.borrow_mut().clear();
     });
 }
@@ -378,6 +410,25 @@ pub enum HirItem {
         is_mutable: bool,
         is_public: bool,
         generics: Vec<GenericParam>,
+    },
+    /// Impl block: `impl Trait for Struct { methods }` or `impl Struct { methods }`
+    Impl {
+        trait_name: Option<String>,
+        struct_name: String,
+        methods: Vec<HirItem>,
+        generics: Vec<String>,
+        is_unsafe: bool,
+    },
+    /// Enum definition
+    Enum {
+        name: String,
+        variants: Vec<(String, Option<HirType>)>,
+    },
+    /// Trait definition
+    Trait {
+        name: String,
+        methods: Vec<HirItem>,
+        generics: Vec<String>,
     },
 }
 
@@ -947,6 +998,29 @@ fn infer_hir_type(expr: &HirExpression) -> HirType {
                     return HirType::Int64;
                 }
             }
+            HirType::Unknown
+        }
+        HirExpression::FieldAccess { object, field } => {
+            // Try to infer the field type from struct definition
+            let obj_ty = infer_hir_type(object);
+            
+            // If the object is a named type (struct), look up the field type
+            if let HirType::Named(struct_name) = obj_ty {
+                if let Some(field_ty) = get_struct_field_type(&struct_name, field) {
+                    return field_ty;
+                }
+            }
+            
+            // Otherwise, try to infer from the field name (heuristic fallback)
+            // Common patterns: name/str/text/message fields are strings
+            if field.to_lowercase().contains("name")
+                || field.to_lowercase().contains("str")
+                || field.to_lowercase().contains("text")
+                || field.to_lowercase().contains("message")
+            {
+                return HirType::String;
+            }
+            
             HirType::Unknown
         }
         _ => HirType::Unknown,
@@ -1653,7 +1727,7 @@ fn lower_block(block: &Block) -> LowerResult<Vec<HirStatement>> {
     
     if let Some(expr) = &block.expression {
         let expr_hir = lower_expression(expr)?;
-        statements.push(HirStatement::Return(Some(expr_hir)));
+        statements.push(HirStatement::Expression(expr_hir));
     }
     
     Ok(statements)
@@ -1737,7 +1811,7 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
             else_body,
         } => {
             let cond_hir = lower_expression(condition)?;
-            let then_hir = lower_statements(&then_body.statements)?;
+            let then_hir = lower_block(then_body)?;
             let else_hir = if let Some(else_stmt) = else_body {
                 // else_body is a Statement, which could be another If (for else-if) or a block
                 // We need to convert it to Vec<HirStatement>
@@ -1791,7 +1865,7 @@ fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
     for stmt in stmts {
         if let Statement::Let {
             name: _,
-            mutable: _,
+            mutable,
             ty: _,
             initializer,
             attributes: _,
@@ -1799,30 +1873,108 @@ fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
         } = stmt {
             // Handle tuple destructuring
             let tuple_init = lower_expression(initializer)?;
-            let tuple_temp = format!("__tuple_temp_{}", result.len());
             
-            // Create a temporary variable to hold the tuple
-            result.push(HirStatement::Let {
-                name: tuple_temp.clone(),
-                mutable: false,
-                ty: HirType::Unknown,
-                init: tuple_init,
-            });
+            // If it's a literal tuple, extract elements directly
+            if let HirExpression::Tuple(elements) = tuple_init {
+                for (idx, pattern) in patterns.iter().enumerate() {
+                    let vars = extract_pattern_vars(pattern);
+                    if let Some(elem) = elements.get(idx) {
+                        for var_name in vars {
+                            result.push(HirStatement::Let {
+                                name: var_name.clone(),
+                                mutable: *mutable,
+                                ty: HirType::Unknown,
+                                init: elem.clone(),
+                            });
+                            add_binding(var_name, HirType::Unknown);
+                        }
+                    }
+                }
+            } else {
+                // For non-literal tuples, use temporary and field access
+                let tuple_temp = format!("__tuple_temp_{}", result.len());
+                
+                // Create a temporary variable to hold the tuple
+                result.push(HirStatement::Let {
+                    name: tuple_temp.clone(),
+                    mutable: false,
+                    ty: HirType::Unknown,
+                    init: tuple_init,
+                });
+                
+                // For each pattern in the tuple, create a let binding
+                for (idx, pattern) in patterns.iter().enumerate() {
+                    let vars = extract_pattern_vars(pattern);
+                    for var_name in vars {
+                        let field_access = HirExpression::TupleAccess {
+                            object: Box::new(HirExpression::Variable(tuple_temp.clone())),
+                            index: idx as u32,
+                        };
+                        result.push(HirStatement::Let {
+                            name: var_name.clone(),
+                            mutable: *mutable,
+                            ty: HirType::Unknown,
+                            init: field_access,
+                        });
+                        add_binding(var_name, HirType::Unknown);
+                    }
+                }
+            }
+        } else if let Statement::Let {
+            name: _,
+            mutable,
+            ty: _,
+            initializer,
+            attributes: _,
+            pattern: Some(Pattern::Slice { patterns, .. }),
+        } = stmt {
+            // Handle array/slice destructuring
+            let array_init = lower_expression(initializer)?;
             
-            // For each pattern in the tuple, create a let binding
-            for (idx, pattern) in patterns.iter().enumerate() {
-                let vars = extract_pattern_vars(pattern);
-                for var_name in vars {
-                    let field_access = HirExpression::TupleAccess {
-                        object: Box::new(HirExpression::Variable(tuple_temp.clone())),
-                        index: idx as u32,
-                    };
-                    result.push(HirStatement::Let {
-                        name: var_name,
-                        mutable: false,
-                        ty: HirType::Unknown,
-                        init: field_access,
-                    });
+            // If it's a literal array, extract elements directly
+            if let HirExpression::ArrayLiteral(array_elements) = array_init {
+                for (idx, pattern) in patterns.iter().enumerate() {
+                    let vars = extract_pattern_vars(pattern);
+                    if let Some(elem) = array_elements.get(idx) {
+                        for var_name in vars {
+                            result.push(HirStatement::Let {
+                                name: var_name.clone(),
+                                mutable: *mutable,
+                                ty: HirType::Unknown,
+                                init: elem.clone(),
+                            });
+                            add_binding(var_name, HirType::Unknown);
+                        }
+                    }
+                }
+            } else {
+                // For non-literal arrays, use temporary and index access
+                let array_temp = format!("__array_temp_{}", result.len());
+                
+                // Create a temporary variable to hold the array
+                result.push(HirStatement::Let {
+                    name: array_temp.clone(),
+                    mutable: false,
+                    ty: HirType::Unknown,
+                    init: array_init,
+                });
+                
+                // For each pattern in the array, create a let binding with index access
+                for (idx, pattern) in patterns.iter().enumerate() {
+                    let vars = extract_pattern_vars(pattern);
+                    for var_name in vars {
+                        let index_access = HirExpression::Index {
+                            array: Box::new(HirExpression::Variable(array_temp.clone())),
+                            index: Box::new(HirExpression::Integer(idx as i64)),
+                        };
+                        result.push(HirStatement::Let {
+                            name: var_name.clone(),
+                            mutable: *mutable,
+                            ty: HirType::Unknown,
+                            init: index_access,
+                        });
+                        add_binding(var_name, HirType::Unknown);
+                    }
                 }
             }
         } else {
@@ -2105,6 +2257,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 /// Lower the entire AST to HIR
 pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
     clear_enum_registry();
+    clear_struct_registry();
     
     // Helper function to replace Self with actual struct name in types
     fn replace_self_in_type(ty: &Type, struct_name: &str) -> Type {
@@ -2148,7 +2301,7 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
         }
     }
     
-    // First pass: register enums and collect impl methods
+    // First pass: register enums and structs, and collect impl methods
     let mut all_items = ast.to_vec();
     
     for item in ast {
@@ -2162,6 +2315,13 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
                 })
                 .collect();
             register_enum_variants(name.clone(), variant_names);
+        } else if let Item::Struct { name, fields, .. } = item {
+            // Register struct fields with their types for later type inference
+            let field_types: Vec<(String, HirType)> = fields
+                .iter()
+                .map(|f| (f.name.clone(), lower_type(&f.ty).unwrap_or(HirType::Unknown)))
+                .collect();
+            register_struct_fields(name.clone(), field_types);
         }
     }
     

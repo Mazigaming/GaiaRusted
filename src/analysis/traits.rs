@@ -65,7 +65,7 @@ pub struct MethodImpl {
 }
 
 /// Trait bound
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TraitBound {
     Simple(String),
     Lifetime(String),
@@ -77,6 +77,81 @@ pub enum TraitBound {
         lifetimes: Vec<String>,
         bound: Box<TraitBound>,
     },
+}
+
+/// A normalized set of constraints from where clauses
+/// Used for coherence checking to distinguish blanket impls from constrained specializations
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstraintSet {
+    /// Sorted bounds for canonical comparison
+    pub bounds: Vec<TraitBound>,
+}
+
+impl ConstraintSet {
+    /// Create a constraint set from where clauses
+    /// Automatically sorts bounds for consistent comparison
+    pub fn from_clauses(clauses: &[TraitBound]) -> Self {
+        let mut bounds = clauses.to_vec();
+        bounds.sort();  // Sort for consistent comparison
+        ConstraintSet { bounds }
+    }
+    
+    /// Check if this constraint set is empty (blanket impl)
+    pub fn is_empty(&self) -> bool {
+        self.bounds.is_empty()
+    }
+    
+    /// Check if all of our bounds are present in another constraint set
+    /// Example: [Clone] is subset of [Clone, Debug]
+    pub fn is_subset_of(&self, other: &ConstraintSet) -> bool {
+        self.bounds.iter().all(|b| other.bounds.contains(b))
+    }
+    
+    /// Check if these constraints are compatible with another set
+    /// Compatible means: identical, one is subset of other, or both are empty
+    pub fn compatible_with(&self, other: &ConstraintSet) -> bool {
+        // Identical constraints
+        if self == other {
+            return true;
+        }
+        
+        // If both are empty (blanket), compatible
+        if self.is_empty() && other.is_empty() {
+            return true;
+        }
+        
+        // If one is subset of other, they're compatible
+        // Example: [Clone] and [Clone, Debug] are compatible
+        self.is_subset_of(other) || other.is_subset_of(self)
+    }
+    
+    /// Check if constraints can coexist
+    /// Returns false if they apply to mutually exclusive sets of types
+    /// Example: T: Clone and T: Default apply to different types (not all Clone are Default)
+    pub fn can_coexist_with(&self, other: &ConstraintSet) -> bool {
+        // If compatible (subset or equal), they might coexist
+        if self.compatible_with(other) {
+            return true;
+        }
+        
+        // If incompatible and non-empty, they apply to different type sets
+        // Example: T: Clone vs T: Default - these are different constraints
+        if !self.is_empty() && !other.is_empty() {
+            // Check if they have completely different constraints
+            // (no common bounds)
+            let self_traits: HashSet<_> = self.bounds.iter()
+                .filter_map(|b| if let TraitBound::Simple(s) = b { Some(s.clone()) } else { None })
+                .collect();
+            let other_traits: HashSet<_> = other.bounds.iter()
+                .filter_map(|b| if let TraitBound::Simple(s) = b { Some(s.clone()) } else { None })
+                .collect();
+            
+            // If no common traits, they're incompatible
+            self_traits.is_disjoint(&other_traits)
+        } else {
+            false
+        }
+    }
 }
 
 impl TraitBound {
@@ -577,22 +652,164 @@ impl AdvancedTraitChecker {
             .find(|i| i.impl_type == ty)
     }
 
+    /// Check for trait implementation coherence
+    ///
+    /// Coherence rules prevent conflicting implementations:
+    /// 1. Exact duplicate implementations are disallowed
+    /// 2. Overlapping generic implementations are disallowed
+    ///
+    /// Examples of conflicts:
+    /// - `impl Trait for T` + `impl Trait for T` (exact duplicate)
+    /// - `impl<T> Trait for Vec<T>` + `impl<T> Trait for Vec<T>` (exact duplicate)
+    /// - `impl<T> Trait for T` + `impl Trait for String` (overlap - String matches T)
+    ///
+    /// Examples of allowed coexistence:
+    /// - `impl<T> Trait for Vec<T>` and `impl Trait for Vec<String>` (specialization)
+    /// - `impl<T> Trait for Vec<T>` and `impl<T> Trait for Box<T>` (different types)
     pub fn check_impl_coherence(&self, impl_def: &GenericTraitImpl) -> Result<(), String> {
         if let Some(impls) = self.impl_registry.get(&impl_def.trait_name) {
-            let conflicting = impls
-                .iter()
-                .filter(|i| i.impl_type == impl_def.impl_type)
-                .count();
-
-            if conflicting > 0 {
-                return Err(format!(
-                    "Conflicting implementations of {} for {}",
-                    impl_def.trait_name, impl_def.impl_type
-                ));
+            for existing_impl in impls.iter() {
+                // Check for exact duplicates or overlapping implementations
+                if self.impls_might_overlap(existing_impl, impl_def) {
+                    return Err(format!(
+                        "Conflicting implementations of {} detected:\n  \
+                        Existing: impl{} {} for {}\n  \
+                        New: impl{} {} for {}",
+                        impl_def.trait_name,
+                        self.format_type_params(&existing_impl.type_params),
+                        impl_def.trait_name,
+                        existing_impl.impl_type,
+                        self.format_type_params(&impl_def.type_params),
+                        impl_def.trait_name,
+                        impl_def.impl_type,
+                    ));
+                }
             }
         }
 
         Ok(())
+    }
+    
+    /// Check if two trait implementations might overlap
+    /// 
+    /// Two implementations overlap if:
+    /// 1. They have the exact same type pattern (exact duplicate)
+    /// 2. One is more general and could match the same concrete type as the other
+    pub fn impls_might_overlap(
+        &self,
+        impl1: &GenericTraitImpl,
+        impl2: &GenericTraitImpl,
+    ) -> bool {
+        // Exact match: same type pattern means they definitely overlap
+        if impl1.impl_type == impl2.impl_type {
+            // Additional check: if both have the same where clauses, they truly conflict
+            return self.where_clauses_similar(&impl1.where_clauses, &impl2.where_clauses);
+        }
+        
+        // Check for potential overlap in generic patterns
+        // Example: impl<T> Trait for T and impl Trait for String overlap
+        // because String matches T
+        self.patterns_overlap(&impl1.impl_type, &impl2.impl_type, 
+                             &impl1.type_params, &impl2.type_params)
+    }
+    
+    /// Check if two type patterns could match the same concrete type
+    fn patterns_overlap(
+        &self,
+        pattern1: &str,
+        pattern2: &str,
+        params1: &[TypeParameter],
+        params2: &[TypeParameter],
+    ) -> bool {
+        // If patterns are identical, they overlap
+        if pattern1 == pattern2 {
+            return true;
+        }
+        
+        // Check for generic parameter overlap
+        // Example: "T" and "String" overlap if first impl is generic
+        let pattern1_is_generic = self.is_generic_pattern(pattern1, params1);
+        let pattern2_is_generic = self.is_generic_pattern(pattern2, params2);
+        
+        match (pattern1_is_generic, pattern2_is_generic) {
+            // Both generic: "T" and "T" overlap (but caught above by equality check)
+            // "Vec<T>" and "Vec<U>" might overlap depending on type params
+            (true, true) => {
+                // Conservative: assume potential overlap if both have generics
+                // A full implementation would do unification here
+                self.could_unify(pattern1, pattern2)
+            }
+            // One generic, one concrete: "T" overlaps with "String" 
+            (true, false) => true,
+            (false, true) => true,
+            // Both concrete: "Vec<i32>" and "Vec<String>" don't overlap
+            (false, false) => false,
+        }
+    }
+    
+    /// Check if a type pattern is generic (contains type variables)
+    fn is_generic_pattern(&self, pattern: &str, _params: &[TypeParameter]) -> bool {
+        // Check if pattern contains generic indicators
+        // Simple heuristic: single uppercase letter or contains angle brackets
+        pattern.len() == 1 && pattern.chars().next().map_or(false, |c| c.is_uppercase())
+        || pattern.contains('<') || pattern.contains("T") || pattern.contains("U")
+    }
+    
+    /// Check if two patterns could potentially unify
+    fn could_unify(&self, pattern1: &str, pattern2: &str) -> bool {
+        // Very conservative: if both have generic parameters, assume they might unify
+        // A full implementation would attempt actual unification
+        
+        // Extract base types (before angle brackets)
+        let base1 = pattern1.split('<').next().unwrap_or(pattern1);
+        let base2 = pattern2.split('<').next().unwrap_or(pattern2);
+        
+        // If base types are different, patterns don't unify
+        if base1 != base2 {
+            return false;
+        }
+        
+        // If bases match and either has generics, assume potential overlap
+        pattern1.contains('<') || pattern2.contains('<')
+    }
+    
+    /// Check if two where clause sets allow the implementations to coexist
+    /// 
+    /// Key insight: impls with different where clauses might not actually conflict
+    /// because they apply to different sets of types.
+    /// 
+    /// Examples:
+    /// - `impl<T> Trait` (no where) and `impl<T: Clone> Trait` can coexist:
+    ///   the second is a specialization of the first
+    /// - `impl<T: Clone> Trait` and `impl<T: Default> Trait` can coexist:
+    ///   they apply to different types (not all Clone are Default, and vice versa)
+    /// - `impl<T: Clone> Trait` and `impl<T: Clone> Trait` CANNOT coexist:
+    ///   they're identical
+    pub fn where_clauses_similar(&self, clauses1: &[TraitBound], clauses2: &[TraitBound]) -> bool {
+        let constraints1 = ConstraintSet::from_clauses(clauses1);
+        let constraints2 = ConstraintSet::from_clauses(clauses2);
+        
+        // If constraints are identical, impls with same pattern can't coexist
+        if constraints1 == constraints2 {
+            return true;
+        }
+        
+        // If constraints are different:
+        // - Compatible (one subset of other): might overlap depending on pattern
+        // - Incompatible (no common bounds): can't overlap (different type sets)
+        constraints1.compatible_with(&constraints2)
+    }
+    
+    /// Format type parameters for display in error messages
+    fn format_type_params(&self, params: &[TypeParameter]) -> String {
+        if params.is_empty() {
+            String::new()
+        } else {
+            let param_names: Vec<String> = params.iter()
+                .map(|p| p.name.clone())
+                .collect();
+            format!("<{}>", param_names.join(", "))
+        }
     }
 
     pub fn resolve_variance(&self, _ty: &str, bound: &TraitBound) -> Variance {
@@ -790,6 +1007,50 @@ impl TraitResolver {
             }
         }
         Ok(())
+    }
+    
+    /// Check if two where clause sets are "similar enough" to conflict
+     /// 
+     /// Returns TRUE if they have overlapping type sets:
+     /// - Both empty (both blanket) - they definitely overlap
+     /// - Both have constraints AND they're compatible (identical or subset)
+     /// 
+     /// Returns FALSE if:
+     /// - One empty, one constrained (specialization, not conflict)
+     /// - Constraints are completely disjoint (e.g., [Clone] vs [Default])
+     pub fn where_clauses_similar(&self, clauses1: &[TraitBound], clauses2: &[TraitBound]) -> bool {
+         let constraints1 = ConstraintSet::from_clauses(clauses1);
+         let constraints2 = ConstraintSet::from_clauses(clauses2);
+         
+         // Both empty: blanket impls definitely conflict
+         if constraints1.is_empty() && constraints2.is_empty() {
+             return true;
+         }
+         
+         // One empty, one constrained: not a conflict (specialization)
+         if constraints1.is_empty() || constraints2.is_empty() {
+             return false;
+         }
+         
+         // Both have constraints: check if they're compatible
+         // Compatible = identical or one is subset of other
+         constraints1.compatible_with(&constraints2)
+     }
+    
+    /// Check if two trait implementations might overlap
+    pub fn impls_might_overlap(
+        &self,
+        impl1: &GenericTraitImpl,
+        impl2: &GenericTraitImpl,
+    ) -> bool {
+        // Exact match: same type pattern means they definitely overlap
+        if impl1.impl_type == impl2.impl_type {
+            return self.where_clauses_similar(&impl1.where_clauses, &impl2.where_clauses);
+        }
+        
+        // For different patterns, conservative approach: assume no overlap
+        // A full implementation would check generic pattern overlap
+        false
     }
 }
 
@@ -1372,5 +1633,270 @@ mod tests {
         });
 
         assert!(checker.check_trait_object(&obj).is_ok());
+    }
+
+    // ========================================================================
+    // WHERE CLAUSE DISTINCTION TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_constraint_set_from_empty_clauses() {
+        let clauses: Vec<TraitBound> = vec![];
+        let cs = ConstraintSet::from_clauses(&clauses);
+        assert!(cs.is_empty());
+        assert_eq!(cs.bounds.len(), 0);
+    }
+
+    #[test]
+    fn test_constraint_set_from_single_clause() {
+        let clauses = vec![TraitBound::Simple("Clone".to_string())];
+        let cs = ConstraintSet::from_clauses(&clauses);
+        assert!(!cs.is_empty());
+        assert_eq!(cs.bounds.len(), 1);
+    }
+
+    #[test]
+    fn test_constraint_set_from_multiple_clauses() {
+        let clauses = vec![
+            TraitBound::Simple("Clone".to_string()),
+            TraitBound::Simple("Default".to_string()),
+        ];
+        let cs = ConstraintSet::from_clauses(&clauses);
+        assert!(!cs.is_empty());
+        assert_eq!(cs.bounds.len(), 2);
+    }
+
+    #[test]
+    fn test_constraint_set_sorting() {
+        // Clauses added in different orders should produce same result
+        let clauses1 = vec![
+            TraitBound::Simple("Clone".to_string()),
+            TraitBound::Simple("Debug".to_string()),
+        ];
+        let clauses2 = vec![
+            TraitBound::Simple("Debug".to_string()),
+            TraitBound::Simple("Clone".to_string()),
+        ];
+        
+        let cs1 = ConstraintSet::from_clauses(&clauses1);
+        let cs2 = ConstraintSet::from_clauses(&clauses2);
+        
+        assert_eq!(cs1, cs2);
+    }
+
+    #[test]
+    fn test_constraint_set_is_subset_of() {
+        let clauses_small = vec![TraitBound::Simple("Clone".to_string())];
+        let clauses_large = vec![
+            TraitBound::Simple("Clone".to_string()),
+            TraitBound::Simple("Debug".to_string()),
+        ];
+        
+        let cs_small = ConstraintSet::from_clauses(&clauses_small);
+        let cs_large = ConstraintSet::from_clauses(&clauses_large);
+        
+        assert!(cs_small.is_subset_of(&cs_large));
+        assert!(!cs_large.is_subset_of(&cs_small));
+    }
+
+    #[test]
+    fn test_constraint_set_compatible_identical() {
+        let clauses = vec![TraitBound::Simple("Clone".to_string())];
+        let cs1 = ConstraintSet::from_clauses(&clauses);
+        let cs2 = ConstraintSet::from_clauses(&clauses);
+        
+        assert!(cs1.compatible_with(&cs2));
+    }
+
+    #[test]
+    fn test_constraint_set_compatible_subset() {
+        let clauses_small = vec![TraitBound::Simple("Clone".to_string())];
+        let clauses_large = vec![
+            TraitBound::Simple("Clone".to_string()),
+            TraitBound::Simple("Debug".to_string()),
+        ];
+        
+        let cs_small = ConstraintSet::from_clauses(&clauses_small);
+        let cs_large = ConstraintSet::from_clauses(&clauses_large);
+        
+        assert!(cs_small.compatible_with(&cs_large));
+        assert!(cs_large.compatible_with(&cs_small));
+    }
+
+    #[test]
+    fn test_constraint_set_incompatible() {
+        let clauses1 = vec![TraitBound::Simple("Clone".to_string())];
+        let clauses2 = vec![TraitBound::Simple("Default".to_string())];
+        
+        let cs1 = ConstraintSet::from_clauses(&clauses1);
+        let cs2 = ConstraintSet::from_clauses(&clauses2);
+        
+        assert!(!cs1.compatible_with(&cs2));
+    }
+
+    #[test]
+    fn test_where_clauses_similar_both_empty() {
+        // Both blanket impls - they can conflict if patterns overlap
+        let checker = TraitResolver::new();
+        let clauses1: Vec<TraitBound> = vec![];
+        let clauses2: Vec<TraitBound> = vec![];
+        
+        assert!(checker.where_clauses_similar(&clauses1, &clauses2));
+    }
+
+    #[test]
+    fn test_where_clauses_similar_blanket_vs_constrained() {
+        // Blanket impl vs constrained impl - no conflict (specialization)
+        let checker = TraitResolver::new();
+        let clauses1: Vec<TraitBound> = vec![];
+        let clauses2 = vec![TraitBound::Simple("Clone".to_string())];
+        
+        // Different constraints: one is blanket, one is constrained
+        // They're compatible (not similar enough to conflict)
+        assert!(!checker.where_clauses_similar(&clauses1, &clauses2));
+    }
+
+    #[test]
+    fn test_where_clauses_similar_different_constraints() {
+        // T: Clone vs T: Default - apply to different types
+        let checker = TraitResolver::new();
+        let clauses1 = vec![TraitBound::Simple("Clone".to_string())];
+        let clauses2 = vec![TraitBound::Simple("Default".to_string())];
+        
+        // Different constraints: incompatible
+        assert!(!checker.where_clauses_similar(&clauses1, &clauses2));
+    }
+
+    #[test]
+    fn test_where_clauses_similar_same_constraints() {
+        // T: Clone vs T: Clone - identical
+        let checker = TraitResolver::new();
+        let clauses1 = vec![TraitBound::Simple("Clone".to_string())];
+        let clauses2 = vec![TraitBound::Simple("Clone".to_string())];
+        
+        // Same constraints: similar enough to conflict
+        assert!(checker.where_clauses_similar(&clauses1, &clauses2));
+    }
+
+    #[test]
+    fn test_where_clauses_similar_subset() {
+        // T: Clone, Debug vs T: Clone - subset relationship
+        let checker = TraitResolver::new();
+        let clauses1 = vec![
+            TraitBound::Simple("Clone".to_string()),
+            TraitBound::Simple("Debug".to_string()),
+        ];
+        let clauses2 = vec![TraitBound::Simple("Clone".to_string())];
+        
+        // Subset: compatible
+        assert!(checker.where_clauses_similar(&clauses1, &clauses2));
+    }
+
+    #[test]
+    fn test_blanket_vs_specialized_impl_no_conflict() {
+        // Scenario: impl<T> Trait for T and impl<T: Clone> Trait for T
+        // Should NOT be detected as overlapping
+        let checker = TraitResolver::new();
+        
+        let blanket_impl = GenericTraitImpl {
+            trait_name: "MyTrait".to_string(),
+            impl_type: "T".to_string(),
+            type_params: vec![TypeParameter {
+                name: "T".to_string(),
+                bounds: vec![],
+                variance: Variance::Covariant,
+                default: None,
+            }],
+            where_clauses: vec![],  // No constraints
+            associated_types: HashMap::new(),
+        };
+        
+        let specialized_impl = GenericTraitImpl {
+            trait_name: "MyTrait".to_string(),
+            impl_type: "T".to_string(),
+            type_params: vec![TypeParameter {
+                name: "T".to_string(),
+                bounds: vec![],
+                variance: Variance::Covariant,
+                default: None,
+            }],
+            where_clauses: vec![TraitBound::Simple("Clone".to_string())],  // Constrained
+            associated_types: HashMap::new(),
+        };
+        
+        // They should NOT overlap (specialized is a specialization)
+        assert!(!checker.impls_might_overlap(&blanket_impl, &specialized_impl));
+    }
+
+    #[test]
+    fn test_different_constraint_impls_no_conflict() {
+        // impl<T: Clone> Trait for T and impl<T: Default> Trait for T
+        // Apply to different types - no conflict
+        let checker = TraitResolver::new();
+        
+        let clone_impl = GenericTraitImpl {
+            trait_name: "MyTrait".to_string(),
+            impl_type: "T".to_string(),
+            type_params: vec![TypeParameter {
+                name: "T".to_string(),
+                bounds: vec![],
+                variance: Variance::Covariant,
+                default: None,
+            }],
+            where_clauses: vec![TraitBound::Simple("Clone".to_string())],
+            associated_types: HashMap::new(),
+        };
+        
+        let default_impl = GenericTraitImpl {
+            trait_name: "MyTrait".to_string(),
+            impl_type: "T".to_string(),
+            type_params: vec![TypeParameter {
+                name: "T".to_string(),
+                bounds: vec![],
+                variance: Variance::Covariant,
+                default: None,
+            }],
+            where_clauses: vec![TraitBound::Simple("Default".to_string())],
+            associated_types: HashMap::new(),
+        };
+        
+        // Different constraints - should NOT overlap
+        assert!(!checker.impls_might_overlap(&clone_impl, &default_impl));
+    }
+
+    #[test]
+    fn test_identical_constraint_impls_conflict() {
+        // impl<T: Clone> Trait for T and impl<T: Clone> Trait for T
+        // Identical - should conflict
+        let checker = TraitResolver::new();
+        
+        let impl1 = GenericTraitImpl {
+            trait_name: "MyTrait".to_string(),
+            impl_type: "T".to_string(),
+            type_params: vec![TypeParameter {
+                name: "T".to_string(),
+                bounds: vec![],
+                variance: Variance::Covariant,
+                default: None,
+            }],
+            where_clauses: vec![TraitBound::Simple("Clone".to_string())],
+            associated_types: HashMap::new(),
+        };
+        
+        let impl2 = GenericTraitImpl {
+            trait_name: "MyTrait".to_string(),
+            impl_type: "T".to_string(),
+            type_params: vec![TypeParameter {
+                name: "T".to_string(),
+                bounds: vec![],
+                variance: Variance::Covariant,
+                default: None,
+            }],
+            where_clauses: vec![TraitBound::Simple("Clone".to_string())],
+            associated_types: HashMap::new(),
+        };
+        
+        // Same constraints and same pattern - should overlap
+        assert!(checker.impls_might_overlap(&impl1, &impl2));
     }
 }

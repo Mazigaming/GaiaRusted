@@ -374,6 +374,13 @@ impl BorrowChecker {
                 }
                 HirItem::Use { .. } => {
                 }
+                HirItem::Impl { methods, .. } => {
+                    self.check_items(methods)?;
+                }
+                HirItem::Enum { .. } => {
+                }
+                HirItem::Trait { .. } => {
+                }
             }
         }
         Ok(())

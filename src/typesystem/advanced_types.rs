@@ -178,6 +178,8 @@ pub struct TraitDefinition {
     pub methods: HashMap<String, TraitMethod>,
     /// Trait supertraits
     pub supertraits: Vec<TraitId>,
+    /// Ordered list of associated type names (for positional matching)
+    pub associated_type_order: Vec<String>,
 }
 
 impl TraitDefinition {
@@ -190,11 +192,16 @@ impl TraitDefinition {
             associated_types: HashMap::new(),
             methods: HashMap::new(),
             supertraits: Vec::new(),
+            associated_type_order: Vec::new(),
         }
     }
 
     /// Add an associated type
     pub fn add_associated_type(&mut self, name: String, bound: Option<TypeBound>) {
+        if !self.associated_types.contains_key(&name) {
+            // Track order of associated types for positional matching
+            self.associated_type_order.push(name.clone());
+        }
         self.associated_types.insert(name, bound);
     }
 

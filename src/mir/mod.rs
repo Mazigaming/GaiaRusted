@@ -292,7 +292,12 @@ impl MirBuilder {
     /// Add a statement to the current block
     pub fn add_statement(&mut self, place: Place, rvalue: Rvalue) {
         if let Some(block) = self.blocks.get_mut(self.current_block) {
-            block.statements.push(Statement { place, rvalue });
+            eprintln!("[MIR-Builder] BEFORE: Block {} has {} statements", self.current_block, block.statements.len());
+            block.statements.push(Statement { place: place.clone(), rvalue: rvalue.clone() });
+            eprintln!("[MIR-Builder] AFTER: Block {} has {} statements", self.current_block, block.statements.len());
+            eprintln!("[MIR-Builder] Added: {:?} = {:?}", place, rvalue);
+        } else {
+            eprintln!("[MIR-Builder] ERROR: Block {} does not exist!", self.current_block);
         }
     }
 
@@ -331,6 +336,7 @@ pub struct MirLowerer {
     generated_functions: Vec<MirFunction>,
     closure_vars: std::collections::HashMap<String, (String, Vec<(String, HirType)>)>, // Maps variable name -> (function name, captures)
     available_functions: std::collections::HashSet<String>, // All functions that exist (including qualified names)
+    local_types: std::collections::HashMap<String, String>, // Maps local variable names to their types
 }
 
 impl MirLowerer {
@@ -342,6 +348,7 @@ impl MirLowerer {
             generated_functions: Vec::new(),
             closure_vars: std::collections::HashMap::new(),
             available_functions: std::collections::HashSet::new(),
+            local_types: std::collections::HashMap::new(),
         }
     }
 
@@ -422,6 +429,15 @@ impl MirLowerer {
                         format!("{}::{}", module_prefix, name)
                     };
                     self.collect_available_functions(module_items, &new_prefix);
+                }
+                HirItem::Impl { struct_name, methods, .. } => {
+                    // Collect functions from impl blocks with qualified names
+                    for method_item in methods {
+                        if let HirItem::Function { name, .. } = method_item {
+                            let qualified_name = format!("{}::{}", struct_name, name);
+                            self.available_functions.insert(qualified_name);
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -517,6 +533,20 @@ impl MirLowerer {
                 }
                 HirItem::Use { .. } => {
                 }
+                HirItem::Impl { struct_name, methods, .. } => {
+                    // For impl methods, prepend the struct name to create proper qualified names
+                    // e.g., impl Nums { fn sum() } becomes "Nums::sum"
+                    let new_prefix = if module_prefix.is_empty() {
+                        struct_name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, struct_name)
+                    };
+                    self.lower_items_recursive(methods, &new_prefix, functions)?;
+                }
+                HirItem::Enum { .. } => {
+                }
+                HirItem::Trait { .. } => {
+                }
             }
         }
         Ok(())
@@ -533,6 +563,35 @@ impl MirLowerer {
                     let place = Place::Local(name.clone());
                     builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
                 } else {
+                    // Try to infer type from the initialization expression
+                    let inferred_type = match init {
+                        HirExpression::Call { func, .. } => {
+                            if let HirExpression::Variable(func_name) = &**func {
+                                // Extract struct name from functions like "Counter::new"
+                                func_name.split("::").next().map(|s| s.to_string())
+                            } else {
+                                None
+                            }
+                        }
+                        HirExpression::StructLiteral { name, .. } => {
+                            Some(name.clone())
+                        }
+                        HirExpression::Variable(struct_name) => {
+                            // Handle bare struct references (unit structs or constructors)
+                            // If the variable starts with uppercase, it's likely a struct type
+                            if struct_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                                Some(struct_name.clone())
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    
+                    if let Some(ty) = inferred_type {
+                        self.local_types.insert(name.clone(), ty);
+                    }
+                    
                     let place = Place::Local(name.clone());
                     self.lower_expression_to_place(builder, init, place)?;
                 }
@@ -617,23 +676,98 @@ impl MirLowerer {
                         }
                         
                         // Increment counter: i = i + 1
+                        let loop_body_end = builder.current_block;
                         let inc_expr = Rvalue::BinaryOp(
                             BinaryOp::Add,
                             Operand::Copy(loop_var_place.clone()),
                             Operand::Constant(Constant::Integer(1))
                         );
                         builder.add_statement(loop_var_place, inc_expr);
-                        builder.set_terminator(Terminator::Goto(loop_cond));
+                        builder.blocks[loop_body_end].terminator = Terminator::Goto(loop_cond);
                         
                         // Continue after loop
                         builder.current_block = loop_end;
                     }
                     _ => {
-                        // Fallback: non-range iterator - for now just process body sequentially
-                        // TODO: Implement proper iterator protocol
+                        // Implement iterator protocol: for var in iter { body }
+                        // Desugars into:
+                        // let mut __iter = iter.into_iter();
+                        // loop {
+                        //   match __iter.next() {
+                        //     Some(var) => { body },
+                        //     None => break,
+                        //   }
+                        // }
+                        
+                        let iter_var = format!("__iter_{}", var);
+                        let iter_var_place = Place::Local(iter_var.clone());
+                        
+                        // Call into_iter() on the collection
+                        let iter_temp = builder.gen_temp();
+                        self.lower_expression_to_place(builder, iter, Place::Local(iter_temp.clone()))?;
+                        
+                        // Store the iterator result
+                        builder.add_statement(
+                            iter_var_place.clone(),
+                            Rvalue::Call("__into_iter".to_string(), vec![Operand::Copy(Place::Local(iter_temp))])
+                        );
+                        
+                        // Create loop blocks
+                        let current_block = builder.current_block;
+                        let loop_cond = builder.create_block();
+                        let loop_body = builder.create_block();
+                        let loop_end = builder.create_block();
+                        
+                        // Jump to loop condition
+                        builder.blocks[current_block].terminator = Terminator::Goto(loop_cond);
+                        
+                        // Loop condition: call next() on iterator
+                        builder.current_block = loop_cond;
+                        let next_result = builder.gen_temp();
+                        builder.add_statement(
+                            Place::Local(next_result.clone()),
+                            Rvalue::Call("__next".to_string(), vec![Operand::Copy(iter_var_place)])
+                        );
+                        
+                        // Check if Some(value) or None
+                        // For simplicity, treat any non-zero result as Some
+                        let cond_check = builder.gen_temp();
+                        builder.add_statement(
+                            Place::Local(cond_check.clone()),
+                            Rvalue::BinaryOp(
+                                BinaryOp::NotEqual,
+                                Operand::Copy(Place::Local(next_result.clone())),
+                                Operand::Constant(Constant::Integer(0))
+                            )
+                        );
+                        
+                        builder.set_terminator(Terminator::If(
+                            Operand::Copy(Place::Local(cond_check)),
+                            loop_body,
+                            loop_end,
+                        ));
+                        
+                        // Loop body
+                        builder.current_block = loop_body;
+                        
+                        // Bind loop variable to the value from next()
+                        // For now, just use the result directly
+                        builder.add_statement(
+                            Place::Local(var.clone()),
+                            Rvalue::Use(Operand::Copy(Place::Local(next_result)))
+                        );
+                        
+                        // Execute loop body
                         for stmt in body {
                             self.lower_statement_in_builder(builder, stmt)?;
                         }
+                        
+                        // Jump back to condition
+                        let loop_body_end = builder.current_block;
+                        builder.blocks[loop_body_end].terminator = Terminator::Goto(loop_cond);
+                        
+                        // Continue after loop
+                        builder.current_block = loop_end;
                     }
                 }
             }
@@ -654,20 +788,35 @@ impl MirLowerer {
                 
                 // Loop condition check (in a separate block)
                 builder.current_block = loop_cond;
+                let cond_start = builder.current_block;
                 let cond_temp = builder.gen_temp();
                 self.lower_expression_to_place(builder, condition, Place::Local(cond_temp.clone()))?;
-                builder.set_terminator(Terminator::If(
-                    Operand::Copy(Place::Local(cond_temp)),
-                    loop_body,
-                    loop_end,
-                ));
+                
+                let cond_end = builder.current_block;
+                if cond_end != cond_start {
+                    // Condition evaluation created nested blocks (e.g., nested if expression)
+                    // Set If terminator on the final block where cond_temp has its value
+                    builder.blocks[cond_end].terminator = Terminator::If(
+                        Operand::Copy(Place::Local(cond_temp)),
+                        loop_body,
+                        loop_end,
+                    );
+                } else {
+                    // Simple condition that didn't create blocks
+                    builder.blocks[loop_cond].terminator = Terminator::If(
+                        Operand::Copy(Place::Local(cond_temp)),
+                        loop_body,
+                        loop_end,
+                    );
+                }
                 
                 // Loop body
                 builder.current_block = loop_body;
                 for stmt in body {
                     self.lower_statement_in_builder(builder, stmt)?;
                 }
-                builder.set_terminator(Terminator::Goto(loop_cond));
+                let loop_body_end = builder.current_block;
+                builder.blocks[loop_body_end].terminator = Terminator::Goto(loop_cond);
                 
                 // Continue after loop
                 builder.current_block = loop_end;
@@ -690,19 +839,20 @@ impl MirLowerer {
                 //   goto merge_block
                 // merge_block:
                 
-                let _if_block = builder.current_block;
+                // Condition check
+                let cond_temp = builder.gen_temp();
+                self.lower_expression_to_place(builder, condition, Place::Local(cond_temp.clone()))?;
+                
+                let if_block = builder.current_block;
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
                 let merge_block = builder.create_block();
                 
-                // Condition check
-                let cond_temp = builder.gen_temp();
-                self.lower_expression_to_place(builder, condition, Place::Local(cond_temp.clone()))?;
-                builder.set_terminator(Terminator::If(
+                builder.blocks[if_block].terminator = Terminator::If(
                     Operand::Copy(Place::Local(cond_temp)),
                     then_block,
                     else_block,
-                ));
+                );
                 
                 // Then branch
                 builder.current_block = then_block;
@@ -784,7 +934,9 @@ impl MirLowerer {
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Bool(*b))));
             }
             HirExpression::Variable(name) => {
+                eprintln!("[MIR] Variable: Lowering variable '{}' to place {:?}", name, place);
                 builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Local(name.clone()))));
+                eprintln!("[MIR] Variable: Added statement");
             }
             HirExpression::BinaryOp { op, left, right } => {
                 let left_temp = builder.gen_temp();
@@ -796,11 +948,32 @@ impl MirLowerer {
                 builder.add_statement(place, rvalue);
             }
             HirExpression::UnaryOp { op, operand } => {
-                let op_temp = builder.gen_temp();
-                self.lower_expression_to_place(builder, operand, Place::Local(op_temp.clone()))?;
-                
-                let rvalue = Rvalue::UnaryOp(*op, Operand::Copy(Place::Local(op_temp)));
-                builder.add_statement(place, rvalue);
+                // Special handling for Reference and MutableReference:
+                // We need to pass the place itself, not evaluate the operand
+                if matches!(op, crate::lowering::UnaryOp::Reference | crate::lowering::UnaryOp::MutableReference) {
+                    // For references, extract the place from the operand
+                    match &**operand {
+                        HirExpression::Variable(var_name) => {
+                            // Create reference to a variable directly
+                            let rvalue = Rvalue::UnaryOp(*op, Operand::Copy(Place::Local(var_name.clone())));
+                            builder.add_statement(place, rvalue);
+                        }
+                        _ => {
+                            // For complex expressions, evaluate to temp first
+                            let op_temp = builder.gen_temp();
+                            self.lower_expression_to_place(builder, operand, Place::Local(op_temp.clone()))?;
+                            let rvalue = Rvalue::UnaryOp(*op, Operand::Copy(Place::Local(op_temp)));
+                            builder.add_statement(place, rvalue);
+                        }
+                    }
+                } else {
+                    // For other unary operations, evaluate the operand normally
+                    let op_temp = builder.gen_temp();
+                    self.lower_expression_to_place(builder, operand, Place::Local(op_temp.clone()))?;
+                    
+                    let rvalue = Rvalue::UnaryOp(*op, Operand::Copy(Place::Local(op_temp)));
+                    builder.add_statement(place, rvalue);
+                }
             }
             HirExpression::Call { func, args } => {
                 let mut func_name = match &**func {
@@ -923,18 +1096,32 @@ impl MirLowerer {
             }
             HirExpression::If { condition, then_body, else_body } => {
                 // If expressions in MIR become branches
+                let cond_start_block = builder.current_block;
                 let cond_temp = builder.gen_temp();
                 self.lower_expression_to_place(builder, condition, Place::Local(cond_temp.clone()))?;
                 
-                let curr = builder.current_block;
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
                 let merge_block = builder.create_block();
-                builder.blocks[curr].terminator = Terminator::If(
-                    Operand::Copy(Place::Local(cond_temp)),
-                    then_block,
-                    else_block,
-                );
+                
+                let cond_end_block = builder.current_block;
+                if cond_end_block != cond_start_block {
+                    // Condition evaluation created nested blocks
+                    let if_block = builder.create_block();
+                    builder.blocks[cond_end_block].terminator = Terminator::Goto(if_block);
+                    builder.blocks[if_block].terminator = Terminator::If(
+                        Operand::Copy(Place::Local(cond_temp)),
+                        then_block,
+                        else_block,
+                    );
+                } else {
+                    // Simple condition: set If terminator on cond_start_block
+                    builder.blocks[cond_start_block].terminator = Terminator::If(
+                        Operand::Copy(Place::Local(cond_temp)),
+                        then_block,
+                        else_block,
+                    );
+                }
                 
                 // Determine target place for assignments
                 let target_place = place.clone();
@@ -953,6 +1140,15 @@ impl MirLowerer {
                             }
                             HirStatement::Return(None) => {
                                 builder.add_statement(target_place.clone(), Rvalue::Use(Operand::Constant(Constant::Unit)));
+                            }
+                            HirStatement::If { condition, then_body: if_then_body, else_body: if_else_body } => {
+                                // Statement-level if that returns a value (implicitly the last expression)
+                                // Convert it to expression-level if handling by recursively processing it
+                                self.lower_expression_to_place(builder, &HirExpression::If {
+                                    condition: condition.clone(),
+                                    then_body: if_then_body.clone(),
+                                    else_body: if_else_body.clone(),
+                                }, target_place.clone())?;
                             }
                             _ => {
                                 self.lower_statement_in_builder(builder, stmt)?;
@@ -981,6 +1177,15 @@ impl MirLowerer {
                                 }
                                 HirStatement::Return(None) => {
                                     builder.add_statement(target_place.clone(), Rvalue::Use(Operand::Constant(Constant::Unit)));
+                                }
+                                HirStatement::If { condition, then_body: if_then_body, else_body: if_else_body } => {
+                                    // Statement-level if that returns a value (implicitly the last expression)
+                                    // Convert it to expression-level if handling by recursively processing it
+                                    self.lower_expression_to_place(builder, &HirExpression::If {
+                                        condition: condition.clone(),
+                                        then_body: if_then_body.clone(),
+                                        else_body: if_else_body.clone(),
+                                    }, target_place.clone())?;
                                 }
                                 _ => {
                                     self.lower_statement_in_builder(builder, stmt)?;
@@ -1012,41 +1217,56 @@ impl MirLowerer {
                 // Loop condition check - use a fresh block so initial statements aren't in the loop
                 builder.current_block = loop_cond;
                 let cond_temp = builder.gen_temp();
+                let cond_start = builder.current_block;
                 self.lower_expression_to_place(builder, condition, Place::Local(cond_temp.clone()))?;
-                builder.blocks[loop_cond].terminator = Terminator::If(
-                    Operand::Copy(Place::Local(cond_temp)),
-                    loop_body,
-                    loop_end,
-                );
+                
+                let cond_end = builder.current_block;
+                if cond_end != cond_start {
+                    // Condition evaluation created nested blocks (e.g., nested if expression)
+                    // The nested if handler already set loop_cond's terminator to jump to its branches.
+                    // Those branches will assign to cond_temp and goto merge_block (cond_end).
+                    // We just need to set the merge block to check cond_temp for the while loop.
+                    builder.blocks[cond_end].terminator = Terminator::If(
+                        Operand::Copy(Place::Local(cond_temp)),
+                        loop_body,
+                        loop_end,
+                    );
+                } else {
+                    // Simple condition that didn't create blocks
+                    builder.blocks[loop_cond].terminator = Terminator::If(
+                        Operand::Copy(Place::Local(cond_temp)),
+                        loop_body,
+                        loop_end,
+                    );
+                }
                 
                 // Loop body
                 builder.current_block = loop_body;
                 for stmt in body {
                     self.lower_statement_in_builder(builder, stmt)?;
                 }
-                builder.blocks[loop_body].terminator = Terminator::Goto(loop_cond);
+                let loop_body_end = builder.current_block;
+                builder.blocks[loop_body_end].terminator = Terminator::Goto(loop_cond);
                 
                 // After loop
                 builder.current_block = loop_end;
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
             }
             HirExpression::FieldAccess { object, field } => {
-                // Optimization: if the object is a simple variable, access the field directly
-                // without creating an intermediate temporary
-                if let HirExpression::Variable(obj_name) = &**object {
-                    builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
-                        Box::new(Place::Local(obj_name.clone())),
-                        field.clone(),
-                    ))));
-                } else {
-                    // Complex object expression - evaluate to temporary first
-                    let obj_temp = builder.gen_temp();
-                    self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
-                    builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
-                        Box::new(Place::Local(obj_temp)),
-                        field.clone(),
-                    ))));
-                }
+                // Evaluate the object expression to a temporary
+                let obj_temp = builder.gen_temp();
+                eprintln!("[MIR] FieldAccess: Lowering object to temp '{}'", obj_temp);
+                self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
+                eprintln!("[MIR] FieldAccess: Object lowered, now creating field access from '{}' to '{}'", obj_temp, field);
+                
+                // Then access the field from that temporary
+                eprintln!("[MIR] FieldAccess: Adding statement: {} = Use(Copy(Field({}, {})))", 
+                         if let Place::Local(n) = &place { n } else { "?" },
+                         obj_temp, field);
+                builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
+                    Box::new(Place::Local(obj_temp)),
+                    field.clone(),
+                ))));
             }
             HirExpression::TupleAccess { object, index: _ } => {
                 let obj_temp = builder.gen_temp();
@@ -1210,8 +1430,68 @@ impl MirLowerer {
                 }
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
             }
-            HirExpression::MethodCall { receiver: _, method: _, args: _ } => {
-                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+            HirExpression::MethodCall { receiver, method, args } => {
+                // Evaluate receiver to a temporary
+                let receiver_temp = builder.gen_temp();
+                self.lower_expression_to_place(builder, receiver, Place::Local(receiver_temp.clone()))?;
+                
+                // Try to infer receiver type from the expression
+                let receiver_type = match &**receiver {
+                    HirExpression::Variable(var_name) => {
+                        // First check if it's a known local variable with a tracked type
+                        if let Some(ty) = self.local_types.get(var_name).cloned() {
+                            Some(ty)
+                        } else {
+                            // Otherwise, the variable name might be a struct type itself
+                            // (e.g., unit structs used as values like `let dog = Dog;`)
+                            // For now, assume the variable name is the type if it starts with uppercase
+                            if var_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                                Some(var_name.clone())
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                    HirExpression::FieldAccess { object, field } => {
+                        // For field accesses like self.items, check if field name is a collection
+                        // e.g., if field is "items" it's likely a Vec or collection type
+                        if method == "push" || method == "pop" || method == "get" || method == "len" {
+                            Some("Vec".to_string())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                
+                // Map built-in collection methods to runtime functions
+                let func_name = if let Some(struct_type) = receiver_type {
+                    // Check if it's a built-in collection type
+                    match struct_type.as_str() {
+                        "Vec" => {
+                            match method.as_str() {
+                                "push" => "gaia_vec_push".to_string(),
+                                "pop" => "gaia_vec_pop".to_string(),
+                                "get" => "gaia_vec_get".to_string(),
+                                "len" => "gaia_vec_len".to_string(),
+                                _ => format!("{}::{}", struct_type, method),
+                            }
+                        }
+                        _ => format!("{}::{}", struct_type, method),
+                    }
+                } else {
+                    format!("__method_{}", method)
+                };
+                
+                // Collect operands: receiver followed by method arguments
+                let mut operands = vec![Operand::Copy(Place::Local(receiver_temp))];
+                for arg in args {
+                    let arg_temp = builder.gen_temp();
+                    self.lower_expression_to_place(builder, arg, Place::Local(arg_temp.clone()))?;
+                    operands.push(Operand::Copy(Place::Local(arg_temp)));
+                }
+                
+                builder.add_statement(place, Rvalue::Call(func_name, operands));
             }
         }
         Ok(())
@@ -1380,17 +1660,24 @@ impl MirOptimizer {
         }
 
         // Mark all operands in statements (right-hand side)
+        // Also mark the inner place of Deref assignments as used
         for block in blocks.iter() {
             for stmt in &block.statements {
                 Self::collect_places_from_rvalue(&stmt.rvalue, &mut used_places);
+                // If this statement assigns to a deref, mark the inner place as used
+                if let Place::Deref(inner) = &stmt.place {
+                    used_places.insert((**inner).clone());
+                }
             }
         }
 
         // Second pass: remove statements that assign to unused places
         for block in blocks {
             block.statements.retain(|stmt| {
-                // Keep statement if its target is used, or if it has side effects
-                used_places.contains(&stmt.place) || Self::has_side_effects(&stmt.rvalue)
+                // Keep statement if its target is used, if it has side effects, 
+                // or if it's a dereference assignment (which has side effects: writes to memory)
+                let is_deref = matches!(&stmt.place, crate::mir::Place::Deref(_));
+                used_places.contains(&stmt.place) || Self::has_side_effects(&stmt.rvalue) || is_deref
             });
         }
 
@@ -1401,9 +1688,25 @@ impl MirOptimizer {
     fn collect_places_from_operand(operand: &Operand, places: &mut HashSet<Place>) {
         match operand {
             Operand::Move(place) | Operand::Copy(place) => {
-                places.insert(place.clone());
+                // Recursively collect from the place structure
+                Self::collect_places_from_place(place, places);
             }
             Operand::Constant(_) => {}
+        }
+    }
+    
+    /// Collect all places from a place structure (handles nested Field, Index, Deref)
+    fn collect_places_from_place(place: &Place, places: &mut HashSet<Place>) {
+        match place {
+            Place::Local(_) => {
+                places.insert(place.clone());
+            }
+            Place::Field(inner, _) | Place::Index(inner, _) | Place::Deref(inner) => {
+                // Recursively collect from the inner place
+                Self::collect_places_from_place(inner, places);
+                // Also add this place itself
+                places.insert(place.clone());
+            }
         }
     }
 
@@ -1513,6 +1816,10 @@ impl MirOptimizer {
             if let Terminator::Goto(next) = blocks[target].terminator {
                 if next == target {
                     // Infinite loop, stop
+                    break;
+                }
+                // Don't follow chains through blocks with statements
+                if !blocks[target].statements.is_empty() {
                     break;
                 }
                 target = next;

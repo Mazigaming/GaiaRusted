@@ -4,7 +4,7 @@ A complete Rust compiler implementation built from scratch in pure Rust with zer
 
 > **Note:** Previous repo got nuked lmao 💀 Fresh start ig
 
-**v0.8.0+ (DEVELOPMENT)** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
+**v0.9.0 (STRUCT FIELD ACCESS EDITION)** ✨ | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
 
 * * *
 
@@ -1071,7 +1071,35 @@ Roadmap
 *   ✅ 56,000+ lines of code total
 *   ✅ 450+ lines added for Phase 4 framework
 
-### 🚀 v0.9.0 (PLANNED)
+### ✅ v0.9.0 (Released) ✨ **CURRENT STABLE - STRUCT FIELD ACCESS**
+
+**Critical Bug Fixes:**
+*   ✅ **Bug #4: Struct Field Access** - Complete fix with 3 sub-bug resolutions
+*   ✅ MIR dead code elimination fixed (recursive place collection)
+*   ✅ Struct metadata propagation corrected (dual memory models)
+*   ✅ Stack frame allocation corruption resolved (proper accounting)
+
+**Struct Support Complete:**
+*   ✅ Struct field access now fully working: `let v = p.x;`
+*   ✅ Direct field access on struct variables
+*   ✅ Field access through temporaries and copies
+*   ✅ Field access in method parameters
+*   ✅ Efficient two-tier memory model (direct and indirect access)
+*   ✅ Proper stack layout and offset management
+
+**Test Coverage:**
+*   ✅ All 10+ struct field access tests passing
+*   ✅ All 5 control flow tests still passing (Bugs #1-3, #7-8)
+*   ✅ Zero regressions on previous features
+*   ✅ Comprehensive edge case coverage
+
+**Code Quality:**
+*   ✅ Builds with 0 errors, 6 non-critical warnings
+*   ✅ Compilation time ~17-22ms per test
+*   ✅ Clean architecture with modular phase handling
+*   ✅ Full backward compatibility with v0.8.0
+
+### 🚀 v0.10.0 (PLANNED)
 
 **Optimization Pipeline Extensions:**
 *   SIMD instruction emission (SSE2/AVX2 actual code generation)
@@ -1087,12 +1115,15 @@ Roadmap
 *   Performance regression detection in test suite
 
 **Language Features:**
+*   Nested structs and arrays of structs
+*   Associated types for trait system
 *   Impl blocks for types (e.g., `impl MyType { fn method() {} }`)
 *   Associated constants and type aliases
 *   Const evaluation and compile-time computation
 *   Type-level constraints and bounds
 
 **Tooling & Diagnostics:**
+*   Debug logging removal from production builds
 *   Enhanced compiler diagnostics with fix suggestions
 *   Performance profiling integration
 *   Code coverage reporting
@@ -1134,4 +1165,4 @@ Quick Links
 
 * * *
 
-**Made with 🦀 Rust** | Built in memory of Terry Davis and my mental insanity | GaiaRusted v0.8.0+
+**Made with 🦀 Rust** | Built in memory of Terry Davis and my mental insanity | GaiaRusted v0.9.0 ✨

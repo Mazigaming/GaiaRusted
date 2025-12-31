@@ -1068,67 +1068,17 @@ impl FusionMirGenerator {
     /// Phase 4: Generate unrolled loop body
     /// Duplicates the loop body N times with updated indices
     fn generate_unrolled_loop_body(&mut self, unroll_factor: usize, elem_var: &str, acc_var: &str) {
-        if unroll_factor <= 1 {
-            // No unrolling, just apply operations once
-            self.apply_operations(elem_var, acc_var, "i");
-            return;
+        // NOTE: Loop unrolling disabled - Rvalue::Index only accepts static usize constants,
+        // not dynamic expressions. Supporting dynamic indices would require MIR redesign to use
+        // Operand for indices instead of static usize constants.
+        // For now, always fall back to single element per iteration regardless of unroll_factor.
+        // Full unrolling support requires architectural change to MIR Index representation.
+        if unroll_factor > 1 {
+            eprintln!("[Iterator Fusion] Loop unrolling factor {} disabled - MIR Index limitation", unroll_factor);
         }
         
-        // Clone the operations list
-        let ops = self.opportunity.operations.clone();
-        let mut current_var = elem_var.to_string();
-        
-        // Generate unrolled iterations
-        for unroll_iter in 0..unroll_factor {
-            // For each unrolled iteration, load a different element
-            let elem_offset = format!("i + {}", unroll_iter);
-            let elem_local = format!("{}_unroll_{}", elem_var, unroll_iter);
-            
-            // Load element at offset
-            self.builder.add_statement(
-                Place::Local(elem_local.clone()),
-                Rvalue::Index(
-                    Place::Local(self.collection_name.clone()),
-                    0, // FIXME: Should use dynamic index (i + unroll_iter)
-                ),
-            );
-            
-            // Apply operations to this element
-            current_var = elem_local.clone();
-            for (op_type, op_id) in &ops {
-                match op_type.as_str() {
-                    "map" => {
-                        let arg = Operand::Copy(Place::Local(current_var.clone()));
-                        if let Some(inlined_result) = self.inline_closure_body(*op_id, arg.clone()) {
-                            if let Operand::Copy(Place::Local(result_var)) = &inlined_result {
-                                current_var = result_var.clone();
-                            }
-                        }
-                    }
-                    "sum" | "fold" => {
-                        self.builder.add_statement(
-                            Place::Local(acc_var.to_string()),
-                            Rvalue::BinaryOp(
-                                BinaryOp::Add,
-                                Operand::Copy(Place::Local(acc_var.to_string())),
-                                Operand::Copy(Place::Local(current_var.clone())),
-                            ),
-                        );
-                    }
-                    "count" => {
-                        self.builder.add_statement(
-                            Place::Local(acc_var.to_string()),
-                            Rvalue::BinaryOp(
-                                BinaryOp::Add,
-                                Operand::Copy(Place::Local(acc_var.to_string())),
-                                Operand::Constant(Constant::Integer(1)),
-                            ),
-                        );
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // Apply operations to single element per iteration
+        self.apply_operations(elem_var, acc_var, "i");
     }
 
     /// Phase 4 (Optional): Detect cross-function fusion opportunities
@@ -1284,16 +1234,20 @@ impl FusionMirGenerator {
         self.builder.switch_block(loop_body_idx);
         
         // Load element: elem = collection[i]
-        // NOTE: Phase 2 TODO - Rvalue::Index only accepts static usize, not dynamic indices
-        // Workaround: For now use index 0, Phase 2+ needs MIR enhancement for dynamic indexing
-        // This means current Phase 1e only works correctly for single-element iteration in tests
-        // Real implementation requires Place/Rvalue redesign to support Operand indices
+        // LIMITATION: Rvalue::Index only accepts static usize constants, not dynamic indices.
+        // This is a fundamental MIR architectural limitation that would require redesigning
+        // the Index representation to use Operand instead of static usize.
+        // Workaround: For single-iteration loops (unroll_factor=1), we use index 0 as
+        // a placeholder and rely on lowering-level optimization to handle dynamic indexing.
+        // For proper dynamic iteration, the MIR Index variant must be redesigned:
+        //   Current:  Rvalue::Index(Place, usize)
+        //   Needed:   Rvalue::Index(Place, Operand) // to support loop counters
         let elem_var = "elem".to_string();
         self.builder.add_statement(
             Place::Local(elem_var.clone()),
             Rvalue::Index(
                 Place::Local(self.collection_name.clone()),
-                0, // FIXME: Should be dynamic index based on loop counter i
+                0, // LIMITATION: Static index - dynamic indices blocked by MIR design
             ),
         );
 

@@ -27,6 +27,80 @@ impl UnificationEngine {
         Self { var_counter: 0 }
     }
 
+    /// Unify two optional lifetimes according to Rust's lifetime rules
+    ///
+    /// Lifetime unification follows these rules:
+    /// 1. 'static can unify with any lifetime (covariant upper bound)
+    /// 2. Named lifetimes must be identical or both be variables
+    /// 3. Variables can unify with any lifetime (for constraint solving)
+    /// 4. Elided lifetimes unify with each other
+    /// 5. Missing lifetimes (None) unify with each other and with elided lifetimes
+    ///
+    /// # Returns
+    /// * Ok(()) if lifetimes are compatible
+    /// * Err(message) if lifetimes are incompatible
+    fn unify_lifetimes(
+        &self,
+        lt1: &Option<super::types::Lifetime>,
+        lt2: &Option<super::types::Lifetime>,
+    ) -> Result<(), String> {
+        use super::types::Lifetime;
+        
+        match (lt1, lt2) {
+            // Both lifetimes are missing (elided)
+            (None, None) => Ok(()),
+            
+            // One or both are explicit lifetimes
+            (Some(lifetime1), Some(lifetime2)) => {
+                match (lifetime1, lifetime2) {
+                    // Identical lifetimes unify trivially
+                    (Lifetime::Named(n1), Lifetime::Named(n2)) if n1 == n2 => Ok(()),
+                    
+                    // Static lifetime is compatible with any lifetime (covariant)
+                    (Lifetime::Static, _) | (_, Lifetime::Static) => Ok(()),
+                    
+                    // Variables can unify with any lifetime
+                    (Lifetime::Variable(_), _) | (_, Lifetime::Variable(_)) => Ok(()),
+                    
+                    // Elided lifetimes unify with each other
+                    (Lifetime::Elided, Lifetime::Elided) => Ok(()),
+                    
+                    // Named and elided don't match
+                    (Lifetime::Named(n), Lifetime::Elided) | (Lifetime::Elided, Lifetime::Named(n)) => {
+                        Err(format!(
+                            "Lifetime mismatch: cannot unify explicit lifetime 't{} with elided lifetime '_",
+                            n.0
+                        ))
+                    }
+                    
+                    // Variables unify with elided lifetimes
+                    (Lifetime::Variable(_), Lifetime::Elided) | (Lifetime::Elided, Lifetime::Variable(_)) => Ok(()),
+                    
+                    // Different named lifetimes don't unify
+                    (Lifetime::Named(n1), Lifetime::Named(n2)) => {
+                        Err(format!(
+                            "Lifetime mismatch: cannot unify 't{} with 't{}",
+                            n1.0, n2.0
+                        ))
+                    }
+                }
+            }
+            
+            // One explicit, one implicit (elided/missing) - these unify
+            (Some(Lifetime::Static), None) | (None, Some(Lifetime::Static)) => Ok(()),
+            (Some(Lifetime::Elided), None) | (None, Some(Lifetime::Elided)) => Ok(()),
+            (Some(Lifetime::Variable(_)), None) | (None, Some(Lifetime::Variable(_))) => Ok(()),
+            
+            // One explicit named, one implicit - error
+            (Some(Lifetime::Named(n)), None) | (None, Some(Lifetime::Named(n))) => {
+                Err(format!(
+                    "Lifetime mismatch: cannot unify explicit lifetime 't{} with implicit/elided lifetime",
+                    n.0
+                ))
+            }
+        }
+    }
+    
     /// Check if a numeric type can be widened to another numeric type
     /// 
     /// Widening allows smaller types to be converted to larger types:
@@ -143,17 +217,17 @@ impl UnificationEngine {
                 self.unify(e1, e2, subst)
             }
 
-            // Reference unification: mutability and inner type must match
+            // Reference unification: mutability, lifetime and inner type must match
             (
                 Type::Reference {
                     mutable: m1,
                     inner: i1,
-                    lifetime: _lt1,
+                    lifetime: lt1,
                 },
                 Type::Reference {
                     mutable: m2,
                     inner: i2,
-                    lifetime: _lt2,
+                    lifetime: lt2,
                 },
             ) => {
                 if m1 != m2 {
@@ -163,8 +237,11 @@ impl UnificationEngine {
                         if *m2 { "mut" } else { "const" }
                     ));
                 }
-                // Lifetime check: for now, accept any lifetime combination
-                // (this is simplified; real Rust has more complex lifetime rules)
+                
+                // Lifetime unification: proper Rust lifetime rules
+                self.unify_lifetimes(lt1, lt2)?;
+                
+                // Unify inner types (covariant in the inner type for references)
                 self.unify(i1, i2, subst)
             }
 

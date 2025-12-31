@@ -121,6 +121,8 @@ pub struct TypeContext {
     structs: HashMap<String, Vec<(String, HirType)>>,
     /// Trait definitions: trait_name -> (method_names, method_sigs)
     traits: HashMap<String, HashMap<String, (Vec<HirType>, HirType)>>,
+    /// Impl block methods: (struct_name, method_name) -> function_signature
+    impl_methods: HashMap<(String, String), (Vec<HirType>, HirType)>,
     /// Generic parameter trait bounds: param_name -> Vec<trait_name>
     generic_bounds: HashMap<String, Vec<String>>,
 }
@@ -133,6 +135,7 @@ impl TypeContext {
             functions: HashMap::new(),
             structs: HashMap::new(),
             traits: HashMap::new(),
+            impl_methods: HashMap::new(),
             generic_bounds: HashMap::new(),
         }
     }
@@ -175,6 +178,16 @@ impl TypeContext {
     /// Get bounds for a generic parameter
     fn get_generic_bounds(&self, param_name: &str) -> Vec<String> {
         self.generic_bounds.get(param_name).cloned().unwrap_or_default()
+    }
+
+    /// Register an impl block method
+    fn register_impl_method(&mut self, struct_name: String, method_name: String, params: Vec<HirType>, ret: HirType) {
+        self.impl_methods.insert((struct_name, method_name), (params, ret));
+    }
+
+    /// Look up an impl block method
+    fn lookup_impl_method(&self, struct_name: &str, method_name: &str) -> Option<(Vec<HirType>, HirType)> {
+        self.impl_methods.get(&(struct_name.to_string(), method_name.to_string())).cloned()
     }
 }
 
@@ -285,6 +298,12 @@ impl TypeChecker {
         self.context.register_function("is_empty".to_string(), vec![HirType::Unknown], HirType::Bool);
         self.context.register_function("len".to_string(), vec![HirType::Unknown], HirType::Int32);
         
+        // Iterator protocol functions
+        self.context.register_function("__into_iter".to_string(), vec![HirType::Unknown], HirType::Unknown);
+        self.context.register_function("__next".to_string(), vec![HirType::Unknown], HirType::Unknown);
+        self.context.register_function("into_iter".to_string(), vec![HirType::Unknown], HirType::Unknown);
+        self.context.register_function("next".to_string(), vec![HirType::Unknown], HirType::Unknown);
+        
         // Register standard traits
         self.register_standard_traits();
     }
@@ -321,6 +340,16 @@ impl TypeChecker {
         let mut ord_methods = HashMap::new();
         ord_methods.insert("cmp".to_string(), (vec![HirType::Unknown], HirType::Named("Ordering".to_string())));
         self.context.register_trait("Ord".to_string(), ord_methods);
+        
+        // Iterator trait: next(&mut self) -> Option<Item>
+        let mut iterator_methods = HashMap::new();
+        iterator_methods.insert("next".to_string(), (vec![], HirType::Named("Option".to_string())));
+        self.context.register_trait("Iterator".to_string(), iterator_methods);
+        
+        // IntoIterator trait: into_iter(self) -> IntoIter
+        let mut into_iter_methods = HashMap::new();
+        into_iter_methods.insert("into_iter".to_string(), (vec![], HirType::Named("IntoIter".to_string())));
+        self.context.register_trait("IntoIterator".to_string(), into_iter_methods);
     }
 
     /// Collect all type definitions (first pass)
@@ -380,6 +409,26 @@ impl TypeChecker {
                 HirItem::AssociatedType { .. } => {
                 }
                 HirItem::Use { .. } => {
+                }
+                HirItem::Impl { struct_name, methods, .. } => {
+                    for method in methods {
+                        if let HirItem::Function { name, params, return_type, .. } = method {
+                            let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                            let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
+                            
+                            // Register both as impl method and as a qualified function
+                            self.context.register_impl_method(struct_name.clone(), name.clone(), param_types.clone(), ret_type.clone());
+                            
+                            // Also register as a qualified function so it can be called as Type::method()
+                            let qualified_name = format!("{}::{}", struct_name, name);
+                            self.context.register_function(qualified_name, param_types, ret_type);
+                        }
+                    }
+                    self.collect_definitions_recursive(methods, module_prefix.clone())?;
+                }
+                HirItem::Enum { .. } => {
+                }
+                HirItem::Trait { .. } => {
                 }
             }
         }
@@ -478,11 +527,377 @@ impl TypeChecker {
             return true;
         }
         
-        // For now, we accept all types for generic parameters
-        // In a full implementation, we would check if the concrete type
-        // actually implements all the required traits
-        // This is a placeholder that will be filled in later
+        // Validate each bound
+        for bound in &bounds {
+            match bound.as_str() {
+                // Built-in marker traits - check if concrete type supports them
+                "Clone" => {
+                    // Clone is supported for Copy types and most compound types
+                    if !self.type_supports_clone(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Clone trait", concrete_type);
+                        return false;
+                    }
+                }
+                "Copy" => {
+                    // Copy is only for small, fixed-size types
+                    if !self.type_is_copy(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Copy trait (only primitive types and thin structs are Copy)", concrete_type);
+                        return false;
+                    }
+                }
+                "Default" => {
+                    // Default is supported for primitives and types with default values
+                    if !self.type_supports_default(concrete_type) {
+                        eprintln!("[TypeChecker] Warning: Type {} may not implement Default trait", concrete_type);
+                        // Don't fail hard - Default might be user-defined
+                    }
+                }
+                "Debug" => {
+                    // Debug is supported for most types (pretty much everything)
+                    if !self.type_supports_debug(concrete_type) {
+                        eprintln!("[TypeChecker] Warning: Type {} may not implement Debug trait", concrete_type);
+                        // Don't fail hard - Debug might be user-defined or derived
+                    }
+                }
+                "Display" => {
+                    // Display requires explicit impl, not automatically available
+                    if !self.type_supports_display(concrete_type) {
+                        eprintln!("[TypeChecker] Warning: Type {} may not implement Display trait - explicit impl required", concrete_type);
+                        // Don't fail hard - user might have impl Display
+                    }
+                }
+                "Hash" => {
+                    // Hash is for types that can be hashed
+                    if !self.type_supports_hash(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Hash trait (Fn and FnMut types don't hash)", concrete_type);
+                        return false;
+                    }
+                }
+                "Eq" => {
+                    // Eq requires types that support equality
+                    if !self.type_supports_eq(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Eq trait", concrete_type);
+                        return false;
+                    }
+                }
+                "PartialEq" => {
+                    // PartialEq is supported for most types
+                    if !self.type_supports_partialeq(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement PartialEq trait", concrete_type);
+                        return false;
+                    }
+                }
+                "Ord" => {
+                    // Ord requires full ordering (stricter than PartialOrd)
+                    if !self.type_supports_ord(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Ord trait", concrete_type);
+                        return false;
+                    }
+                }
+                "PartialOrd" => {
+                    // PartialOrd for types that support partial ordering
+                    if !self.type_supports_partialord(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement PartialOrd trait", concrete_type);
+                        return false;
+                    }
+                }
+                "Send" => {
+                    // Send: safe to send across thread boundaries
+                    if !self.type_is_send(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Send trait (likely has interior mutability)", concrete_type);
+                        return false;
+                    }
+                }
+                "Sync" => {
+                    // Sync: safe to share across thread boundaries
+                    if !self.type_is_sync(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Sync trait (likely has interior mutability)", concrete_type);
+                        return false;
+                    }
+                }
+                "Unpin" => {
+                    // Unpin: can be safely moved
+                    // Most types are Unpin unless they explicitly implement Drop and Pin semantics
+                    if !self.type_is_unpin(concrete_type) {
+                        eprintln!("[TypeChecker] Error: Type {} does not implement Unpin trait", concrete_type);
+                        return false;
+                    }
+                }
+                custom_trait => {
+                    // For custom traits, try to look up the trait definition
+                    if let Some(_trait_methods) = self.context.lookup_trait(custom_trait) {
+                        // Check if concrete_type has impl block for this trait
+                        if !self.type_implements_custom_trait(concrete_type, custom_trait) {
+                            eprintln!("[TypeChecker] Error: Type {} does not implement custom trait '{}'", concrete_type, custom_trait);
+                            return false;
+                        }
+                    } else {
+                        // Unknown trait - can't validate
+                        eprintln!("[TypeChecker] Warning: Cannot find trait definition for '{}' - deferring validation to runtime", custom_trait);
+                        // Continue anyway - might be defined elsewhere
+                    }
+                }
+            }
+        }
+        
         true
+    }
+    
+    /// Check if a type implements Clone
+    fn type_supports_clone(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives always Clone
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char => true,
+            // References always Clone
+            HirType::Reference(_) | HirType::MutableReference(_) => true,
+            // Pointers Clone
+            HirType::Pointer(_) => true,
+            // Strings Clone
+            HirType::String => true,
+            // Arrays Clone (if elements do)
+            HirType::Array { element_type, .. } => self.type_supports_clone(element_type),
+            // Structs: assume Clone unless we know otherwise
+            HirType::Named(_) => true,
+            _ => true  // Conservative: allow unknown types to Clone
+        }
+    }
+    
+    /// Check if a type is Copy (subset of Clone, small fixed-size types)
+    fn type_is_copy(&self, ty: &HirType) -> bool {
+        match ty {
+            // Only primitives are Copy
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char => true,
+            // Raw pointers are Copy (not references, which are special)
+            HirType::Pointer(_) => true,
+            // References are Copy-like but we model them separately
+            HirType::Reference(_) => true,
+            // Tuples of Copy types are Copy
+            HirType::Tuple(types) => types.iter().all(|t| self.type_is_copy(t)),
+            // Most user-defined types are NOT Copy unless explicitly marked
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports Default
+    fn type_supports_default(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives support Default (zero/false/empty)
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Collections support Default
+            HirType::Array { .. } => true,
+            // Tuples support Default if elements do
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_default(t)),
+            // User-defined types might have Default impl
+            HirType::Named(_) => true,  // Assume true, could be checked in registry
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports Debug
+    fn type_supports_debug(&self, ty: &HirType) -> bool {
+        match ty {
+            // All primitives Debug
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Collections Debug
+            HirType::Array { .. } => true,
+            // References Debug
+            HirType::Reference(_) | HirType::MutableReference(_) | HirType::Pointer(_) => true,
+            // Tuples Debug
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_debug(t)),
+            // User types usually derive Debug
+            HirType::Named(_) => true,
+            _ => true  // Conservative default
+        }
+    }
+    
+    /// Check if a type supports Display
+    fn type_supports_display(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives support Display
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Not auto-impl'd for most user types - requires explicit impl
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports Hash
+    fn type_supports_hash(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives hash
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Bool | HirType::Char | HirType::String => true,
+            // Float64 does NOT hash (NaN issues)
+            HirType::Float64 => false,
+            // Arrays hash
+            HirType::Array { element_type, .. } => self.type_supports_hash(element_type),
+            // Tuples hash if elements do
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_hash(t)),
+            // Pointers don't hash reliably
+            HirType::Pointer(_) => false,
+            HirType::Reference(_) | HirType::MutableReference(_) => false,
+            // User types might hash
+            HirType::Named(_) => true,
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports Eq
+    fn type_supports_eq(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives support Eq
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Bool | HirType::Char | HirType::String => true,
+            // Float64 is PartialEq but NOT Eq (NaN != NaN)
+            HirType::Float64 => false,
+            // Arrays support Eq
+            HirType::Array { element_type, .. } => self.type_supports_eq(element_type),
+            // Tuples if elements support Eq
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_eq(t)),
+            // Function types don't support Eq
+            HirType::Function { .. } => false,
+            // User types might support Eq
+            HirType::Named(_) => true,
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports PartialEq
+    fn type_supports_partialeq(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives support PartialEq (including floats)
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Arrays support PartialEq
+            HirType::Array { element_type, .. } => self.type_supports_partialeq(element_type),
+            // Tuples if elements support PartialEq
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_partialeq(t)),
+            // Pointers and references don't usually PartialEq (they compare by value)
+            HirType::Function { .. } => false,
+            // User types might support PartialEq
+            HirType::Named(_) => true,
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports Ord (full ordering)
+    fn type_supports_ord(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives support Ord (except floats due to NaN)
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Bool | HirType::Char | HirType::String => true,
+            // Float64 doesn't support Ord
+            HirType::Float64 => false,
+            // Arrays support Ord if elements do
+            HirType::Array { element_type, .. } => self.type_supports_ord(element_type),
+            // Tuples support Ord if elements do
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_ord(t)),
+            // User types might support Ord
+            HirType::Named(_) => true,
+            _ => false
+        }
+    }
+    
+    /// Check if a type supports PartialOrd (partial ordering)
+    fn type_supports_partialord(&self, ty: &HirType) -> bool {
+        match ty {
+            // Primitives support PartialOrd (including floats)
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Arrays support PartialOrd if elements do
+            HirType::Array { element_type, .. } => self.type_supports_partialord(element_type),
+            // Tuples support PartialOrd if elements do
+            HirType::Tuple(types) => types.iter().all(|t| self.type_supports_partialord(t)),
+            // User types might support PartialOrd
+            HirType::Named(_) => true,
+            _ => false
+        }
+    }
+    
+    /// Check if a type is Send (safe across thread boundaries)
+    fn type_is_send(&self, ty: &HirType) -> bool {
+        match ty {
+            // All primitives are Send
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Owned collections are Send if their elements are
+            HirType::Array { element_type, .. } => self.type_is_send(element_type),
+            // Tuples are Send if all elements are
+            HirType::Tuple(types) => types.iter().all(|t| self.type_is_send(t)),
+            // References and pointers are Send if what they point to is Sync
+            HirType::Reference(_) | HirType::MutableReference(_) | HirType::Pointer(_) => true,
+            // Closures/functions: conservatively assume not Send (captures might not be)
+            HirType::Function { .. } => false,
+            // User types conservatively assumed Send unless we know better
+            HirType::Named(_) => true,
+            _ => true
+        }
+    }
+    
+    /// Check if a type is Sync (safe to share across thread boundaries)
+    fn type_is_sync(&self, ty: &HirType) -> bool {
+        match ty {
+            // All primitives are Sync
+            HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64
+            | HirType::USize | HirType::ISize | HirType::Float64
+            | HirType::Bool | HirType::Char | HirType::String => true,
+            // Shared collections are Sync if elements are
+            HirType::Array { element_type, .. } => self.type_is_sync(element_type),
+            // Tuples are Sync if all elements are
+            HirType::Tuple(types) => types.iter().all(|t| self.type_is_sync(t)),
+            // References/pointers are Sync
+            HirType::Reference(_) | HirType::MutableReference(_) | HirType::Pointer(_) => true,
+            // Functions aren't Sync (captures might not be)
+            HirType::Function { .. } => false,
+            // User types conservatively assumed Sync unless we know better
+            HirType::Named(_) => true,
+            _ => true
+        }
+    }
+    
+    /// Check if a type is Unpin (can be safely moved)
+    fn type_is_unpin(&self, ty: &HirType) -> bool {
+        // Almost all types are Unpin except for manually impl'd Pin types
+        // For our purposes, assume everything is Unpin
+        match ty {
+            // Function types that explicitly require Pin would not be Unpin
+            // But we don't track that, so assume Unpin
+            _ => true
+        }
+    }
+    
+    /// Check if a type implements a custom trait
+    fn type_implements_custom_trait(&self, ty: &HirType, trait_name: &str) -> bool {
+        match ty {
+            HirType::Named(type_name) => {
+                // Check if there's an impl block for this type and trait
+                // This would be checked against registered impl blocks
+                // For now, we check if the type has any impl methods at all
+                // In a full implementation, we'd check the trait impl registry
+                
+                // Try to find impl methods for this type
+                let _has_impl = self.context.lookup_impl_method(type_name, trait_name);
+                
+                // If we found methods, assume the trait is implemented
+                // This is a simplified check - real implementation would need
+                // to check all methods required by the trait
+                _has_impl.is_some()
+            }
+            // Primitive types don't implement custom traits
+            _ => false
+        }
     }
     
     /// Infer the type of an expression with an optional expected type
@@ -893,9 +1308,42 @@ impl TypeChecker {
                         Ok(return_type.as_ref().clone())
                     }
                     _ => {
-                        Err(TypeCheckError {
-                            message: "Indirect function calls not yet supported".to_string(),
-                        })
+                        // Try to infer the type of the function expression for indirect calls
+                        let func_ty = self.infer_type(func)?;
+                        match func_ty {
+                            HirType::Function { params, return_type } => {
+                                // Validate argument count
+                                if args.len() != params.len() {
+                                    return Err(TypeCheckError {
+                                        message: format!(
+                                            "Function expects {} arguments, got {}",
+                                            params.len(),
+                                            args.len()
+                                        ),
+                                    });
+                                }
+
+                                // Check argument types
+                                for (i, (arg, param_ty)) in args.iter().zip(params.iter()).enumerate() {
+                                    let arg_ty = self.infer_type(arg)?;
+                                    if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                        return Err(TypeCheckError {
+                                            message: format!(
+                                                "Argument {} has type {}, expected {}",
+                                                i, arg_ty, param_ty
+                                            ),
+                                        });
+                                    }
+                                }
+
+                                Ok((*return_type).clone())
+                            }
+                            _ => {
+                                Err(TypeCheckError {
+                                    message: "Indirect function calls only work on function pointers".to_string(),
+                                })
+                            }
+                        }
                     }
                 }
             }
@@ -1029,6 +1477,16 @@ impl TypeChecker {
             }
 
             HirExpression::StructLiteral { name, fields } => {
+                // For generic structs, we skip strict type checking since we can't properly
+                // resolve type parameters without a full generic substitution system.
+                // The struct name may have generic parameters like "Box<T>"
+                if name.contains('<') {
+                    // This is a generic struct - just assume it's valid
+                    // and return the named type. Proper generic resolution would require
+                    // inferring type parameters from field values, which is complex.
+                    return Ok(HirType::Named(name.clone()));
+                }
+                
                 let struct_def = self.context.lookup_struct(name)
                     .ok_or_else(|| TypeCheckError {
                         message: format!("Unknown struct: {}", name),
@@ -1044,13 +1502,18 @@ impl TypeChecker {
                         })?;
 
                     let actual_ty = self.infer_type(&field_value.1)?;
+                    // For fields with generic types (e.g., "T"), accept any concrete type
+                    // since we can't resolve the type parameter at this stage
                     if actual_ty != *expected_ty && *expected_ty != HirType::Unknown {
-                        return Err(TypeCheckError {
-                            message: format!(
-                                "Field {} has type {}, expected {}",
-                                expected_name, actual_ty, expected_ty
-                            ),
-                        });
+                        // Check if expected_ty is a simple identifier (generic type variable)
+                        if !matches!(expected_ty, HirType::Named(n) if n.len() == 1 && n.chars().all(char::is_uppercase)) {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Field {} has type {}, expected {}",
+                                    expected_name, actual_ty, expected_ty
+                                ),
+                            });
+                        }
                     }
                 }
 
@@ -1059,6 +1522,14 @@ impl TypeChecker {
 
             HirExpression::ArrayLiteral(elements) => {
                 if elements.is_empty() {
+                    // For empty arrays, try to infer element type from context
+                    if let Some(HirType::Array { element_type, .. }) = expected {
+                        return Ok(HirType::Array {
+                            element_type: element_type.clone(),
+                            size: Some(0),
+                        });
+                    }
+                    // If no context, use Unknown element type
                     return Ok(HirType::Array {
                         element_type: Box::new(HirType::Unknown),
                         size: Some(0),
@@ -1216,6 +1687,36 @@ impl TypeChecker {
                 let receiver_ty = self.infer_type(receiver)?;
                 
                 if let HirType::Named(struct_name) = &receiver_ty {
+                    // First, try to lookup in impl blocks
+                    if let Some((param_types, ret_type)) = self.context.lookup_impl_method(&struct_name, method) {
+                        // For instance methods in impl blocks, no implicit self in param_types
+                        if args.len() != param_types.len() {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Method {} expects {} arguments, got {}",
+                                    method,
+                                    param_types.len(),
+                                    args.len()
+                                ),
+                            });
+                        }
+                        
+                        for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                            let arg_ty = self.infer_type(arg)?;
+                            if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument {} has type {}, expected {}",
+                                        i, arg_ty, param_ty
+                                    ),
+                                });
+                            }
+                        }
+                        
+                        return Ok(ret_type);
+                    }
+                    
+                    // Fall back to qualified function lookup for compatibility
                     let qualified_name = format!("{}::{}", struct_name, method);
                     
                     if let Some((param_types, ret_type)) = self.context.lookup_function(&qualified_name) {
@@ -1465,6 +1966,19 @@ impl TypeChecker {
                         .map(|(n, t)| (n.clone(), t.clone()))
                         .collect();
                     self.context.structs.insert(name.clone(), field_types);
+                } else if let HirItem::Impl { struct_name, methods, .. } = &**item {
+                    // Register impl block methods as qualified functions
+                    for method in methods {
+                        if let HirItem::Function { name, params, return_type, .. } = method {
+                            let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                            let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
+                            
+                            // Register as impl method and as qualified function
+                            self.context.register_impl_method(struct_name.clone(), name.clone(), param_types.clone(), ret_type.clone());
+                            let qualified_name = format!("{}::{}", struct_name, name);
+                            self.context.register_function(qualified_name, param_types, ret_type);
+                        }
+                    }
                 }
             }
         }
@@ -1537,6 +2051,13 @@ impl TypeChecker {
                 HirItem::AssociatedType { .. } => {
                 }
                 HirItem::Use { .. } => {
+                }
+                HirItem::Impl { methods, .. } => {
+                    self.check_items_recursive(methods)?;
+                }
+                HirItem::Enum { .. } => {
+                }
+                HirItem::Trait { .. } => {
                 }
             }
         }

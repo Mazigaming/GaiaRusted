@@ -327,6 +327,14 @@ impl UnsafeChecker {
             HirItem::Static { .. } => Ok(()),
             HirItem::AssociatedType { .. } => Ok(()),
             HirItem::Use { .. } => Ok(()),
+            HirItem::Impl { methods, .. } => {
+                for method in methods {
+                    self.check_item(method)?;
+                }
+                Ok(())
+            }
+            HirItem::Enum { .. } => Ok(()),
+            HirItem::Trait { .. } => Ok(()),
         }
     }
 }

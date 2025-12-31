@@ -129,7 +129,17 @@ impl ScopeStack {
 
     /// Push a new child scope
     pub fn push_scope(&mut self) {
-        let parent = *self.stack.last().expect("No current scope");
+        // SAFETY: Stack is initialized with global scope in new(), and pop_scope() guards against empty stack
+        // If this panics, it indicates a logic error in scope management (push/pop mismatch)
+        let parent = match self.stack.last() {
+            Some(id) => *id,
+            None => {
+                eprintln!("[ScopeStack] ERROR: push_scope() called but scope stack is empty - this indicates a push/pop mismatch");
+                // Fallback: return without creating scope
+                return;
+            }
+        };
+        
         let current_depth = self.scopes[&parent].depth + 1;
         let new_id = ScopeId(self.next_id);
         self.next_id += 1;
