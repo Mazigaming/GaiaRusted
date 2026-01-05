@@ -1501,7 +1501,7 @@ impl TypeChecker {
                             message: format!("Missing field {} in struct literal {}", expected_name, name),
                         })?;
 
-                    let actual_ty = self.infer_type(&field_value.1)?;
+                    let actual_ty = self.infer_type_with_context(&field_value.1, Some(expected_ty))?;
                     // For fields with generic types (e.g., "T"), accept any concrete type
                     // since we can't resolve the type parameter at this stage
                     if actual_ty != *expected_ty && *expected_ty != HirType::Unknown {

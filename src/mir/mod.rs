@@ -292,12 +292,8 @@ impl MirBuilder {
     /// Add a statement to the current block
     pub fn add_statement(&mut self, place: Place, rvalue: Rvalue) {
         if let Some(block) = self.blocks.get_mut(self.current_block) {
-            eprintln!("[MIR-Builder] BEFORE: Block {} has {} statements", self.current_block, block.statements.len());
             block.statements.push(Statement { place: place.clone(), rvalue: rvalue.clone() });
-            eprintln!("[MIR-Builder] AFTER: Block {} has {} statements", self.current_block, block.statements.len());
-            eprintln!("[MIR-Builder] Added: {:?} = {:?}", place, rvalue);
         } else {
-            eprintln!("[MIR-Builder] ERROR: Block {} does not exist!", self.current_block);
         }
     }
 
@@ -934,9 +930,7 @@ impl MirLowerer {
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Bool(*b))));
             }
             HirExpression::Variable(name) => {
-                eprintln!("[MIR] Variable: Lowering variable '{}' to place {:?}", name, place);
                 builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Local(name.clone()))));
-                eprintln!("[MIR] Variable: Added statement");
             }
             HirExpression::BinaryOp { op, left, right } => {
                 let left_temp = builder.gen_temp();
@@ -1255,14 +1249,9 @@ impl MirLowerer {
             HirExpression::FieldAccess { object, field } => {
                 // Evaluate the object expression to a temporary
                 let obj_temp = builder.gen_temp();
-                eprintln!("[MIR] FieldAccess: Lowering object to temp '{}'", obj_temp);
                 self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
-                eprintln!("[MIR] FieldAccess: Object lowered, now creating field access from '{}' to '{}'", obj_temp, field);
                 
                 // Then access the field from that temporary
-                eprintln!("[MIR] FieldAccess: Adding statement: {} = Use(Copy(Field({}, {})))", 
-                         if let Place::Local(n) = &place { n } else { "?" },
-                         obj_temp, field);
                 builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
                     Box::new(Place::Local(obj_temp)),
                     field.clone(),

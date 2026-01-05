@@ -2033,7 +2033,32 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                  None
              };
 
-             let body_hir = lower_block(body)?;
+             let mut body_hir = lower_block(body)?;
+             
+             // Handle implicit returns: if the last statement is an expression or if statement,
+             // convert it to an explicit return statement
+             if !body_hir.is_empty() {
+                 match &body_hir[body_hir.len() - 1] {
+                     HirStatement::Expression(expr) => {
+                         let expr_clone = expr.clone();
+                         // Remove the expression statement and replace with return
+                         body_hir.pop();
+                         body_hir.push(HirStatement::Return(Some(expr_clone)));
+                     }
+                     HirStatement::If { condition, then_body, else_body } => {
+                         // If statement at the end of the function body should return the if expression result
+                         // Convert the if statement to an if expression by converting it to Return(If expression)
+                         let if_expr = HirExpression::If {
+                             condition: condition.clone(),
+                             then_body: then_body.clone(),
+                             else_body: else_body.clone(),
+                         };
+                         body_hir.pop();
+                         body_hir.push(HirStatement::Return(Some(if_expr)));
+                     }
+                     _ => {}
+                 }
+             }
 
              Ok(HirItem::Function {
                  name: name.clone(),
