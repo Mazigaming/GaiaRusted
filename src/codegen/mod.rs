@@ -31,6 +31,8 @@ pub mod tail_loop;
 pub mod inlining;
 pub mod register_pressure;
 pub mod loop_tiling;
+pub mod memory_optimization;
+pub mod profiling_diagnostics;
 
 use crate::mir::{Mir, MirFunction, Statement, Terminator};
 use crate::runtime;
