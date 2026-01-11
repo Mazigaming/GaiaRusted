@@ -1248,6 +1248,59 @@ Roadmap
 *   ✅ Zero compilation errors, zero new warnings
 *   ✅ Average compilation time: 30ms per file
 
+### 🚀 v0.14.0 (MASSIVE EXPANSION - Code Generation & Runtime Overhaul)
+
+**Major Features:**
+
+**Runtime Fixes & Optimization** 🔧
+*   ✨ Array iteration protocol (for-in loops on arrays)
+*   ✨ If-else control flow fixes (proper variable binding)
+*   ✨ Code generation improvements (register allocation, addressing modes)
+*   ✨ Inline assembly optimization (SIMD, vectorization)
+*   ✨ Runtime profiling & debugging support
+
+**Standard Library Expansion** 📚
+*   ✨ Collections: Vec, HashMap, HashSet, LinkedList, BTreeMap
+*   ✨ String operations: substring, split, trim, replace, case conversion
+*   ✨ Iterator adapters: map, filter, fold, zip, chain, flatten
+*   ✨ Result & Option types with full combinators
+*   ✨ File I/O: read, write, open, create, delete
+
+**Advanced Language Features** 🎯
+*   ✨ Closures & anonymous functions (with capture analysis)
+*   ✨ Trait objects (dynamic dispatch with vtables)
+*   ✨ Async/await basics (simple async functions, await expressions)
+*   ✨ Module system enhancements (pub, pub(crate), visibility modifiers)
+*   ✨ Macro improvements (macro_rules!, declarative macros)
+*   ✨ Derive macros for Clone, Debug, Default, Display
+
+**Performance & Optimization** ⚡
+*   ✨ Tail call optimization (TCO for recursive functions)
+*   ✨ Loop unrolling & vectorization
+*   ✨ Dead code elimination improvements
+*   ✨ Constant folding & propagation
+*   ✨ Instruction cache optimization
+
+**Error Handling & Safety** 🛡️
+*   ✨ Panic handling with backtraces
+*   ✨ Safe unwrap with Result chaining
+*   ✨ Custom error types support
+*   ✨ Debug assertions & checks
+
+**Testing & Benchmarking** 🧪
+*   ✨ Built-in test framework (#[test])
+*   ✨ Benchmark support (#[bench])
+*   ✨ Test runner with filtering & reporting
+*   ✨ Code coverage analysis
+*   ✨ Performance regression detection
+
+**Module Statistics Target:**
+*   📊 30+ new modules (codegen, stdlib, runtime, async)
+*   📊 10,000+ lines of new code
+*   📊 500+ new integration tests
+*   📊 50+ stdlib function implementations
+*   📊 <50ms average compilation time
+
 ### 📋 v1.0.0 (Vision)
 
 *   Full Rust compatibility subset
