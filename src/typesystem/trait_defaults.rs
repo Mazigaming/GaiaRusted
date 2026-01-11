@@ -182,6 +182,128 @@ impl TraitDefaultResolver {
         self.method_cache.clear();
     }
 
+    /// Get builtin trait implementations for primitive types
+    /// Primitive types (i64, f64, bool, char) have builtin implementations of common traits
+    fn get_builtin_methods(&self, trait_name: &str, type_name: &str) -> Option<HashMap<String, String>> {
+        // Check if type is a primitive
+        let is_primitive = matches!(type_name,
+            "i8" | "i16" | "i32" | "i64" | "i128" |
+            "u8" | "u16" | "u32" | "u64" | "u128" |
+            "f32" | "f64" | "bool" | "char"
+        );
+
+        // Check if type is a builtin collection
+        let is_collection = matches!(type_name, "Vec" | "String" | "HashMap" | "HashSet");
+
+        if !is_primitive && !is_collection {
+            return None;
+        }
+
+        let mut methods = HashMap::new();
+
+        match trait_name {
+            "Add" => {
+                // Arithmetic operations return the same type
+                methods.insert("add".to_string(), "add".to_string());
+                Some(methods)
+            }
+            "Sub" => {
+                methods.insert("sub".to_string(), "sub".to_string());
+                Some(methods)
+            }
+            "Mul" => {
+                methods.insert("mul".to_string(), "mul".to_string());
+                Some(methods)
+            }
+            "Div" => {
+                methods.insert("div".to_string(), "div".to_string());
+                Some(methods)
+            }
+            "Rem" => {
+                methods.insert("rem".to_string(), "rem".to_string());
+                Some(methods)
+            }
+            "Clone" => {
+                // Clone just returns a copy of the value
+                methods.insert("clone".to_string(), "clone".to_string());
+                Some(methods)
+            }
+            "Eq" | "PartialEq" => {
+                // Equality comparison returns bool
+                methods.insert("eq".to_string(), "eq".to_string());
+                methods.insert("ne".to_string(), "ne".to_string());
+                Some(methods)
+            }
+            "Ord" | "PartialOrd" => {
+                // Ordering comparison
+                methods.insert("cmp".to_string(), "cmp".to_string());
+                methods.insert("lt".to_string(), "lt".to_string());
+                methods.insert("le".to_string(), "le".to_string());
+                methods.insert("gt".to_string(), "gt".to_string());
+                methods.insert("ge".to_string(), "ge".to_string());
+                Some(methods)
+            }
+            "Default" => {
+                methods.insert("default".to_string(), "default".to_string());
+                Some(methods)
+            }
+            "Debug" | "Display" => {
+                // Formatting traits
+                methods.insert("fmt".to_string(), "fmt".to_string());
+                Some(methods)
+            }
+            _ => {
+                // Handle collection types (Vec, String, HashMap, HashSet)
+                match type_name {
+                    "Vec" => {
+                        match trait_name {
+                            "Default" => {
+                                methods.insert("new".to_string(), "new".to_string());
+                                Some(methods)
+                            }
+                            "Clone" => {
+                                methods.insert("clone".to_string(), "clone".to_string());
+                                Some(methods)
+                            }
+                            _ => None,
+                        }
+                    }
+                    "String" => {
+                        match trait_name {
+                            "Default" => {
+                                methods.insert("new".to_string(), "new".to_string());
+                                Some(methods)
+                            }
+                            "Clone" => {
+                                methods.insert("clone".to_string(), "clone".to_string());
+                                Some(methods)
+                            }
+                            "Display" => {
+                                methods.insert("fmt".to_string(), "fmt".to_string());
+                                Some(methods)
+                            }
+                            _ => None,
+                        }
+                    }
+                    "HashMap" | "HashSet" => {
+                        match trait_name {
+                            "Default" => {
+                                methods.insert("new".to_string(), "new".to_string());
+                                Some(methods)
+                            }
+                            "Clone" => {
+                                methods.insert("clone".to_string(), "clone".to_string());
+                                Some(methods)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// Resolve all methods for a type implementing a trait
     pub fn resolve_methods(
         &mut self,
@@ -209,7 +331,7 @@ impl TraitDefaultResolver {
             all_methods.extend(supertrait_methods);
         }
 
-        // Find matching implementation
+        // Find matching implementation (FIRST check custom implementations, then builtin)
         let impl_def = self
             .impls
             .iter()
@@ -241,6 +363,17 @@ impl TraitDefaultResolver {
             // Use default if available
             if !trait_def.is_method_required(method_name) {
                 all_methods.insert(method_name.clone(), default_method.body.clone());
+            }
+        }
+
+        // Fallback to builtin trait implementations for primitives/collections
+        // (only if not already provided by custom implementation)
+        if let Some(builtin_methods) = self.get_builtin_methods(trait_name, impl_type) {
+            for (method_name, method_body) in builtin_methods {
+                // Only add if not already provided by custom implementation
+                if !all_methods.contains_key(&method_name) {
+                    all_methods.insert(method_name, method_body);
+                }
             }
         }
 

@@ -434,12 +434,18 @@ mod tests {
         };
 
         let result = checker.check_expression(&expr);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Failed to check expression: type checking should succeed");
         // Binary operation on integers produces a type (either resolved or a variable)
-        let ty = result.unwrap();
+        let ty = result.expect("Type checking passed but no type returned");
         match ty {
             Type::I32 | Type::Variable(_) => {} // Both are acceptable
-            _ => panic!("Expected I32 or Variable, got {:?}", ty),
+            other_type => {
+                panic!(
+                    "Expected I32 or Variable type for binary operation, got {:?}. \
+                     This indicates a type system regression.",
+                    other_type
+                );
+            }
         }
     }
 }

@@ -38,6 +38,7 @@ pub mod lifetime_solver;
 pub mod unsafe_checking;
 pub mod unsafe_checking_enhanced;
 pub mod lifetime_validation;
+pub mod loop_ownership;
 
 pub use lifetimes::{Lifetime, LifetimeContext, LifetimeConstraint, LifetimeId, LifetimeElision};
 pub use scopes::{Scope, ScopeId, ScopeStack, ScopeBinding};
@@ -425,21 +426,25 @@ impl BorrowChecker {
             }
 
             HirStatement::For {
-                var: _,
+                var,
                 iter,
                 body,
             } => {
                 // Check the iterator expression
                 self.check_expression(iter)?;
                 
-                // Bind the loop variable (it's a new binding in the loop scope)
-                // For now, we'll be conservative and assume it's owned
-                // TODO: Properly handle loop variable ownership
+                // Bind the loop variable with proper ownership tracking
+                // The loop variable is immutable by default unless declared with mut
+                self.env.push_scope();
+                self.env.bind(var.clone(), HirType::Unknown, false)?;
                 
-                // Check the body
+                // Check the body with the loop variable in scope
                 for stmt in body {
                     self.check_statement(stmt)?;
                 }
+                
+                // Loop variable goes out of scope after loop
+                self.env.pop_scope();
             }
 
             HirStatement::While {

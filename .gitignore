@@ -37,6 +37,7 @@ a.out*
 test_*
 benchmark_*.rs
 out_test*
+test*
 
 # OS files
 Thumbs.db

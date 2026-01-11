@@ -237,8 +237,9 @@ mod tests {
             right: Box::new(AstExpr::Integer(3)),
         };
 
-        let ty = solver.solve_expr(&expr).unwrap();
-        assert_eq!(ty, Type::I32);
+        let ty = solver.solve_expr(&expr)
+            .expect("Failed to solve binary expression type");
+        assert_eq!(ty, Type::I32, "Binary operation should resolve to I32");
     }
 
     #[test]
@@ -246,7 +247,8 @@ mod tests {
         let mut solver = ConstraintSolver::new();
 
         // Register x: i32
-        solver.register_variable("x".to_string(), Type::I32).unwrap();
+        solver.register_variable("x".to_string(), Type::I32)
+            .expect("Failed to register variable x");
 
         // x + 5
         let expr = AstExpr::BinaryOp {
@@ -255,8 +257,9 @@ mod tests {
             right: Box::new(AstExpr::Integer(5)),
         };
 
-        let ty = solver.solve_expr(&expr).unwrap();
-        assert_eq!(ty, Type::I32);
+        let ty = solver.solve_expr(&expr)
+            .expect("Failed to solve variable expression type");
+        assert_eq!(ty, Type::I32, "Variable expression should resolve to I32");
     }
 
     #[test]
@@ -270,7 +273,7 @@ mod tests {
                 vec![Type::I32, Type::I32],
                 Type::I32,
             )
-            .unwrap();
+            .expect("Failed to register add function");
 
         // add(5, 3)
         let expr = AstExpr::FunctionCall {
@@ -278,8 +281,9 @@ mod tests {
             args: vec![AstExpr::Integer(5), AstExpr::Integer(3)],
         };
 
-        let ty = solver.solve_expr(&expr).unwrap();
-        assert_eq!(ty, Type::I32);
+        let ty = solver.solve_expr(&expr)
+            .expect("Failed to solve function call expression type");
+        assert_eq!(ty, Type::I32, "Function call should resolve to I32");
     }
 
     #[test]
@@ -293,7 +297,7 @@ mod tests {
                 vec![Type::I32, Type::I32],
                 Type::I32,
             )
-            .unwrap();
+            .expect("Failed to register add function");
 
         // add(5) - wrong arity!
         let expr = AstExpr::FunctionCall {
@@ -319,28 +323,32 @@ mod tests {
             AstExpr::Bool(true),
         ];
 
-        let types = solver.solve_exprs(&exprs).unwrap();
-        assert_eq!(types.len(), 3);
-        assert_eq!(types[0], Type::I32);
-        assert_eq!(types[1], Type::I32);
-        assert_eq!(types[2], Type::Bool);
+        let types = solver.solve_exprs(&exprs)
+            .expect("Failed to solve multiple expressions");
+        assert_eq!(types.len(), 3, "Should solve 3 expressions");
+        assert_eq!(types[0], Type::I32, "First expression should be I32");
+        assert_eq!(types[1], Type::I32, "Second expression should be I32");
+        assert_eq!(types[2], Type::Bool, "Third expression should be Bool");
     }
 
     #[test]
     fn test_type_solution() {
         let mut solver = ConstraintSolver::new();
 
-        solver.register_variable("x".to_string(), Type::I32).unwrap();
-        solver.register_variable("y".to_string(), Type::F64).unwrap();
+        solver.register_variable("x".to_string(), Type::I32)
+            .expect("Failed to register variable x");
+        solver.register_variable("y".to_string(), Type::F64)
+            .expect("Failed to register variable y");
 
         // Solve (generates constraints from variables)
         solver.register_function(
             "f".to_string(),
             vec![Type::I32],
             Type::Bool,
-        ).unwrap();
+        ).expect("Failed to register function f");
 
-        let solution = solver.get_solution().unwrap();
+        let solution = solver.get_solution()
+            .expect("Failed to get type solution");
 
         // Check bindings
         assert_eq!(solution.lookup("x"), Some(&Type::I32));

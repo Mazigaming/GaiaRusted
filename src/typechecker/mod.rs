@@ -304,6 +304,17 @@ impl TypeChecker {
         self.context.register_function("into_iter".to_string(), vec![HirType::Unknown], HirType::Unknown);
         self.context.register_function("next".to_string(), vec![HirType::Unknown], HirType::Unknown);
         
+        // vec! macro expansion builtins (Fix #3)
+        // __builtin_vec_from([a, b, c]) -> Vec<T>
+        self.context.register_function("__builtin_vec_from".to_string(), 
+            vec![HirType::Unknown], // Array of elements
+            HirType::Unknown);      // Vec<T>
+        
+        // __builtin_vec_repeat(x, n) -> Vec<T>
+        self.context.register_function("__builtin_vec_repeat".to_string(),
+            vec![HirType::Unknown, HirType::Int64], // Element type and count
+            HirType::Unknown);                       // Vec<T>
+        
         // Register standard traits
         self.register_standard_traits();
     }
@@ -1686,6 +1697,83 @@ impl TypeChecker {
             HirExpression::MethodCall { receiver, method, args } => {
                 let receiver_ty = self.infer_type(receiver)?;
                 
+                // Check if this is a primitive type with a builtin trait method
+                let is_primitive = matches!(&receiver_ty,
+                    HirType::Int32 | HirType::Int64 | HirType::UInt32 | HirType::UInt64 |
+                    HirType::USize | HirType::ISize | HirType::Float64 | HirType::Bool | HirType::Char
+                );
+                
+                if is_primitive {
+                    // Handle builtin trait methods on primitive types
+                    match method.as_str() {
+                        // Arithmetic methods: Add, Sub, Mul, Div, Rem
+                        "add" | "sub" | "mul" | "div" | "rem" => {
+                            if args.len() != 1 {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Arithmetic method {} expects 1 argument, got {}",
+                                        method,
+                                        args.len()
+                                    ),
+                                });
+                            }
+                            let arg_ty = self.infer_type(&args[0])?;
+                            if !self.types_compatible(&arg_ty, &receiver_ty) {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument type {} doesn't match receiver type {}",
+                                        arg_ty, receiver_ty
+                                    ),
+                                });
+                            }
+                            return Ok(receiver_ty.clone());
+                        }
+                        // Comparison methods: eq, ne, lt, le, gt, ge
+                        "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                            if args.len() != 1 {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Comparison method {} expects 1 argument, got {}",
+                                        method,
+                                        args.len()
+                                    ),
+                                });
+                            }
+                            let arg_ty = self.infer_type(&args[0])?;
+                            if !self.types_compatible(&arg_ty, &receiver_ty) && arg_ty != HirType::Unknown {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument type {} doesn't match receiver type {}",
+                                        arg_ty, receiver_ty
+                                    ),
+                                });
+                            }
+                            return Ok(HirType::Bool);
+                        }
+                        // Clone method
+                        "clone" => {
+                            if !args.is_empty() {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Clone method expects 0 arguments, got {}",
+                                        args.len()
+                                    ),
+                                });
+                            }
+                            return Ok(receiver_ty.clone());
+                        }
+                        // For now, accept other trait methods on primitives
+                        _ => {
+                            // Fall through to named type handling or accept anyway
+                            if args.is_empty() {
+                                return Ok(receiver_ty.clone());
+                            } else {
+                                return Ok(receiver_ty.clone());
+                            }
+                        }
+                    }
+                }
+                
                 if let HirType::Named(struct_name) = &receiver_ty {
                     // First, try to lookup in impl blocks
                     if let Some((param_types, ret_type)) = self.context.lookup_impl_method(&struct_name, method) {
@@ -1835,8 +1923,21 @@ impl TypeChecker {
                 body,
             } => {
                 // Type check the iterator expression
-                let _iter_ty = self.infer_type(iter)?;
-                // TODO: Check that iter_ty is iterable
+                let iter_ty = self.infer_type(iter)?;
+                
+                // Check that iter_ty is iterable (Vec, array, range, etc.)
+                let is_iterable = matches!(
+                    iter_ty,
+                    HirType::Vec(_) | HirType::Array { .. } | HirType::Range { .. } | 
+                    HirType::String
+                ) || iter_ty.to_string().contains("IntoIterator");
+                
+                if !is_iterable {
+                    eprintln!(
+                        "[TypeChecker] Error: Cannot iterate over type {}: must implement IntoIterator",
+                        iter_ty
+                    );
+                }
                 
                 // Infer the loop variable type from the iterator
                 let var_type = match &**iter {

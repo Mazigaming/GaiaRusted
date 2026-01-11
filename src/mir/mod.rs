@@ -1037,7 +1037,105 @@ impl MirLowerer {
                     }
                 }
 
-                builder.add_statement(place, Rvalue::Call(func_name, mir_args));
+                // Special handling for vec! macro expansion functions (Fix #3)
+                match func_name.as_str() {
+                    // vec![] expands to Vec::new()
+                    "Vec::new" => {
+                        // Generate a call to Vec::new which creates empty vector
+                        builder.add_statement(place, Rvalue::Call(func_name, mir_args));
+                    }
+                    
+                    // vec![x; n] expands to __builtin_vec_repeat(x, n)
+                    "__builtin_vec_repeat" => {
+                        // Arguments: element (0), count (1)
+                        // Generate: allocate vector, fill with repeated element
+                        if mir_args.len() >= 2 {
+                            builder.add_statement(place, Rvalue::Call("__builtin_vec_repeat".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "__builtin_vec_repeat requires 2 arguments".to_string() 
+                            });
+                        }
+                    }
+                    
+                    // vec![a, b, c] expands to __builtin_vec_from([a, b, c])
+                    "__builtin_vec_from" => {
+                        // Arguments: array literal
+                        // Generate: allocate vector with array elements
+                        if !mir_args.is_empty() {
+                            builder.add_statement(place, Rvalue::Call("__builtin_vec_from".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "__builtin_vec_from requires array argument".to_string() 
+                            });
+                        }
+                    }
+                    
+                    // Vector methods
+                    "Vec::len" => {
+                        // Get length of vector
+                        // Arguments: vector reference
+                        if !mir_args.is_empty() {
+                            builder.add_statement(place, Rvalue::Call("Vec::len".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "Vec::len requires vector argument".to_string() 
+                            });
+                        }
+                    }
+                    
+                    "Vec::is_empty" => {
+                        // Check if vector is empty
+                        if !mir_args.is_empty() {
+                            builder.add_statement(place, Rvalue::Call("Vec::is_empty".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "Vec::is_empty requires vector argument".to_string() 
+                            });
+                        }
+                    }
+                    
+                    "Vec::push" => {
+                        // Add element to vector (requires mutable self)
+                        // Arguments: vector reference, element
+                        if mir_args.len() >= 2 {
+                            builder.add_statement(place, Rvalue::Call("Vec::push".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "Vec::push requires vector and element arguments".to_string() 
+                            });
+                        }
+                    }
+                    
+                    "Vec::pop" => {
+                        // Remove and return last element
+                        // Arguments: vector reference
+                        if !mir_args.is_empty() {
+                            builder.add_statement(place, Rvalue::Call("Vec::pop".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "Vec::pop requires vector argument".to_string() 
+                            });
+                        }
+                    }
+                    
+                    "Vec::get" => {
+                        // Get element at index
+                        // Arguments: vector reference, index
+                        if mir_args.len() >= 2 {
+                            builder.add_statement(place, Rvalue::Call("Vec::get".to_string(), mir_args));
+                        } else {
+                            return Err(MirError { 
+                                message: "Vec::get requires vector and index arguments".to_string() 
+                            });
+                        }
+                    }
+                    
+                    // All other functions: generic Call handling
+                    _ => {
+                        builder.add_statement(place, Rvalue::Call(func_name, mir_args));
+                    }
+                }
             }
             HirExpression::Range { start: _, end: _, inclusive: _ } => {
                 // Ranges are simplified to unit in MIR
@@ -1453,6 +1551,63 @@ impl MirLowerer {
                     _ => None,
                 };
                 
+                // Handle primitive type trait methods by converting to binary ops or assignments
+                if receiver_type.is_none() && args.len() == 1 {
+                    match method.as_str() {
+                        // Arithmetic methods on primitives - convert to binary ops
+                        "add" | "sub" | "mul" | "div" | "rem" => {
+                            let op = match method.as_str() {
+                                "add" => BinaryOp::Add,
+                                "sub" => BinaryOp::Subtract,
+                                "mul" => BinaryOp::Multiply,
+                                "div" => BinaryOp::Divide,
+                                "rem" => BinaryOp::Modulo,
+                                _ => unreachable!(),
+                            };
+                            let arg_temp = builder.gen_temp();
+                            self.lower_expression_to_place(builder, &args[0], Place::Local(arg_temp.clone()))?;
+                            builder.add_statement(
+                                place,
+                                Rvalue::BinaryOp(
+                                    op,
+                                    Operand::Copy(Place::Local(receiver_temp)),
+                                    Operand::Copy(Place::Local(arg_temp)),
+                                ),
+                            );
+                            return Ok(());
+                        }
+                        // Comparison methods on primitives
+                        "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+                            let op = match method.as_str() {
+                                "eq" => BinaryOp::Equal,
+                                "ne" => BinaryOp::NotEqual,
+                                "lt" => BinaryOp::Less,
+                                "le" => BinaryOp::LessEqual,
+                                "gt" => BinaryOp::Greater,
+                                "ge" => BinaryOp::GreaterEqual,
+                                _ => unreachable!(),
+                            };
+                            let arg_temp = builder.gen_temp();
+                            self.lower_expression_to_place(builder, &args[0], Place::Local(arg_temp.clone()))?;
+                            builder.add_statement(
+                                place,
+                                Rvalue::BinaryOp(
+                                    op,
+                                    Operand::Copy(Place::Local(receiver_temp)),
+                                    Operand::Copy(Place::Local(arg_temp)),
+                                ),
+                            );
+                            return Ok(());
+                        }
+                        "clone" => {
+                            // Clone just copies the value
+                            builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Local(receiver_temp))));
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Map built-in collection methods to runtime functions
                 let func_name = if let Some(struct_type) = receiver_type {
                     // Check if it's a built-in collection type

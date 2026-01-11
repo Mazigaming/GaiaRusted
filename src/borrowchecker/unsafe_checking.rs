@@ -161,6 +161,14 @@ impl UnsafeChecker {
                 }
                 self.check_type(return_type)
             }
+            HirType::Vec(element_type) => {
+                // Check inner element type
+                self.check_type(element_type)
+            }
+            HirType::Option(inner_type) => {
+                // Check inner type
+                self.check_type(inner_type)
+            }
             HirType::Named(_) |
             HirType::Int32 |
             HirType::Int64 |

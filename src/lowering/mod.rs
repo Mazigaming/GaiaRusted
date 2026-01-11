@@ -730,6 +730,12 @@ pub enum HirType {
     /// Range type (for slicing)
     Range,
 
+    /// Vec type: Vec<T>
+    Vec(Box<HirType>),
+
+    /// Option type: Option<T>
+    Option(Box<HirType>),
+
     /// Unknown type (will be inferred later)
     Unknown,
 }
@@ -792,6 +798,8 @@ impl fmt::Display for HirType {
                 write!(f, ") -> {}", return_type)
             }
             HirType::Range => write!(f, "Range"),
+            HirType::Vec(elem_type) => write!(f, "Vec<{}>", elem_type),
+            HirType::Option(inner_type) => write!(f, "Option<{}>", inner_type),
             HirType::Unknown => write!(f, "?"),
         }
     }

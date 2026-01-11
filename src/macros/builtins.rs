@@ -164,7 +164,47 @@ fn register_eprintln_macro(expander: &mut MacroExpander) {
 }
 
 fn register_vec_macro(expander: &mut MacroExpander) {
-    let rule = MacroRule {
+    // Rule 1: vec![] - empty vector
+    let empty_rule = MacroRule {
+        pattern: vec![],
+        body: vec![
+            // Expand vec![] to Vec::new()
+            TokenTree::Token(Token::Identifier("Vec".to_string())),
+            TokenTree::Token(Token::DoubleColon),
+            TokenTree::Token(Token::Identifier("new".to_string())),
+            TokenTree::Token(Token::LeftParen),
+            TokenTree::Token(Token::RightParen),
+        ],
+    };
+
+    // Rule 2: vec![x; n] - repeated element
+    let repeat_rule = MacroRule {
+        pattern: vec![
+            MacroPattern::MetaVar {
+                name: "elem".to_string(),
+                kind: MetaVarKind::Expr,
+            },
+            MacroPattern::Token(Token::Semicolon),
+            MacroPattern::MetaVar {
+                name: "count".to_string(),
+                kind: MetaVarKind::Expr,
+            },
+        ],
+        body: vec![
+            // Expand vec![x; n] to __builtin_vec_repeat(x, n)
+            TokenTree::Token(Token::Identifier("__builtin_vec_repeat".to_string())),
+            TokenTree::Token(Token::LeftParen),
+            TokenTree::Token(Token::Dollar),
+            TokenTree::Token(Token::Identifier("elem".to_string())),
+            TokenTree::Token(Token::Comma),
+            TokenTree::Token(Token::Dollar),
+            TokenTree::Token(Token::Identifier("count".to_string())),
+            TokenTree::Token(Token::RightParen),
+        ],
+    };
+
+    // Rule 3: vec![x, y, z] - element list (most common)
+    let list_rule = MacroRule {
         pattern: vec![
             MacroPattern::MetaVar {
                 name: "items".to_string(),
@@ -172,17 +212,20 @@ fn register_vec_macro(expander: &mut MacroExpander) {
             },
         ],
         body: vec![
-            // Expand vec![x, y, z] to an array literal [x, y, z]
+            // Expand vec![x, y, z] to __builtin_vec_from([x, y, z])
+            TokenTree::Token(Token::Identifier("__builtin_vec_from".to_string())),
+            TokenTree::Token(Token::LeftParen),
             TokenTree::Token(Token::LeftBracket),
             TokenTree::Token(Token::Dollar),
             TokenTree::Token(Token::Identifier("items".to_string())),
             TokenTree::Token(Token::RightBracket),
+            TokenTree::Token(Token::RightParen),
         ],
     };
 
     let def = MacroDefinition {
         name: "vec".to_string(),
-        rules: vec![rule],
+        rules: vec![empty_rule, repeat_rule, list_rule],
     };
 
     expander.define(def);

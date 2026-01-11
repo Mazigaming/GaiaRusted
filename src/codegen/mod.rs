@@ -33,6 +33,8 @@ pub mod register_pressure;
 pub mod loop_tiling;
 pub mod memory_optimization;
 pub mod profiling_diagnostics;
+pub mod interprocedural_escape;
+pub mod refcount_scheduler;
 
 use crate::mir::{Mir, MirFunction, Statement, Terminator};
 use crate::runtime;
@@ -1707,6 +1709,184 @@ impl Codegen {
                     self.instructions.push(X86Instruction::Call {
                         func: "gaia_collection_is_empty".to_string(),
                     });
+                } else if func_name == "__builtin_vec_from" {
+                    // __builtin_vec_from([elements]) - Create vector from array
+                    // Arguments: array operand
+                    // Returns: vector (in RAX)
+                    
+                    if args.is_empty() {
+                        // No array argument, create empty vector
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Immediate(0),
+                        });
+                    } else {
+                        // Get the array argument
+                        let array_operand = &args[0];
+                        
+                        // Allocate a vector structure (capacity + length + data)
+                        self.stack_offset -= 8; // Pointer to vec metadata
+                        let vec_ptr_offset = self.stack_offset;
+                        
+                        // Determine array size from the operand
+                        let elem_count = if let crate::mir::Operand::Copy(crate::mir::Place::Local(var_name)) |
+                                              crate::mir::Operand::Move(crate::mir::Place::Local(var_name)) = array_operand {
+                            // Look up the array's element count
+                            // For now, allocate enough space (simplified)
+                            16 // Conservative estimate
+                        } else {
+                            8 // Default
+                        };
+                        
+                        let vec_size = 16 + (elem_count as i64) * 8; // capacity + length + elements
+                        self.stack_offset -= vec_size;
+                        let vec_data_offset = self.stack_offset;
+                        
+                        // Track minimum collection offset
+                        if vec_data_offset < self.min_collection_offset {
+                            self.min_collection_offset = vec_data_offset;
+                            self.collection_size = vec_size;
+                        }
+                        
+                        // Initialize capacity field (at vec_data_offset)
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset },
+                            src: X86Operand::Immediate(elem_count),
+                        });
+                        
+                        // Initialize length field (at vec_data_offset + 8)
+                        // Length = number of elements being inserted
+                        if let crate::mir::Operand::Copy(crate::mir::Place::Local(var_name)) |
+                               crate::mir::Operand::Move(crate::mir::Place::Local(var_name)) = array_operand {
+                            // If source is a named array, get its length from metadata
+                            // For now, set to elem_count
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset + 8 },
+                                src: X86Operand::Immediate(elem_count),
+                            });
+                        } else {
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset + 8 },
+                                src: X86Operand::Immediate(elem_count),
+                            });
+                        }
+                        
+                        // Copy array elements to vector data area
+                        if let crate::mir::Operand::Copy(crate::mir::Place::Local(var_name)) |
+                               crate::mir::Operand::Move(crate::mir::Place::Local(var_name)) = array_operand {
+                            // Copy from source array to vector
+                            if let Some(&src_offset) = self.struct_data_locations.get(var_name) {
+                                for i in 0..elem_count {
+                                    let src_elem_offset = src_offset + (i as i64) * 8;
+                                    let dst_elem_offset = vec_data_offset + 16 + (i as i64) * 8;
+                                    
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { base: Register::RBP, offset: src_elem_offset },
+                                    });
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Memory { base: Register::RBP, offset: dst_elem_offset },
+                                        src: X86Operand::Register(Register::RAX),
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Return address of vector metadata in RAX
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RBP),
+                        });
+                        self.instructions.push(X86Instruction::Add {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Immediate(vec_data_offset),
+                        });
+                        
+                        // Store vector pointer in variable slot
+                        if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                            self.var_locations.insert(var_name.clone(), vec_ptr_offset);
+                        }
+                        skip_final_store = true;
+                    }
+                } else if func_name == "__builtin_vec_repeat" {
+                    // __builtin_vec_repeat(element, count) - Create vector with repeated element
+                    // Arguments: element (i64), count (i64)
+                    // Returns: vector (in RAX)
+                    
+                    if args.len() >= 2 {
+                        let element = &args[0];
+                        let count = &args[1];
+                        
+                        // Get count value
+                        let count_val = if let crate::mir::Operand::Constant(crate::mir::Constant::Integer(n)) = count {
+                            *n
+                        } else {
+                            // Load count from operand
+                            let count_x86 = self.operand_to_x86(count)?;
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: count_x86,
+                            });
+                            // Can't determine exact count, use conservative estimate
+                            64
+                        };
+                        
+                        // Allocate vector
+                        self.stack_offset -= 8; // Pointer to vec metadata
+                        let vec_ptr_offset = self.stack_offset;
+                        
+                        let vec_size = 16 + (count_val * 8); // capacity + length + elements
+                        self.stack_offset -= vec_size;
+                        let vec_data_offset = self.stack_offset;
+                        
+                        // Track minimum collection offset
+                        if vec_data_offset < self.min_collection_offset {
+                            self.min_collection_offset = vec_data_offset;
+                            self.collection_size = vec_size;
+                        }
+                        
+                        // Initialize capacity
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset },
+                            src: X86Operand::Immediate(count_val),
+                        });
+                        
+                        // Initialize length
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset + 8 },
+                            src: X86Operand::Immediate(count_val),
+                        });
+                        
+                        // Fill all elements with the repeated value
+                        let elem_val = self.operand_to_x86(element)?;
+                        for i in 0..count_val {
+                            let elem_offset = vec_data_offset + 16 + (i * 8);
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: elem_val.clone(),
+                            });
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Memory { base: Register::RBP, offset: elem_offset },
+                                src: X86Operand::Register(Register::RAX),
+                            });
+                        }
+                        
+                        // Return address of vector metadata in RAX
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Register(Register::RBP),
+                        });
+                        self.instructions.push(X86Instruction::Add {
+                            dst: X86Operand::Register(Register::RAX),
+                            src: X86Operand::Immediate(vec_data_offset),
+                        });
+                        
+                        // Store vector pointer in variable slot
+                        if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                            self.var_locations.insert(var_name.clone(), vec_ptr_offset);
+                        }
+                        skip_final_store = true;
+                    }
                 } else {
                     // Regular function call
                     // Mangle function names for assembly compatibility

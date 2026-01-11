@@ -480,7 +480,8 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
             if exprs.is_empty() {
                 Ok(AstExpr::Integer(0)) // Default to unit-like value
             } else if exprs.len() == 1 {
-                Ok(exprs.into_iter().next().unwrap())
+                // Safe because we checked len() == 1
+                Ok(exprs.into_iter().next().expect("Expression vector has length 1"))
             } else {
                 Ok(AstExpr::Tuple(exprs))
             }
@@ -535,7 +536,8 @@ fn convert_block_to_expr(block: &parser_ast::Block) -> BridgeResult<AstExpr> {
     if exprs.is_empty() {
         Ok(AstExpr::Integer(0))
     } else if exprs.len() == 1 {
-        Ok(exprs.into_iter().next().unwrap())
+        // Safe because we checked len() == 1
+        Ok(exprs.into_iter().next().expect("Expression vector has length 1"))
     } else {
         Ok(AstExpr::Tuple(exprs))
     }
@@ -697,9 +699,12 @@ mod tests {
     #[test]
     fn test_convert_simple_expression() {
         let expr = parser_ast::Expression::Integer(42);
+        let converted = convert_expression(&expr)
+            .expect("Failed to convert integer expression");
         assert_eq!(
-            convert_expression(&expr).unwrap(),
-            AstExpr::Integer(42)
+            converted,
+            AstExpr::Integer(42),
+            "Integer expression should convert to AstExpr::Integer"
         );
     }
 
@@ -710,11 +715,19 @@ mod tests {
             op: parser_ast::BinaryOp::Add,
             right: Box::new(parser_ast::Expression::Integer(2)),
         };
-        match convert_expression(&expr).unwrap() {
+        let converted = convert_expression(&expr)
+            .expect("Failed to convert binary expression. AST bridge should handle parser AST");
+        match converted {
             AstExpr::BinaryOp { op, .. } => {
-                assert_eq!(op, AstBinaryOp::Add);
+                assert_eq!(op, AstBinaryOp::Add, "Binary operation should convert Add to Add");
             }
-            _ => panic!("Expected binary op"),
+            other => {
+                panic!(
+                    "Expected binary operation expression, but got {:?}. \
+                     This indicates an AST bridge conversion regression.",
+                    other
+                );
+            }
         }
     }
 
@@ -749,7 +762,8 @@ mod tests {
             abi: None,
         };
 
-        registry.register_item(&func).unwrap();
+        registry.register_item(&func)
+            .expect("Failed to register function in type registry");
         assert!(registry.functions.contains_key("add"));
         assert_eq!(registry.functions["add"].params.len(), 2);
     }
@@ -782,9 +796,10 @@ mod tests {
         };
 
         let mut ctx = ConversionContext::new();
-        let (name, def) = extract_function_signature(&func, &mut ctx).unwrap();
-        assert_eq!(name, "identity");
-        assert_eq!(def.generics.len(), 1);
+        let (name, def) = extract_function_signature(&func, &mut ctx)
+            .expect("Failed to extract function signature for generic function");
+        assert_eq!(name, "identity", "Function name should be 'identity'");
+        assert_eq!(def.generics.len(), 1, "Function should have one generic parameter");
     }
 
     #[test]
@@ -810,11 +825,12 @@ mod tests {
         };
 
         let mut ctx = ConversionContext::new();
-        let (name, _id, def) = extract_struct_definition(&struct_item, &mut ctx).unwrap();
-        assert_eq!(name, "Point");
-        assert_eq!(def.fields.len(), 2);
-        assert!(def.fields.contains_key("x"));
-        assert!(def.fields.contains_key("y"));
+        let (name, _id, def) = extract_struct_definition(&struct_item, &mut ctx)
+            .expect("Failed to extract struct definition");
+        assert_eq!(name, "Point", "Struct name should be 'Point'");
+        assert_eq!(def.fields.len(), 2, "Struct should have 2 fields");
+        assert!(def.fields.contains_key("x"), "Struct should have field 'x'");
+        assert!(def.fields.contains_key("y"), "Struct should have field 'y'");
     }
 
     #[test]
@@ -833,8 +849,9 @@ mod tests {
         let struct_id = ctx.register_struct("Vec".to_string());
         
         let named_type = parser_ast::Type::Named("Vec".to_string());
-        let converted = convert_type_with_context(&named_type, &mut ctx).unwrap();
+        let converted = convert_type_with_context(&named_type, &mut ctx)
+            .expect("Failed to convert struct type in context");
         
-        assert_eq!(converted, Type::Struct(struct_id));
+        assert_eq!(converted, Type::Struct(struct_id), "Named type should convert to Struct");
     }
 }
