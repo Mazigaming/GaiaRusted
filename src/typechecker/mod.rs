@@ -267,28 +267,99 @@ impl TypeChecker {
         self.context.register_function("HashMap::new".to_string(), vec![], HirType::Named("HashMap".to_string()));
         self.context.register_function("Vec::new".to_string(), vec![], HirType::Named("Vec".to_string()));
         self.context.register_function("HashSet::new".to_string(), vec![], HirType::Named("HashSet".to_string()));
+        self.context.register_function("LinkedList::new".to_string(), vec![], HirType::Named("LinkedList".to_string()));
+        self.context.register_function("BTreeMap::new".to_string(), vec![], HirType::Named("BTreeMap".to_string()));
         
         // Collection methods (qualified with collection type)
         // Vec methods
-        self.context.register_function("Vec::push".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
-        self.context.register_function("Vec::pop".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Unknown);
-        self.context.register_function("Vec::get".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Int32], HirType::Unknown);
-        self.context.register_function("Vec::len".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Int32);
-        self.context.register_function("Vec::is_empty".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Bool);
+         self.context.register_function("Vec::push".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("Vec::pop".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Unknown);
+         self.context.register_function("Vec::get".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Int32], HirType::Unknown);
+         self.context.register_function("Vec::len".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Int32);
+         self.context.register_function("Vec::is_empty".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Bool);
+         self.context.register_function("Vec::insert".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Int32, HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("Vec::remove".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Int32], HirType::Unknown);
+         self.context.register_function("Vec::clear".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Tuple(vec![]));
+         self.context.register_function("Vec::reserve".to_string(), vec![HirType::Named("Vec".to_string()), HirType::Int32], HirType::Tuple(vec![]));
+         self.context.register_function("Vec::into_iter".to_string(), vec![HirType::Named("Vec".to_string())], HirType::Named("Iterator".to_string()));
         
         // HashMap methods
-        self.context.register_function("HashMap::insert".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
-        self.context.register_function("HashMap::get".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Unknown);
-        self.context.register_function("HashMap::remove".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
-        self.context.register_function("HashMap::is_empty".to_string(), vec![HirType::Named("HashMap".to_string())], HirType::Bool);
+         self.context.register_function("HashMap::insert".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("HashMap::get".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Unknown);
+         self.context.register_function("HashMap::remove".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("HashMap::is_empty".to_string(), vec![HirType::Named("HashMap".to_string())], HirType::Bool);
+         self.context.register_function("HashMap::len".to_string(), vec![HirType::Named("HashMap".to_string())], HirType::Int32);
+         self.context.register_function("HashMap::clear".to_string(), vec![HirType::Named("HashMap".to_string())], HirType::Tuple(vec![]));
+         self.context.register_function("HashMap::contains_key".to_string(), vec![HirType::Named("HashMap".to_string()), HirType::Unknown], HirType::Bool);
         
         // HashSet methods
-        self.context.register_function("HashSet::insert".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
-        self.context.register_function("HashSet::contains".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Bool);
-        self.context.register_function("HashSet::remove".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
-        self.context.register_function("HashSet::is_empty".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Bool);
-        
-        // Generic methods (fallback)
+         self.context.register_function("HashSet::insert".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("HashSet::contains".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Bool);
+         self.context.register_function("HashSet::remove".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("HashSet::is_empty".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Bool);
+         self.context.register_function("HashSet::len".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Int32);
+         self.context.register_function("HashSet::clear".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Tuple(vec![]));
+         
+         // LinkedList methods
+         self.context.register_function("LinkedList::push_front".to_string(), vec![HirType::Named("LinkedList".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("LinkedList::push_back".to_string(), vec![HirType::Named("LinkedList".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("LinkedList::pop_front".to_string(), vec![HirType::Named("LinkedList".to_string())], HirType::Named("Option".to_string()));
+         self.context.register_function("LinkedList::pop_back".to_string(), vec![HirType::Named("LinkedList".to_string())], HirType::Named("Option".to_string()));
+         self.context.register_function("LinkedList::is_empty".to_string(), vec![HirType::Named("LinkedList".to_string())], HirType::Bool);
+         self.context.register_function("LinkedList::len".to_string(), vec![HirType::Named("LinkedList".to_string())], HirType::Int32);
+         self.context.register_function("LinkedList::clear".to_string(), vec![HirType::Named("LinkedList".to_string())], HirType::Tuple(vec![]));
+         
+         // BTreeMap methods
+         self.context.register_function("BTreeMap::insert".to_string(), vec![HirType::Named("BTreeMap".to_string()), HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
+         self.context.register_function("BTreeMap::get".to_string(), vec![HirType::Named("BTreeMap".to_string()), HirType::Unknown], HirType::Named("Option".to_string()));
+         self.context.register_function("BTreeMap::contains_key".to_string(), vec![HirType::Named("BTreeMap".to_string()), HirType::Unknown], HirType::Bool);
+         self.context.register_function("BTreeMap::remove".to_string(), vec![HirType::Named("BTreeMap".to_string()), HirType::Unknown], HirType::Named("Option".to_string()));
+         self.context.register_function("BTreeMap::is_empty".to_string(), vec![HirType::Named("BTreeMap".to_string())], HirType::Bool);
+         self.context.register_function("BTreeMap::len".to_string(), vec![HirType::Named("BTreeMap".to_string())], HirType::Int32);
+         self.context.register_function("BTreeMap::clear".to_string(), vec![HirType::Named("BTreeMap".to_string())], HirType::Tuple(vec![]));
+         
+         // String methods (accept both String and &String)
+         self.context.register_function("String::len".to_string(), vec![HirType::String], HirType::Int32);
+         self.context.register_function("String::is_empty".to_string(), vec![HirType::String], HirType::Bool);
+         self.context.register_function("String::chars".to_string(), vec![HirType::String], HirType::Unknown);
+         self.context.register_function("String::lines".to_string(), vec![HirType::String], HirType::Unknown);
+         self.context.register_function("String::split".to_string(), vec![HirType::String, HirType::String], HirType::Unknown);
+         self.context.register_function("String::replace".to_string(), vec![HirType::String, HirType::String, HirType::String], HirType::String);
+         self.context.register_function("String::trim".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::starts_with".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+         self.context.register_function("String::ends_with".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+         self.context.register_function("String::contains_str".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+         self.context.register_function("String::to_uppercase".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::to_lowercase".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::trim".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::replace".to_string(), vec![HirType::String, HirType::String, HirType::String], HirType::String);
+         self.context.register_function("String::repeat".to_string(), vec![HirType::String, HirType::Int64], HirType::String);
+         self.context.register_function("String::chars".to_string(), vec![HirType::String], HirType::Named("Iterator".to_string()));
+         self.context.register_function("String::split".to_string(), vec![HirType::String, HirType::String], HirType::Named("Iterator".to_string()));
+         
+         // Option<T> methods
+         self.context.register_function("Option::unwrap".to_string(), vec![HirType::Named("Option".to_string())], HirType::Unknown);
+         self.context.register_function("Option::unwrap_or".to_string(), vec![HirType::Named("Option".to_string()), HirType::Unknown], HirType::Unknown);
+         self.context.register_function("Option::map".to_string(), vec![HirType::Named("Option".to_string()), HirType::Unknown], HirType::Named("Option".to_string()));
+         self.context.register_function("Option::and_then".to_string(), vec![HirType::Named("Option".to_string()), HirType::Unknown], HirType::Named("Option".to_string()));
+         self.context.register_function("Option::or".to_string(), vec![HirType::Named("Option".to_string()), HirType::Named("Option".to_string())], HirType::Named("Option".to_string()));
+         self.context.register_function("Option::filter".to_string(), vec![HirType::Named("Option".to_string()), HirType::Unknown], HirType::Named("Option".to_string()));
+         self.context.register_function("Option::is_some".to_string(), vec![HirType::Named("Option".to_string())], HirType::Bool);
+         self.context.register_function("Option::is_none".to_string(), vec![HirType::Named("Option".to_string())], HirType::Bool);
+         
+         // Result<T, E> methods
+         self.context.register_function("Result::unwrap".to_string(), vec![HirType::Named("Result".to_string())], HirType::Unknown);
+         self.context.register_function("Result::unwrap_err".to_string(), vec![HirType::Named("Result".to_string())], HirType::Unknown);
+         self.context.register_function("Result::unwrap_or".to_string(), vec![HirType::Named("Result".to_string()), HirType::Unknown], HirType::Unknown);
+         self.context.register_function("Result::unwrap_or_else".to_string(), vec![HirType::Named("Result".to_string()), HirType::Unknown], HirType::Unknown);
+         self.context.register_function("Result::map".to_string(), vec![HirType::Named("Result".to_string()), HirType::Unknown], HirType::Named("Result".to_string()));
+         self.context.register_function("Result::map_err".to_string(), vec![HirType::Named("Result".to_string()), HirType::Unknown], HirType::Named("Result".to_string()));
+         self.context.register_function("Result::and_then".to_string(), vec![HirType::Named("Result".to_string()), HirType::Unknown], HirType::Named("Result".to_string()));
+         self.context.register_function("Result::or_else".to_string(), vec![HirType::Named("Result".to_string()), HirType::Unknown], HirType::Named("Result".to_string()));
+         self.context.register_function("Result::is_ok".to_string(), vec![HirType::Named("Result".to_string())], HirType::Bool);
+         self.context.register_function("Result::is_err".to_string(), vec![HirType::Named("Result".to_string())], HirType::Bool);
+         
+         // Generic methods (fallback)
         self.context.register_function("insert".to_string(), vec![HirType::Unknown, HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
         self.context.register_function("push".to_string(), vec![HirType::Unknown, HirType::Unknown], HirType::Tuple(vec![]));
         self.context.register_function("pop".to_string(), vec![HirType::Unknown], HirType::Named("Option".to_string()));
@@ -304,6 +375,72 @@ impl TypeChecker {
         self.context.register_function("into_iter".to_string(), vec![HirType::Unknown], HirType::Unknown);
         self.context.register_function("next".to_string(), vec![HirType::Unknown], HirType::Unknown);
         
+        // Iterator adapter methods (with closure support)
+        // map(closure: Fn(T) -> U) -> Iterator<U>
+        self.context.register_function("Iterator::map".to_string(), 
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Iterator".to_string())); // Iterator<U>
+        
+        // filter(closure: Fn(T) -> bool) -> Iterator<T>
+        self.context.register_function("Iterator::filter".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // fold(init: U, closure: Fn(U, T) -> U) -> U
+        self.context.register_function("Iterator::fold".to_string(),
+            vec![HirType::Unknown, HirType::Unknown, HirType::Unknown], // Iterator, init, closure
+            HirType::Unknown);                         // U
+        
+        // collect() -> Collection
+        self.context.register_function("Iterator::collect".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Vec".to_string()));      // Collection
+        
+        // for_each(closure: Fn(T)) -> ()
+        self.context.register_function("Iterator::for_each".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Tuple(vec![]));                  // ()
+        
+        // sum() -> T
+        self.context.register_function("Iterator::sum".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Unknown);      // T
+        
+        // count() -> i64
+        self.context.register_function("Iterator::count".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Int64);        // i64
+        
+        // take(n: i64) -> Iterator<T>
+        self.context.register_function("Iterator::take".to_string(),
+            vec![HirType::Unknown, HirType::Int64], // Iterator, count
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // skip(n: i64) -> Iterator<T>
+        self.context.register_function("Iterator::skip".to_string(),
+            vec![HirType::Unknown, HirType::Int64], // Iterator, count
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // chain(other: Iterator) -> Iterator<T>
+        self.context.register_function("Iterator::chain".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, Iterator
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // find(closure: Fn(T) -> bool) -> Option<T>
+        self.context.register_function("Iterator::find".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Option".to_string())); // Option<T>
+        
+        // any(closure: Fn(T) -> bool) -> bool
+        self.context.register_function("Iterator::any".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Bool);                            // bool
+        
+        // all(closure: Fn(T) -> bool) -> bool
+        self.context.register_function("Iterator::all".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Bool);                            // bool
+        
         // vec! macro expansion builtins (Fix #3)
         // __builtin_vec_from([a, b, c]) -> Vec<T>
         self.context.register_function("__builtin_vec_from".to_string(), 
@@ -315,8 +452,79 @@ impl TypeChecker {
             vec![HirType::Unknown, HirType::Int64], // Element type and count
             HirType::Unknown);                       // Vec<T>
         
-        // Register standard traits
-        self.register_standard_traits();
+        // File I/O operations
+        // File::open(path: &str) -> Result<File, Error>
+        self.context.register_function("File::open".to_string(),
+            vec![HirType::String], // Path
+            HirType::Named("Result".to_string())); // Result<File, Error>
+        
+        // File::create(path: &str) -> Result<File, Error>
+        self.context.register_function("File::create".to_string(),
+            vec![HirType::String], // Path
+            HirType::Named("Result".to_string())); // Result<File, Error>
+        
+        // File::read_to_string() -> Result<String, Error>
+        self.context.register_function("File::read_to_string".to_string(),
+            vec![HirType::Named("File".to_string())], // File
+            HirType::Named("Result".to_string())); // Result<String, Error>
+        
+        // File::write_all(data: &str) -> Result<(), Error>
+        self.context.register_function("File::write_all".to_string(),
+            vec![HirType::Named("File".to_string()), HirType::String], // File, data
+            HirType::Named("Result".to_string())); // Result<(), Error>
+        
+        // File::delete(path: &str) -> Result<(), Error>
+        self.context.register_function("File::delete".to_string(),
+            vec![HirType::String], // Path
+            HirType::Named("Result".to_string())); // Result<(), Error>
+        
+        // File::exists(path: &str) -> bool
+        self.context.register_function("File::exists".to_string(),
+            vec![HirType::String], // Path
+            HirType::Bool); // bool
+        
+        // std::fs namespace shortcuts
+        self.context.register_function("fs::read".to_string(),
+            vec![HirType::String],
+            HirType::Named("Result".to_string()));
+        
+        self.context.register_function("fs::write".to_string(),
+             vec![HirType::String, HirType::String],
+             HirType::Named("Result".to_string()));
+         
+         // Derive macro support - register default implementations
+         // #[derive(Clone)] - generates clone() method
+         self.context.register_function("derive::clone".to_string(),
+             vec![HirType::Unknown], // Self
+             HirType::Unknown);      // Self
+         
+         // #[derive(Debug)] - generates debug() method
+         self.context.register_function("derive::debug".to_string(),
+             vec![HirType::Unknown], // Self
+             HirType::String);       // String representation
+         
+         // #[derive(Default)] - generates default() function
+         self.context.register_function("derive::default".to_string(),
+             vec![],                 // No parameters
+             HirType::Unknown);      // Self
+         
+         // #[derive(Display)] - generates to_string() method
+         self.context.register_function("derive::display".to_string(),
+             vec![HirType::Unknown], // Self
+             HirType::String);       // String representation
+         
+         // #[derive(PartialEq)] - generates eq() method
+         self.context.register_function("derive::partial_eq".to_string(),
+             vec![HirType::Unknown, HirType::Unknown], // Self, other
+             HirType::Bool);         // bool
+         
+         // #[derive(Copy)] - marker trait, no implementation needed
+         self.context.register_function("derive::copy".to_string(),
+             vec![],
+             HirType::Tuple(vec![]));
+         
+         // Register standard traits
+         self.register_standard_traits();
     }
     
     /// Register standard library traits
@@ -1774,7 +1982,50 @@ impl TypeChecker {
                     }
                 }
                 
-                if let HirType::Named(struct_name) = &receiver_ty {
+                // Check if it's a String or &String or &str type
+                let is_string_type = receiver_ty == HirType::String ||
+                    (if let HirType::Reference(inner) = &receiver_ty {
+                        **inner == HirType::String
+                    } else {
+                        false
+                    });
+                
+                if is_string_type {
+                    // Handle String methods
+                    let qualified_name = format!("String::{}", method);
+                    if let Some((param_types, ret_type)) = self.context.lookup_function(&qualified_name) {
+                        // Check argument count
+                        if args.len() != param_types.len() - 1 {
+                            return Err(TypeCheckError {
+                                message: format!(
+                                    "Method {} expects {} arguments, got {}",
+                                    method,
+                                    param_types.len() - 1,
+                                    args.len()
+                                ),
+                            });
+                        }
+                        
+                        // Type check arguments
+                        for (i, (arg, param_ty)) in args.iter().zip(param_types.iter().skip(1)).enumerate() {
+                            let arg_ty = self.infer_type(arg)?;
+                            if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                return Err(TypeCheckError {
+                                    message: format!(
+                                        "Argument {} has type {}, expected {}",
+                                        i, arg_ty, param_ty
+                                    ),
+                                });
+                            }
+                        }
+                        
+                        return Ok(ret_type);
+                    } else {
+                        return Err(TypeCheckError {
+                            message: format!("Unknown method {} for String", method),
+                        });
+                    }
+                } else if let HirType::Named(struct_name) = &receiver_ty {
                     // First, try to lookup in impl blocks
                     if let Some((param_types, ret_type)) = self.context.lookup_impl_method(&struct_name, method) {
                         // For instance methods in impl blocks, no implicit self in param_types

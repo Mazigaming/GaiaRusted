@@ -372,6 +372,8 @@ pub struct Codegen {
     float_constants: HashMap<String, f64>, // label -> f64 value
     /// Maps variable name to struct name (for field index lookup)
     var_struct_types: HashMap<String, String>,
+    /// Tracks array variables and their sizes: var_name -> (size, start_offset)
+    array_variables: HashMap<String, (usize, i64)>,
 }
 
 impl Codegen {
@@ -389,6 +391,7 @@ impl Codegen {
             collection_size: 0,
             string_constants: HashMap::new(),
             var_struct_types: HashMap::new(),
+            array_variables: HashMap::new(),
         }
     }
 
@@ -606,12 +609,20 @@ impl Codegen {
                     self.instructions.push(X86Instruction::Ret);
                 }
                 Terminator::Return(Some(operand)) => {
-                    // Move return value to RAX
-                    if let Ok(operand_x86) = self.operand_to_x86(operand) {
+                    // For main function (gaia_main), always return 0, not the last expression
+                    if func_name == "gaia_main" {
                         self.instructions.push(X86Instruction::Mov {
                             dst: X86Operand::Register(Register::RAX),
-                            src: operand_x86,
+                            src: X86Operand::Immediate(0),
                         });
+                    } else {
+                        // For other functions, move return value to RAX
+                        if let Ok(operand_x86) = self.operand_to_x86(operand) {
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: operand_x86,
+                            });
+                        }
                     }
                     // Restore stack pointer before restoring RBP
                     self.instructions.push(X86Instruction::Mov {
@@ -735,16 +746,17 @@ impl Codegen {
                               crate::mir::Place::Local(name) => {
                                   // Check if this is a struct variable (has struct data location registered)
                                   if let Some(&struct_base) = self.struct_data_locations.get(name) {
-                                     // Direct struct field access - the struct data is at struct_base
-                                     let field_index = self.get_field_index(name, field_name);
-                                     let field_offset = struct_base + (field_index as i64) * 8;
-                                     
-                                     // Load the field value directly from the struct
-                                     self.instructions.push(X86Instruction::Mov {
-                                         dst: X86Operand::Register(Register::RAX),
-                                         src: X86Operand::Memory { base: Register::RBP, offset: field_offset },
-                                     });
-                                 } else if let Some(&var_offset) = self.var_locations.get(name) {
+                                      // Direct struct field access - the struct data is at struct_base
+                                      let field_index = self.get_field_index(name, field_name);
+                                      // Stack grows downward, so subtract offset from base
+                                      let field_offset = struct_base - (field_index as i64) * 8;
+                                      
+                                      // Load the field value directly from the struct
+                                      self.instructions.push(X86Instruction::Mov {
+                                          dst: X86Operand::Register(Register::RAX),
+                                          src: X86Operand::Memory { base: Register::RBP, offset: field_offset },
+                                      });
+                                  } else if let Some(&var_offset) = self.var_locations.get(name) {
                                      // Indirect struct field access - the variable holds a POINTER to struct data
                                      let field_index = self.get_field_index(name, field_name);
                                      let field_offset = (field_index as i64) * 8;
@@ -778,14 +790,15 @@ impl Codegen {
                          }
                      }
                     crate::mir::Operand::Move(crate::mir::Place::Field(place, field_name)) => {
-                         // Field access on a struct (Move variant - same as Copy for our purposes)
-                         match place.as_ref() {
-                              crate::mir::Place::Local(name) => {
-                                 // Check if this is a struct variable (has struct data location registered)
-                                 if let Some(&struct_base) = self.struct_data_locations.get(name) {
-                                     // Direct struct field access - the struct data is at struct_base
-                                     let field_index = self.get_field_index(name, field_name);
-                                     let field_offset = struct_base + (field_index as i64) * 8;
+                          // Field access on a struct (Move variant - same as Copy for our purposes)
+                          match place.as_ref() {
+                               crate::mir::Place::Local(name) => {
+                                  // Check if this is a struct variable (has struct data location registered)
+                                  if let Some(&struct_base) = self.struct_data_locations.get(name) {
+                                      // Direct struct field access - the struct data is at struct_base
+                                      let field_index = self.get_field_index(name, field_name);
+                                      // Stack grows downward, so subtract offset from base
+                                      let field_offset = struct_base - (field_index as i64) * 8;
                                      
                                      // Load the field value directly from the struct
                                      self.instructions.push(X86Instruction::Mov {
@@ -897,6 +910,14 @@ impl Codegen {
                                 let dst_offset = self.get_var_location(dst_name);
                                 self.float_stack_offsets.insert(dst_offset);
                             }
+                        }
+                    }
+                    
+                    // CRITICAL FIX FOR BUG #1: Propagate array metadata
+                    // When we copy an array variable, the destination should also be tracked as an array
+                    if let Some(&(elem_count, array_base)) = self.array_variables.get(src_name) {
+                        if let crate::mir::Place::Local(ref dst_name) = stmt.place {
+                            self.array_variables.insert(dst_name.clone(), (elem_count, array_base));
                         }
                     }
                 }
@@ -1527,6 +1548,100 @@ impl Codegen {
                         src: X86Operand::Register(Register::RAX),
                     });
                     skip_final_store = true;
+                } else if func_name == "LinkedList::new" {
+                    // LinkedList constructor - allocate stack space and initialize (reuse vec layout)
+                    self.stack_offset -= 8; // First slot for LinkedList pointer
+                    let list_ptr_offset = self.stack_offset;
+                    
+                    self.stack_offset -= 512; // allocate space for linkedlist
+                    let list_data_offset = self.stack_offset;
+                    
+                    // Track minimum collection offset so temp variables don't collide
+                    if list_data_offset < self.min_collection_offset {
+                        self.min_collection_offset = list_data_offset;
+                        self.collection_size = 512; // LinkedList uses 512 bytes
+                    }
+                    
+                    // Register this variable's location so subsequent statements can find it
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.var_locations.insert(var_name.clone(), list_ptr_offset);
+                    }
+                    
+                    // Initialize capacity = 16
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: list_data_offset },
+                        src: X86Operand::Immediate(16),
+                    });
+                    
+                    // Initialize size = 0
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: list_data_offset + 8 },
+                        src: X86Operand::Immediate(0),
+                    });
+                    
+                    // Return address of linkedlist metadata in RAX
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(list_data_offset),
+                    });
+                    
+                    // Store pointer in variable slot
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: list_ptr_offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                    skip_final_store = true;
+                } else if func_name == "BTreeMap::new" {
+                    // BTreeMap constructor - allocate stack space and initialize (reuse hashmap layout)
+                    self.stack_offset -= 8; // First slot for BTreeMap pointer
+                    let bmap_ptr_offset = self.stack_offset;
+                    
+                    self.stack_offset -= 512; // allocate space for btreemap
+                    let bmap_data_offset = self.stack_offset;
+                    
+                    // Track minimum collection offset so temp variables don't collide
+                    if bmap_data_offset < self.min_collection_offset {
+                        self.min_collection_offset = bmap_data_offset;
+                        self.collection_size = 512; // BTreeMap uses 512 bytes
+                    }
+                    
+                    // Register this variable's location so subsequent statements can find it
+                    if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                        self.var_locations.insert(var_name.clone(), bmap_ptr_offset);
+                    }
+                    
+                    // Initialize capacity = 16
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: bmap_data_offset },
+                        src: X86Operand::Immediate(16),
+                    });
+                    
+                    // Initialize size = 0
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: bmap_data_offset + 8 },
+                        src: X86Operand::Immediate(0),
+                    });
+                    
+                    // Return address of btreemap metadata in RAX
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RBP),
+                    });
+                    self.instructions.push(X86Instruction::Add {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Immediate(bmap_data_offset),
+                    });
+                    
+                    // Store pointer in variable slot
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: bmap_ptr_offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                    skip_final_store = true;
                 } else if func_name == "push" || func_name == "Vec::push" || func_name == "HashMap::push" {
                     // Vec::push - call runtime function
                     // rdi = self (vec pointer), rsi = value
@@ -1562,8 +1677,62 @@ impl Codegen {
                     self.instructions.push(X86Instruction::Call {
                         func: "gaia_vec_pop".to_string(),
                     });
-                } else if func_name == "get" || func_name == "Vec::get" || func_name == "HashMap::get" {
-                    // Vec::get or HashMap::get - call runtime function
+                } else if func_name == "get" || func_name == "Vec::get" || func_name == "HashMap::get" || func_name == "BTreeMap::get" {
+                    // Vec::get, HashMap::get, or BTreeMap::get - call runtime function
+                    // rdi = self (collection pointer), rsi = index/key
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    // Use HashMap get for BTreeMap/HashMap, Vec get for Vec
+                    let runtime_func = if func_name.contains("HashMap") || func_name.contains("BTreeMap") {
+                        "gaia_hashmap_get"
+                    } else {
+                        "gaia_vec_get"
+                    };
+                    self.instructions.push(X86Instruction::Call {
+                        func: runtime_func.to_string(),
+                    });
+                } else if func_name == "Vec::insert" && args.len() >= 3 {
+                    // Vec::insert - call runtime function
+                    // rdi = self (vec pointer), rsi = index, rdx = value
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    if args.len() >= 3 {
+                        let arg_val = self.operand_to_x86(&args[2])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDX),
+                            src: arg_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_insert".to_string(),
+                    });
+                    skip_final_store = true;
+                } else if func_name == "Vec::remove" && args.len() >= 2 {
+                    // Vec::remove - call runtime function
                     // rdi = self (vec pointer), rsi = index
                     if args.len() >= 1 {
                         let self_val = self.operand_to_x86(&args[0])?;
@@ -1579,12 +1748,46 @@ impl Codegen {
                             src: arg_val,
                         });
                     }
-                    // For now assume Vec, can be improved with type info
                     self.instructions.push(X86Instruction::Call {
-                        func: "gaia_vec_get".to_string(),
+                        func: "gaia_vec_remove".to_string(),
                     });
-                } else if (func_name == "insert" || func_name == "HashMap::insert" || func_name == "HashSet::insert") && args.len() >= 3 {
-                    // HashMap::insert or collection insert - call appropriate runtime function
+                } else if func_name == "Vec::clear" && args.len() >= 1 {
+                    // Vec::clear - call runtime function
+                    // rdi = self (vec pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_clear".to_string(),
+                    });
+                    skip_final_store = true;
+                } else if func_name == "Vec::reserve" && args.len() >= 2 {
+                    // Vec::reserve - call runtime function
+                    // rdi = self (vec pointer), rsi = additional capacity
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_reserve".to_string(),
+                    });
+                    skip_final_store = true;
+                } else if (func_name == "insert" || func_name == "HashMap::insert" || func_name == "HashSet::insert" || func_name == "BTreeMap::insert") && args.len() >= 3 {
+                    // HashMap/BTreeMap::insert or collection insert - call appropriate runtime function
                     // rdi = self, rsi = key/first_arg, rdx = value/second_arg
                     if args.len() >= 1 {
                         let self_val = self.operand_to_x86(&args[0])?;
@@ -1612,6 +1815,7 @@ impl Codegen {
                             func: "gaia_hashset_insert".to_string(),
                         });
                     } else {
+                        // HashMap or BTreeMap
                         self.instructions.push(X86Instruction::Call {
                             func: "gaia_hashmap_insert".to_string(),
                         });
@@ -1635,8 +1839,8 @@ impl Codegen {
                     self.instructions.push(X86Instruction::Call {
                         func: "gaia_hashset_insert".to_string(),
                     });
-                } else if func_name == "remove" || func_name == "HashMap::remove" || func_name == "HashSet::remove" {
-                    // Remove function
+                } else if func_name == "remove" || func_name == "HashMap::remove" || func_name == "HashSet::remove" || func_name == "BTreeMap::remove" {
+                    // Remove function for HashMap, HashSet, or BTreeMap
                     // rdi = self (collection pointer), rsi = key/element
                     if args.len() >= 1 {
                         let self_val = self.operand_to_x86(&args[0])?;
@@ -1652,7 +1856,7 @@ impl Codegen {
                             src: arg_val,
                         });
                     }
-                    if func_name.contains("HashMap") {
+                    if func_name.contains("HashMap") || func_name.contains("BTreeMap") {
                         self.instructions.push(X86Instruction::Call {
                             func: "gaia_hashmap_remove".to_string(),
                         });
@@ -1681,9 +1885,64 @@ impl Codegen {
                     self.instructions.push(X86Instruction::Call {
                         func: "gaia_hashset_contains".to_string(),
                     });
-                } else if func_name == "len" || func_name == "Vec::len" || func_name == "HashMap::len" || func_name == "HashSet::len" {
-                    // Vec::len or collection length method
-                    // rdi = self (vec pointer)
+                } else if func_name == "contains_key" || func_name == "HashMap::contains_key" || func_name == "BTreeMap::contains_key" {
+                    // HashMap/BTreeMap::contains_key - check if key exists
+                    // rdi = self (map pointer), rsi = key
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_hashmap_contains_key".to_string(),
+                    });
+                } else if func_name == "push_front" || func_name == "LinkedList::push_front" || func_name == "push_back" || func_name == "LinkedList::push_back" {
+                    // LinkedList::push_front/push_back - push value to front/back
+                    // rdi = self (list pointer), rsi = value
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let arg_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: arg_val,
+                        });
+                    }
+                    // For now, use vec_push (same memory layout)
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_push".to_string(),
+                    });
+                } else if func_name == "pop_front" || func_name == "LinkedList::pop_front" || func_name == "pop_back" || func_name == "LinkedList::pop_back" {
+                    // LinkedList::pop_front/pop_back - pop value from front/back
+                    // rdi = self (list pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    // For now, use vec_pop (same memory layout)
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_vec_pop".to_string(),
+                    });
+                } else if func_name == "String::len" {
+                    // String::len - get string length
+                    // rdi = string pointer
                     if args.len() >= 1 {
                         let self_val = self.operand_to_x86(&args[0])?;
                         self.instructions.push(X86Instruction::Mov {
@@ -1692,9 +1951,105 @@ impl Codegen {
                         });
                     }
                     self.instructions.push(X86Instruction::Call {
-                        func: "gaia_vec_len".to_string(),
+                        func: "gaia_string_len".to_string(),
                     });
-                } else if func_name == "is_empty" || func_name == "Vec::is_empty" || func_name == "HashMap::is_empty" || func_name == "HashSet::is_empty" {
+                } else if func_name == "String::is_empty" {
+                    // String::is_empty - check if empty
+                    // rdi = string pointer
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_string_is_empty".to_string(),
+                    });
+                } else if func_name == "String::starts_with" {
+                    // String::starts_with - check prefix
+                    // rdi = string pointer, rsi = prefix
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let prefix_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: prefix_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_string_starts_with".to_string(),
+                    });
+                } else if func_name == "String::ends_with" {
+                    // String::ends_with - check suffix
+                    // rdi = string pointer, rsi = suffix
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let suffix_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: suffix_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_string_ends_with".to_string(),
+                    });
+                } else if func_name == "String::contains_str" {
+                    // String::contains_str - check if contains substring
+                    // rdi = string pointer, rsi = substring
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let substring_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: substring_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_string_contains".to_string(),
+                    });
+                } else if func_name == "len" || func_name == "Vec::len" || func_name == "HashMap::len" || func_name == "HashSet::len" || func_name == "LinkedList::len" || func_name == "BTreeMap::len" {
+                    // Collection length method
+                    // rdi = self (collection pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    // Use appropriate runtime function based on method name
+                    let runtime_func = if func_name == "HashMap::len" {
+                        "gaia_hashmap_len"
+                    } else if func_name == "HashSet::len" {
+                        "gaia_hashset_len"
+                    } else if func_name == "BTreeMap::len" {
+                        "gaia_hashmap_len" // BTreeMap reuses HashMap len implementation
+                    } else {
+                        "gaia_vec_len" // default to vec (LinkedList also uses this)
+                    };
+                    self.instructions.push(X86Instruction::Call {
+                        func: runtime_func.to_string(),
+                    });
+                } else if func_name == "is_empty" || func_name == "Vec::is_empty" || func_name == "HashMap::is_empty" || func_name == "HashSet::is_empty" || func_name == "LinkedList::is_empty" || func_name == "BTreeMap::is_empty" {
                     // Vec::is_empty, HashMap::is_empty, or HashSet::is_empty
                     // All use same memory layout with size/length at offset +8
                     // rdi = self (collection pointer)
@@ -1708,6 +2063,29 @@ impl Codegen {
                     // Use generic is_empty that works for all collections
                     self.instructions.push(X86Instruction::Call {
                         func: "gaia_collection_is_empty".to_string(),
+                    });
+                } else if func_name == "clear" || func_name == "Vec::clear" || func_name == "HashMap::clear" || func_name == "HashSet::clear" || func_name == "LinkedList::clear" || func_name == "BTreeMap::clear" {
+                    // Clear collection (reset size to 0)
+                    // rdi = self (collection pointer)
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    // Use appropriate runtime function
+                    let runtime_func = if func_name == "HashMap::clear" {
+                        "gaia_hashmap_clear"
+                    } else if func_name == "HashSet::clear" {
+                        "gaia_hashset_clear"
+                    } else if func_name == "BTreeMap::clear" {
+                        "gaia_hashmap_clear" // BTreeMap reuses HashMap clear
+                    } else {
+                        "gaia_vec_clear" // default to vec (LinkedList also uses this)
+                    };
+                    self.instructions.push(X86Instruction::Call {
+                        func: runtime_func.to_string(),
                     });
                 } else if func_name == "__builtin_vec_from" {
                     // __builtin_vec_from([elements]) - Create vector from array
@@ -1777,8 +2155,9 @@ impl Codegen {
                             // Copy from source array to vector
                             if let Some(&src_offset) = self.struct_data_locations.get(var_name) {
                                 for i in 0..elem_count {
-                                    let src_elem_offset = src_offset + (i as i64) * 8;
-                                    let dst_elem_offset = vec_data_offset + 16 + (i as i64) * 8;
+                                    // Stack grows downward, so subtract offsets
+                                    let src_elem_offset = src_offset - (i as i64) * 8;
+                                    let dst_elem_offset = vec_data_offset - 16 - (i as i64) * 8;
                                     
                                     self.instructions.push(X86Instruction::Mov {
                                         dst: X86Operand::Register(Register::RAX),
@@ -1887,6 +2266,461 @@ impl Codegen {
                         }
                         skip_final_store = true;
                     }
+                } else if func_name == "Option::is_some" || func_name == "Option::is_none" {
+                    // Option::is_some / is_none
+                    // rdi = option pointer
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    let runtime_func = if func_name == "Option::is_some" {
+                        "gaia_option_is_some"
+                    } else {
+                        "gaia_option_is_none"
+                    };
+                    self.instructions.push(X86Instruction::Call {
+                        func: runtime_func.to_string(),
+                    });
+                } else if func_name == "Option::unwrap" {
+                    // Option::unwrap
+                    // rdi = option pointer
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_option_unwrap".to_string(),
+                    });
+                } else if func_name == "Option::unwrap_or" {
+                    // Option::unwrap_or
+                    // rdi = option pointer, rsi = default value
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let default_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: default_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_option_unwrap_or".to_string(),
+                    });
+                } else if func_name == "Result::is_ok" || func_name == "Result::is_err" {
+                    // Result::is_ok / is_err
+                    // rdi = result pointer
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    let runtime_func = if func_name == "Result::is_ok" {
+                        "gaia_result_is_ok"
+                    } else {
+                        "gaia_result_is_err"
+                    };
+                    self.instructions.push(X86Instruction::Call {
+                        func: runtime_func.to_string(),
+                    });
+                } else if func_name == "Result::unwrap" {
+                    // Result::unwrap
+                    // rdi = result pointer
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_result_unwrap".to_string(),
+                    });
+                } else if func_name == "Result::unwrap_err" {
+                    // Result::unwrap_err
+                    // rdi = result pointer
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_result_unwrap_err".to_string(),
+                    });
+                } else if func_name == "Result::unwrap_or" {
+                    // Result::unwrap_or
+                    // rdi = result pointer, rsi = default value
+                    if args.len() >= 1 {
+                        let self_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: self_val,
+                        });
+                    }
+                    if args.len() >= 2 {
+                        let default_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: default_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_result_unwrap_or".to_string(),
+                    });
+                } else if func_name == "Iterator::map" {
+                    // Iterator::map(closure)
+                    // rdi = iterator, rsi = closure
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: closure_val,
+                        });
+                    }
+                    // Call runtime function
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_map".to_string(),
+                    });
+                } else if func_name == "Iterator::filter" {
+                    // Iterator::filter(closure)
+                    // rdi = iterator, rsi = closure
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: closure_val,
+                        });
+                    }
+                    // Call runtime function
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_filter".to_string(),
+                    });
+                } else if func_name == "Iterator::fold" {
+                    // Iterator::fold(init, closure)
+                    // rdi = iterator, rsi = init, rdx = closure
+                    if args.len() >= 3 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let init_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: init_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[2])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDX),
+                            src: closure_val,
+                        });
+                    }
+                    // Call runtime function
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_fold".to_string(),
+                    });
+                } else if func_name == "Iterator::collect" {
+                    // Iterator::collect() -> Collection
+                    // rdi = iterator
+                    if args.len() >= 1 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                    }
+                    // For now: simplified - just return iterator as-is
+                    // Full implementation would create a new collection
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: X86Operand::Register(Register::RDI),
+                    });
+                } else if func_name == "Iterator::for_each" {
+                    // Iterator::for_each(closure) -> ()
+                    // rdi = iterator, rsi = closure
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: closure_val,
+                        });
+                    }
+                    // Call runtime function
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_for_each".to_string(),
+                    });
+                } else if func_name == "Iterator::sum" {
+                    // Iterator::sum() -> T
+                    // rdi = iterator
+                    if args.len() >= 1 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                    }
+                    // Call runtime function
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_sum".to_string(),
+                    });
+                } else if func_name == "Iterator::count" {
+                    // Iterator::count() -> i64
+                    // rdi = iterator
+                    if args.len() >= 1 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                    }
+                    // Call runtime function
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_count".to_string(),
+                    });
+                } else if func_name == "Iterator::take" {
+                    // Iterator::take(n) -> Iterator
+                    // rdi = iterator, rsi = n
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let n_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: n_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_take".to_string(),
+                    });
+                } else if func_name == "Iterator::skip" {
+                    // Iterator::skip(n) -> Iterator
+                    // rdi = iterator, rsi = n
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let n_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: n_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_skip".to_string(),
+                    });
+                } else if func_name == "Iterator::chain" {
+                    // Iterator::chain(other) -> Iterator
+                    // rdi = iterator, rsi = other iterator
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let other_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: other_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_chain".to_string(),
+                    });
+                } else if func_name == "Iterator::find" {
+                    // Iterator::find(closure) -> Option<T>
+                    // rdi = iterator, rsi = closure
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: closure_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_find".to_string(),
+                    });
+                } else if func_name == "Iterator::any" {
+                    // Iterator::any(closure) -> bool
+                    // rdi = iterator, rsi = closure
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: closure_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_any".to_string(),
+                    });
+                } else if func_name == "Iterator::all" {
+                    // Iterator::all(closure) -> bool
+                    // rdi = iterator, rsi = closure
+                    if args.len() >= 2 {
+                        let iter_val = self.operand_to_x86(&args[0])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: iter_val,
+                        });
+                        let closure_val = self.operand_to_x86(&args[1])?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RSI),
+                            src: closure_val,
+                        });
+                    }
+                    self.instructions.push(X86Instruction::Call {
+                        func: "gaia_iterator_all".to_string(),
+                    });
+                } else if func_name == "Vec::into_iter" {
+                    // Vec::into_iter() -> Iterator
+                    // rdi = vector
+                    // Simply call __into_iter with the vector pointer
+                    if let Some(arg) = args.first() {
+                        let arg_val = self.operand_to_x86(arg)?;
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: arg_val,
+                        });
+                    }
+                    // Call __into_iter to initialize iterator state
+                    self.instructions.push(X86Instruction::Call {
+                        func: "__into_iter".to_string(),
+                    });
+                } else if func_name == "__into_iter" {
+                    // CRITICAL FIX FOR BUG #1: Array iterator protocol
+                    // When __into_iter is called with an array, we need to wrap it with metadata
+                    // (capacity, length) so __next can use it properly
+                    
+                    if let Some(crate::mir::Operand::Copy(crate::mir::Place::Local(ref array_var))) = args.first() {
+                        if let Some(&(elem_count, _array_base)) = self.array_variables.get(array_var) {
+                            // This is an array - create wrapper with metadata
+                            // Allocate space for: [capacity:i64][length:i64][data...]
+                            let wrapper_size = 16 + (elem_count as i64) * 8;
+                            self.stack_offset -= wrapper_size;
+                            let wrapper_offset = self.stack_offset;
+                            
+                            // Initialize capacity
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Memory { base: Register::RBP, offset: wrapper_offset },
+                                src: X86Operand::Immediate(elem_count as i64),
+                            });
+                            
+                            // Initialize length
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Memory { base: Register::RBP, offset: wrapper_offset + 8 },
+                                src: X86Operand::Immediate(elem_count as i64),
+                            });
+                            
+                            // Copy array elements into wrapper
+                            // The array is stored at [RBP + array_base], we need to copy to [RBP + wrapper_offset + 16]
+                            if let Some(&(_size, array_base)) = self.array_variables.get(array_var) {
+                                for i in 0..elem_count {
+                                    // Load element from original array
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Memory { 
+                                            base: Register::RBP, 
+                                            offset: array_base + (i as i64) * 8
+                                        },
+                                    });
+                                    // Store to wrapper
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Memory { 
+                                            base: Register::RBP, 
+                                            offset: wrapper_offset + 16 + (i as i64) * 8
+                                        },
+                                        src: X86Operand::Register(Register::RAX),
+                                    });
+                                }
+                            }
+                            
+                            // Pass wrapper address to __into_iter in RDI
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Register(Register::RBP),
+                            });
+                            self.instructions.push(X86Instruction::Add {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Immediate(wrapper_offset),
+                            });
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RDI),
+                                src: X86Operand::Register(Register::RAX),
+                            });
+                            
+                            // Call __into_iter
+                            self.instructions.push(X86Instruction::Call {
+                                func: "__into_iter".to_string(),
+                            });
+                            // Result stays in RAX
+                        } else {
+                            // Not an array - handle as regular function call
+                            let arg_val = self.operand_to_x86(&args[0])?;
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RDI),
+                                src: arg_val,
+                            });
+                            self.instructions.push(X86Instruction::Call {
+                                func: "__into_iter".to_string(),
+                            });
+                        }
+                    } else {
+                        // Fallback - call normally
+                        if let Some(arg) = args.first() {
+                            let arg_val = self.operand_to_x86(arg)?;
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RDI),
+                                src: arg_val,
+                            });
+                            self.instructions.push(X86Instruction::Call {
+                                func: "__into_iter".to_string(),
+                            });
+                        }
+                    }
+                    skip_final_store = false;
                 } else {
                     // Regular function call
                     // Mangle function names for assembly compatibility
@@ -1926,7 +2760,8 @@ impl Codegen {
                             if let crate::mir::Place::Local(obj_name) = place.as_ref() {
                                 let fld_idx = self.get_field_index(obj_name, field_name);
                                 if let Some(&sb) = self.struct_data_locations.get(obj_name) {
-                                    let fo = sb + (fld_idx as i64) * 8;
+                                    // Stack grows downward, so subtract offset from base
+                                    let fo = sb - (fld_idx as i64) * 8;
                                     self.instructions.push(X86Instruction::Mov {
                                         dst: X86Operand::Register(Register::RAX),
                                         src: X86Operand::Memory { base: Register::RBP, offset: fo },
@@ -2014,19 +2849,37 @@ impl Codegen {
             }
             crate::mir::Rvalue::Field(place, field_name) => {
                 // Field access on a struct
-                // Get the struct's base location from var_locations
+                // First check struct_data_locations (direct struct access), then fall back to var_locations
                 match place {
                     crate::mir::Place::Local(name) => {
-                        if let Some(&struct_base_offset) = self.var_locations.get(name) {
-                            // The struct is stored at struct_base_offset
+                        if let Some(&struct_base_offset) = self.struct_data_locations.get(name) {
+                            // The struct data is directly stored at struct_base_offset
                             // Calculate field offset using dynamic field index lookup
                             let field_index = self.get_field_index(name, field_name);
-                            let field_offset = struct_base_offset + (field_index as i64) * 8;
+                            // Stack grows downward, so subtract offset from base
+                            let field_offset = struct_base_offset - (field_index as i64) * 8;
                             
                             // Load the field value from memory
                             self.instructions.push(X86Instruction::Mov {
                                 dst: X86Operand::Register(Register::RAX),
                                 src: X86Operand::Memory { base: Register::RBP, offset: field_offset },
+                            });
+                        } else if let Some(&var_offset) = self.var_locations.get(name) {
+                            // The struct pointer is stored at var_offset (indirect struct access)
+                            // This would be for structs stored as pointers
+                            let field_index = self.get_field_index(name, field_name);
+                            let field_offset = (field_index as i64) * 8;
+                            
+                            // Load the pointer
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Memory { base: Register::RBP, offset: var_offset },
+                            });
+                            
+                            // Dereference the pointer to get the field
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Memory { base: Register::RAX, offset: field_offset },
                             });
                         } else {
                             // Not a struct location, just move the value
@@ -2060,9 +2913,14 @@ impl Codegen {
                     let struct_size = (field_count as i64) * 8;
                     
                     // Allocate space on stack for all struct fields
-                    // The variable's location will be the START of the struct data (first field)
-                    self.stack_offset -= struct_size;
+                    // struct_base should point to the START of the allocated space (the current stack_offset)
+                    // BEFORE we decrement stack_offset.
+                    // Then decrement stack_offset to mark the space as allocated.
                     let struct_base = self.stack_offset;
+                    self.stack_offset -= struct_size;
+                    
+                    // Now fields are stored at: struct_base, struct_base-8, struct_base-16, ...
+                    // And stack_offset points to the next available location
                     
                     // Register the variable location - this is where the struct data STARTS
                     if let crate::mir::Place::Local(ref var_name) = stmt.place {
@@ -2070,9 +2928,10 @@ impl Codegen {
                     }
                     
                     // Store each field value to the struct memory area
+                    // Fields are laid out from stack_offset going downward: field[0] at offset, field[1] at offset-8, etc.
                     for (i, operand) in operands.iter().enumerate() {
                         let field_val = self.operand_to_x86(operand)?;
-                        let field_offset = struct_base + (i as i64) * 8;
+                        let field_offset = struct_base - (i as i64) * 8;
                         
                         self.instructions.push(X86Instruction::Mov {
                             dst: X86Operand::Register(Register::RAX),
@@ -2088,6 +2947,7 @@ impl Codegen {
                     // For local structs, the struct data is stored directly at struct_base
                     if let crate::mir::Place::Local(ref var_name) = stmt.place {
                         // Store a mapping from variable name to where the struct data is stored
+                        // struct_base points to the FIRST FIELD location
                         self.struct_data_locations.insert(var_name.clone(), struct_base);
                         // Also track the struct type name for later field lookups
                         self.var_struct_types.insert(var_name.clone(), struct_name.clone());
@@ -2126,7 +2986,8 @@ impl Codegen {
                    if let Some(&array_base) = self.struct_data_locations.get(&array_name) {
                        // Found in struct_data_locations
                        // Array is stored directly on stack at array_base
-                       let elem_offset = array_base + (*idx as i64) * 8;
+                       // Stack grows downward, so elements are at: array_base, array_base-8, array_base-16, ...
+                       let elem_offset = array_base - (*idx as i64) * 8;
                        self.instructions.push(X86Instruction::Mov {
                            dst: X86Operand::Register(Register::RAX),
                            src: X86Operand::Memory { base: Register::RBP, offset: elem_offset },
@@ -2172,13 +3033,15 @@ impl Codegen {
                     // For non-empty arrays: allocate stack space and store elements
                     let elem_count = operands.len();
                     let array_size = (elem_count as i64) * 8;
-                    self.stack_offset -= array_size;
+                    // Allocate space: array_base should be set BEFORE decrementing stack_offset
                     let array_base = self.stack_offset;
+                    self.stack_offset -= array_size;
                     
                     // Store each element value to the array memory area
+                    // Stack grows downward, so elements are at: array_base, array_base-8, array_base-16, ...
                     for (i, operand) in operands.iter().enumerate() {
                         let elem_val = self.operand_to_x86(operand)?;
-                        let elem_offset = array_base + (i as i64) * 8;
+                        let elem_offset = array_base - (i as i64) * 8;
                         
                         self.instructions.push(X86Instruction::Mov {
                             dst: X86Operand::Register(Register::RAX),
@@ -2190,47 +3053,107 @@ impl Codegen {
                         });
                     }
                     
-                    // Return pointer to array (in RAX)
-                    self.instructions.push(X86Instruction::Mov {
-                        dst: X86Operand::Register(Register::RAX),
-                        src: X86Operand::Register(Register::RBP),
-                    });
-                    self.instructions.push(X86Instruction::Add {
-                        dst: X86Operand::Register(Register::RAX),
-                        src: X86Operand::Immediate(array_base),
-                    });
-                    
                     // Register the array data location
+                    // DON'T put anything in RAX - the array is stored directly on stack
                     if let crate::mir::Place::Local(ref var_name) = stmt.place {
                         self.struct_data_locations.insert(var_name.clone(), array_base);
-                        self.allocate_var(var_name.clone());
+                        self.array_variables.insert(var_name.clone(), (elem_count, array_base));
+                        // DON'T call allocate_var here - the array is already allocated directly
+                        // Calling allocate_var would create a separate var_locations entry
+                        // which confuses the Index code into thinking it's a pointer
                     }
                     skip_final_store = true;
                 }
+            }
+            crate::mir::Rvalue::Closure { fn_ptr, captures } => {
+                // Closure creation: allocate closure object with fn_ptr and captured values
+                // Closure layout: [fn_ptr:i64][capture1:i64][capture2:i64]...
+                let closure_size = 8 + (captures.len() as i64) * 8; // fn_ptr + captured values
+                // closure_base should be set BEFORE decrementing stack_offset
+                let closure_base = self.stack_offset;
+                self.stack_offset -= closure_size;
+                
+                // Store function pointer at offset 0
+                self.instructions.push(X86Instruction::Lea {
+                    dst: X86Operand::Register(Register::RAX),
+                    src: fn_ptr.clone(),
+                });
+                self.instructions.push(X86Instruction::Mov {
+                    dst: X86Operand::Memory { base: Register::RBP, offset: closure_base },
+                    src: X86Operand::Register(Register::RAX),
+                });
+                
+                // Store captured values at offsets -8, -16, -24, etc. (stack grows downward)
+                for (i, operand) in captures.iter().enumerate() {
+                    let capture_offset = closure_base - 8 - (i as i64) * 8;
+                    let val = self.operand_to_x86(operand)?;
+                    
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Register(Register::RAX),
+                        src: val,
+                    });
+                    self.instructions.push(X86Instruction::Mov {
+                        dst: X86Operand::Memory { base: Register::RBP, offset: capture_offset },
+                        src: X86Operand::Register(Register::RAX),
+                    });
+                }
+                
+                // Return closure pointer (in RAX)
+                self.instructions.push(X86Instruction::Mov {
+                    dst: X86Operand::Register(Register::RAX),
+                    src: X86Operand::Register(Register::RBP),
+                });
+                self.instructions.push(X86Instruction::Add {
+                    dst: X86Operand::Register(Register::RAX),
+                    src: X86Operand::Immediate(closure_base),
+                });
+                
+                // Register the closure data location
+                if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                    self.struct_data_locations.insert(var_name.clone(), closure_base);
+                    self.allocate_var(var_name.clone());
+                }
+                skip_final_store = true;
             }
             _ => {
                 self.instructions.push(X86Instruction::Nop);
             }
         }
         
-        if !skip_final_store {
+        // Check if this variable is directly allocated (array/struct)
+        let should_skip_store = if let crate::mir::Place::Local(name) = &stmt.place {
+            self.struct_data_locations.contains_key(name)
+        } else {
+            false
+        };
+        
+        if !skip_final_store && !should_skip_store {
             match &stmt.place {
                 crate::mir::Place::Local(name) => {
+                    
                     let offset = self.get_var_location(name);
                     
-                    // IMPORTANT: Propagate struct metadata for copies
-                    // When we copy a struct variable, the destination inherits the struct type
-                    // but has its own data location (the current offset)
+                    // IMPORTANT: Propagate struct/array metadata for copies
+                    // When we copy a struct or array variable, the destination inherits the data location
                     if let crate::mir::Rvalue::Use(operand) = &stmt.rvalue {
                         match operand {
                             crate::mir::Operand::Copy(crate::mir::Place::Local(src_name)) |
                             crate::mir::Operand::Move(crate::mir::Place::Local(src_name)) => {
-                                // If source is a struct variable, mark destination as struct too
+                                // Check if source is a struct variable
                                 if let Some(struct_type) = self.var_struct_types.get(src_name).cloned() {
                                     self.var_struct_types.insert(name.clone(), struct_type);
                                     // IMPORTANT: Register the destination's struct data location
                                     // The copied struct data is now at this variable's offset
                                     self.struct_data_locations.insert(name.clone(), offset);
+                                }
+                                
+                                // Check if source is an array variable
+                                if let Some(&(elem_count, src_array_base)) = self.array_variables.get(src_name) {
+                                    // When copying an array, the destination should point to the SOURCE array's location
+                                    // not to the newly allocated var_locations
+                                    // Register the destination as pointing to the same array base as the source
+                                    self.array_variables.insert(name.clone(), (elem_count, src_array_base));
+                                    self.struct_data_locations.insert(name.clone(), src_array_base);
                                 }
                             }
                             _ => {}
@@ -2253,7 +3176,8 @@ impl Codegen {
                     if let crate::mir::Place::Local(obj_name) = place.as_ref() {
                         if let Some(&struct_base) = self.struct_data_locations.get(obj_name) {
                             let field_idx = self.get_field_index(obj_name, field_name);
-                            let field_off = struct_base + (field_idx as i64) * 8;
+                            // Stack grows downward, so subtract offset from base
+                            let field_off = struct_base - (field_idx as i64) * 8;
                             self.instructions.push(X86Instruction::Mov {
                                 dst: X86Operand::Memory { base: Register::RBP, offset: field_off },
                                 src: X86Operand::Register(Register::RAX),

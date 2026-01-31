@@ -123,6 +123,11 @@ pub enum Rvalue {
     Field(Place, String),
     /// Index access
     Index(Place, usize),
+    /// Closure creation: captures fn_ptr and captured variables
+    Closure {
+        fn_ptr: String,           // Closure function pointer (unique name)
+        captures: Vec<Operand>,   // Captured variable values
+    },
 }
 
 impl fmt::Display for Rvalue {
@@ -165,6 +170,13 @@ impl fmt::Display for Rvalue {
             Rvalue::Deref(place) => write!(f, "*{}", place),
             Rvalue::Field(place, field) => write!(f, "{}.{}", place, field),
             Rvalue::Index(place, idx) => write!(f, "{}[{}]", place, idx),
+            Rvalue::Closure { fn_ptr, captures } => {
+                write!(f, "closure({}", fn_ptr)?;
+                for cap in captures {
+                    write!(f, ", {}", cap)?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -260,6 +272,9 @@ pub struct GlobalItem {
 pub struct Mir {
     pub functions: Vec<MirFunction>,
     pub globals: Vec<GlobalItem>,
+    /// Closure functions generated during lowering
+    /// Each closure becomes its own function with captures + params
+    pub closures: Vec<MirFunction>,
 }
 
 /// MIR builder
@@ -267,6 +282,9 @@ pub struct MirBuilder {
     current_block: usize,
     blocks: Vec<BasicBlock>,
     next_var: usize,
+    pub closure_counter: usize,  // Counter for unique closure function names
+    /// Closures generated during lowering
+    pub closures: Vec<MirFunction>,
 }
 
 impl MirBuilder {
@@ -279,6 +297,8 @@ impl MirBuilder {
                 terminator: Terminator::Unreachable,
             }],
             next_var: 0,
+            closure_counter: 0,
+            closures: Vec::new(),
         }
     }
 
@@ -404,7 +424,11 @@ impl MirLowerer {
         // Add any generated closure functions
         functions.extend(self.generated_functions.drain(..));
 
-        Ok(Mir { functions, globals })
+        Ok(Mir { 
+            functions, 
+            globals,
+            closures: Vec::new(),  // Closures will be populated from builders during lowering
+        })
     }
 
     fn collect_available_functions(&mut self, items: &[HirItem], module_prefix: &str) {
@@ -567,6 +591,21 @@ impl MirLowerer {
                                 func_name.split("::").next().map(|s| s.to_string())
                             } else {
                                 None
+                            }
+                        }
+                        HirExpression::MethodCall { method, .. } => {
+                            // Infer type from method call return type
+                            match method.as_str() {
+                                "into_iter" => Some("Iterator".to_string()),
+                                "iter" => Some("Iterator".to_string()),
+                                "map" => Some("Iterator".to_string()),
+                                "filter" => Some("Iterator".to_string()),
+                                "take" => Some("Iterator".to_string()),
+                                "skip" => Some("Iterator".to_string()),
+                                "chain" => Some("Iterator".to_string()),
+                                "collect" => Some("Vec".to_string()),
+                                "find" => Some("Option".to_string()),
+                                _ => None,
                             }
                         }
                         HirExpression::StructLiteral { name, .. } => {
@@ -1345,15 +1384,29 @@ impl MirLowerer {
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
             }
             HirExpression::FieldAccess { object, field } => {
-                // Evaluate the object expression to a temporary
-                let obj_temp = builder.gen_temp();
-                self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
-                
-                // Then access the field from that temporary
-                builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
-                    Box::new(Place::Local(obj_temp)),
-                    field.clone(),
-                ))));
+                // For field access, we need to handle it specially:
+                // If the object is a simple local variable, we can directly access its field.
+                // Otherwise, we need to evaluate the object expression first.
+                match object.as_ref() {
+                    HirExpression::Variable(var_name) => {
+                        // Direct field access on a variable - can access field directly without temporary
+                        builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
+                            Box::new(Place::Local(var_name.clone())),
+                            field.clone(),
+                        ))));
+                    }
+                    _ => {
+                        // Complex expression - evaluate to temporary first
+                        let obj_temp = builder.gen_temp();
+                        self.lower_expression_to_place(builder, object, Place::Local(obj_temp.clone()))?;
+                        
+                        // Then access the field from that temporary
+                        builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
+                            Box::new(Place::Local(obj_temp)),
+                            field.clone(),
+                        ))));
+                    }
+                }
             }
             HirExpression::TupleAccess { object, index: _ } => {
                 let obj_temp = builder.gen_temp();
@@ -1460,9 +1513,24 @@ impl MirLowerer {
                 
                 builder.current_block = merge_block;
             }
-            HirExpression::Closure { params: _, body: _, return_type: _, is_move: _, captures: _ } => {
-                // Closures are treated as unit in simplified MIR
-                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+            HirExpression::Closure { params, body, return_type, is_move: _, captures } => {
+                // Generate the closure function (with captures as parameters)
+                let fn_ptr = self.generate_closure_function(params, body, return_type, captures)?;
+                
+                // Collect the values of captured variables
+                let capture_operands: Vec<Operand> = captures
+                    .iter()
+                    .map(|(name, _ty)| Operand::Copy(Place::Local(name.clone())))
+                    .collect();
+                
+                // Emit closure creation: store fn_ptr and captured values
+                builder.add_statement(
+                    place,
+                    Rvalue::Closure {
+                        fn_ptr,
+                        captures: capture_operands,
+                    },
+                );
             }
 
             HirExpression::Try { value } => {
@@ -1538,6 +1606,10 @@ impl MirLowerer {
                                 None
                             }
                         }
+                    }
+                    HirExpression::String(_) => {
+                        // String literals are String type
+                        Some("String".to_string())
                     }
                     HirExpression::FieldAccess { object, field } => {
                         // For field accesses like self.items, check if field name is a collection
@@ -1618,13 +1690,37 @@ impl MirLowerer {
                                 "pop" => "gaia_vec_pop".to_string(),
                                 "get" => "gaia_vec_get".to_string(),
                                 "len" => "gaia_vec_len".to_string(),
+                                "into_iter" => "Vec::into_iter".to_string(),
                                 _ => format!("{}::{}", struct_type, method),
+                            }
+                        }
+                        "Iterator" => {
+                            // Iterator methods - use qualified names
+                            format!("Iterator::{}", method)
+                        }
+                        "String" => {
+                            // String methods - map to runtime functions
+                            match method.as_str() {
+                                "len" => "gaia_string_len".to_string(),
+                                "is_empty" => "gaia_string_is_empty".to_string(),
+                                "starts_with" => "gaia_string_starts_with".to_string(),
+                                "ends_with" => "gaia_string_ends_with".to_string(),
+                                "contains_str" => "gaia_string_contains".to_string(),
+                                "trim" => "gaia_string_trim".to_string(),
+                                "replace" => "gaia_string_replace".to_string(),
+                                "repeat" => "gaia_string_repeat".to_string(),
+                                "chars" => "gaia_string_chars".to_string(),
+                                "split" => "gaia_string_split".to_string(),
+                                "to_uppercase" => "String::to_uppercase".to_string(),
+                                "to_lowercase" => "String::to_lowercase".to_string(),
+                                _ => format!("String::{}", method),
                             }
                         }
                         _ => format!("{}::{}", struct_type, method),
                     }
                 } else {
-                    format!("__method_{}", method)
+                    // Try to infer type from literals
+                    format!("String::{}", method)
                 };
                 
                 // Collect operands: receiver followed by method arguments
@@ -1876,6 +1972,12 @@ impl MirOptimizer {
             Rvalue::Ref(place) | Rvalue::Deref(place) | Rvalue::Field(place, _) | Rvalue::Index(place, _) => {
                 places.insert(place.clone());
             }
+            Rvalue::Closure { fn_ptr: _, captures } => {
+                // Collect places from captured operands
+                for cap in captures {
+                    Self::collect_places_from_operand(cap, places);
+                }
+            }
         }
     }
 
@@ -1886,6 +1988,7 @@ impl MirOptimizer {
             Rvalue::Ref(_) => true,     // Creating references has side effects
             Rvalue::Array(_) => true,   // Array construction has side effects (allocates stack space)
             Rvalue::Aggregate(_, _) => true, // Struct construction has side effects (allocates stack space)
+            Rvalue::Closure { .. } => true, // Closure creation captures and allocates
             _ => false,
         }
     }
