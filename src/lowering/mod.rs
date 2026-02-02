@@ -126,6 +126,13 @@ pub fn get_struct_field_index(struct_name: &str, field_name: &str) -> Option<usi
     })
 }
 
+/// Get the number of fields in a struct
+pub fn get_struct_field_count(struct_name: &str) -> usize {
+    STRUCT_REGISTRY.with(|registry| {
+        registry.borrow().get(struct_name).map(|fields| fields.len()).unwrap_or(0)
+    })
+}
+
 fn clear_struct_registry() {
     STRUCT_REGISTRY.with(|registry| {
         registry.borrow_mut().clear();
@@ -378,6 +385,8 @@ pub enum HirItem {
     Struct {
         name: String,
         fields: Vec<(String, HirType)>,
+        #[doc(hidden)]
+        derives: Vec<String>, // derive attributes like ["Clone", "Debug"]
     },
     /// Module definition
     Module {
@@ -1300,7 +1309,10 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                         // Type-aware println: check argument type
                         let arg_type = infer_hir_type(&args_final[0]);
                         match arg_type {
-                            HirType::Int64 | HirType::Int32 | HirType::USize | HirType::ISize => {
+                            HirType::Int32 => {
+                                "gaia_print_i32".to_string()
+                            }
+                            HirType::Int64 | HirType::USize | HirType::ISize => {
                                 "gaia_print_i64".to_string()
                             }
                             HirType::Bool => {
@@ -2077,7 +2089,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
              })
          }
 
-        Item::Struct { name, generics: _, fields, is_pub: _, attributes: _, where_clause: _ } => {
+        Item::Struct { name, generics: _, fields, is_pub: _, attributes, where_clause: _ } => {
             let fields_hir: Result<Vec<_>, _> = fields
                 .iter()
                 .map(|field: &StructField| {
@@ -2086,9 +2098,18 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                 })
                 .collect();
 
+            // Extract derives from #[derive(...)] attributes
+            let mut derives = Vec::new();
+            for attr in attributes {
+                if attr.name == "derive" {
+                    derives.extend(attr.args.clone());
+                }
+            }
+
             Ok(HirItem::Struct {
                 name: name.clone(),
                 fields: fields_hir?,
+                derives,
             })
         }
 
@@ -2113,6 +2134,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                 .collect();
             
             Ok(HirItem::Struct {
+                derives: Vec::new(),
                 name: name.clone(),
                 fields: variant_names,
             })
@@ -2134,6 +2156,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
             }
             
             Ok(HirItem::Struct {
+                derives: Vec::new(),
                 name: format!("trait_{}", name),
                 fields,
             })
@@ -2206,6 +2229,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
             // Return a marker struct that impl was processed
             // The actual method functions will be collected by the compiler
             Ok(HirItem::Struct {
+                derives: Vec::new(),
                 name: format!("impl_{}", struct_name),
                 fields: vec![],
             })
@@ -2234,6 +2258,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 
         Item::TypeAlias { name, generics: _, ty, is_pub: _, attributes: _ } => {
             Ok(HirItem::Struct {
+                derives: Vec::new(),
                 name: name.clone(),
                 fields: vec![(format!("_alias"), convert_type(ty))],
             })
@@ -2260,6 +2285,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 
         Item::ExternBlock { abi: _, items: _, attributes: _ } => {
             Ok(HirItem::Struct {
+                derives: Vec::new(),
                 name: "extern".to_string(),
                 fields: vec![(format!("_extern_marker"), HirType::Tuple(vec![]))],
             })
@@ -2267,6 +2293,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 
         Item::MacroDefinition { name, rules: _, attributes: _ } => {
             Ok(HirItem::Struct {
+                derives: Vec::new(),
                 name: format!("macro_{}", name),
                 fields: Vec::new(),
             })

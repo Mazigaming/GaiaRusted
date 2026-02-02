@@ -17,6 +17,7 @@ pub fn generate_runtime_assembly() -> String {
     print_str_newline: .string "%s\n"
 
 .section .text
+.globl gaia_print_i32
 .globl gaia_print_i64
 .globl gaia_print_bool
 .globl gaia_print_f64
@@ -93,6 +94,27 @@ pub fn generate_runtime_assembly() -> String {
 .globl gaia_file_exists
 .globl gaia_fs_read
 .globl gaia_fs_write
+.globl String_impl_sqrt
+.globl String_impl_pow
+.globl String_impl_sin
+.globl String_impl_cos
+.globl String_impl_floor
+.globl String_impl_ceil
+
+gaia_print_i32:
+    push rbp
+    mov rbp, rsp
+    # rdi already contains the i32 value to print (sign-extended to i64)
+    lea rsi, [rip + format_str]
+    mov rax, rdi          # Save the value in rax
+    mov rdi, rsi          # format string in rdi
+    mov rsi, rax          # value in rsi
+    sub rsp, 8            # Align stack to 16 bytes (we pushed rbp, so subtract 8 more)
+    call printf
+    add rsp, 8
+    mov rsp, rbp
+    pop rbp
+    ret
 
 gaia_print_i64:
     push rbp
@@ -2367,6 +2389,52 @@ fs_write_error_ret:
 fs_write_done:
       mov rsp, rbp
       pop rbp
+      ret
+
+# f64 method wrappers - these are called from generated code
+# The ABI passes f64 in xmm0 and returns in xmm0
+
+String_impl_sqrt:
+      # xmm0 = f64 value
+      # Call libm sqrt
+      sqrtsd xmm0, xmm0
+      ret
+
+String_impl_pow:
+      # xmm0 = base (f64)
+      # xmm1 = exponent (f64)
+      # Call libm pow via C library
+      sub rsp, 8
+      call pow
+      add rsp, 8
+      ret
+
+String_impl_sin:
+      # xmm0 = angle (f64)
+      # Call libm sin
+      sub rsp, 8
+      call sin
+      add rsp, 8
+      ret
+
+String_impl_cos:
+      # xmm0 = angle (f64)
+      # Call libm cos
+      sub rsp, 8
+      call cos
+      add rsp, 8
+      ret
+
+String_impl_floor:
+      # xmm0 = f64 value
+      # Call libm floor
+      roundsd xmm0, xmm0, 1  # Round down
+      ret
+
+String_impl_ceil:
+      # xmm0 = f64 value
+      # Call libm ceil
+      roundsd xmm0, xmm0, 2  # Round up
       ret
 "#
     .to_string()

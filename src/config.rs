@@ -191,12 +191,100 @@ impl CompilationConfig {
         self
     }
 
-    /// Load configuration from a file (Cargo.toml-like format)
+    /// Load configuration from a Gaia.toml file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let _path = path.as_ref();
-        // TODO: Implement configuration file parsing
-        // For now, return default
-        Ok(CompilationConfig::new())
+        let path = path.as_ref();
+        
+        if !path.exists() {
+            return Ok(CompilationConfig::new()); // No config file, use defaults
+        }
+
+        let contents = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read Gaia.toml: {}", e))?;
+
+        Self::parse_toml(&contents)
+    }
+
+    /// Parse TOML configuration
+    fn parse_toml(content: &str) -> Result<Self, String> {
+        let mut config = CompilationConfig::new();
+        let mut current_section = String::new();
+
+        for line in content.lines() {
+            let line = line.trim();
+
+            // Skip empty lines and comments
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // Parse sections [package], [build], [dependencies]
+            if line.starts_with('[') && line.ends_with(']') {
+                current_section = line[1..line.len() - 1].to_string();
+                continue;
+            }
+
+            // Parse key = value pairs
+            if let Some(eq_pos) = line.find('=') {
+                let key = line[..eq_pos].trim();
+                let value = line[eq_pos + 1..].trim();
+
+                match current_section.as_str() {
+                    "package" => {
+                        match key {
+                            "name" => {
+                                // Extract string value (remove quotes)
+                                let name = value.trim_matches(|c| c == '"' || c == '\'');
+                                config.output_path = PathBuf::from(name);
+                            }
+                            "version" => {
+                                // Could store version in config if needed
+                            }
+                            _ => {}
+                        }
+                    }
+                    "build" => {
+                        match key {
+                            "source" => {
+                                let src = value.trim_matches(|c| c == '"' || c == '\'');
+                                config.source_files.push(PathBuf::from(src));
+                            }
+                            "output" => {
+                                let out = value.trim_matches(|c| c == '"' || c == '\'');
+                                config.output_path = PathBuf::from(out);
+                            }
+                            "opt-level" => {
+                                if let Ok(level) = value.parse::<u32>() {
+                                    config.opt_level = level.min(3);
+                                }
+                            }
+                            "debug" => {
+                                config.debug = value.trim_matches(|c| c == '"' || c == '\'')
+                                    .eq_ignore_ascii_case("true");
+                            }
+                            "lib-paths" => {
+                                let paths = value.trim_matches(|c| c == '"' || c == '[' || c == ']' || c == ' ');
+                                for path in paths.split(',') {
+                                    let p = path.trim().trim_matches(|c| c == '"' || c == '\'');
+                                    if !p.is_empty() {
+                                        config.lib_paths.push(PathBuf::from(p));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    "dependencies" => {
+                        // Store dependency name and version
+                        let dep_version = value.trim_matches(|c| c == '"' || c == '\'');
+                        config.libraries.push(format!("{} = {}", key, dep_version));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(config)
     }
 
     /// Validate configuration
@@ -376,5 +464,82 @@ impl DefaultHandler {
     /// Create a new default handler
     pub fn new() -> Self {
         DefaultHandler
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_basic_gaia_toml() {
+        let toml = r#"
+[package]
+name = "my_project"
+version = "0.1.0"
+
+[build]
+source = "src/main.rs"
+output = "my_app"
+opt-level = 2
+debug = false
+"#;
+        let config = CompilationConfig::parse_toml(toml).unwrap();
+        assert_eq!(config.output_path.to_string_lossy(), "my_app");
+        assert_eq!(config.opt_level, 2);
+        assert!(!config.debug);
+    }
+
+    #[test]
+    fn test_parse_gaia_toml_with_dependencies() {
+        let toml = r#"
+[package]
+name = "my_app"
+
+[dependencies]
+serde = "1.0.0"
+tokio = "1.0.0"
+"#;
+        let config = CompilationConfig::parse_toml(toml).unwrap();
+        assert_eq!(config.libraries.len(), 2);
+        assert!(config.libraries.iter().any(|l| l.contains("serde")));
+        assert!(config.libraries.iter().any(|l| l.contains("tokio")));
+    }
+
+    #[test]
+    fn test_parse_gaia_toml_with_lib_paths() {
+        let toml = r#"
+[build]
+lib-paths = "/usr/lib, /usr/local/lib"
+"#;
+        let config = CompilationConfig::parse_toml(toml).unwrap();
+        assert!(config.lib_paths.len() > 0);
+    }
+
+    #[test]
+    fn test_compilation_config_validation() {
+        let config = CompilationConfig::new();
+        // Empty config should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_output_format_extensions() {
+        assert_eq!(OutputFormat::Assembly.extension(), ".s");
+        assert_eq!(OutputFormat::Object.extension(), ".o");
+        assert_eq!(OutputFormat::Executable.extension(), "");
+        assert_eq!(OutputFormat::Library.extension(), ".a");
+    }
+
+    #[test]
+    fn test_builder_pattern() {
+        let config = CompilationConfig::new()
+            .with_verbose(true)
+            .with_debug(true)
+            .set_opt_level(3);
+        
+        assert!(config.verbose);
+        assert!(config.debug);
+        assert_eq!(config.opt_level, 3);
     }
 }

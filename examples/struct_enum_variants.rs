@@ -5,7 +5,7 @@ enum Message {
 }
 
 fn main() {
-    let m1 = Message::Text("Hello, World!");
+    let m1 = Message::Text("Hello, World!".to_string());
     let m2 = Message::Number(42);
     let m3 = Message::Quit;
 

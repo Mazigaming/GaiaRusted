@@ -28,6 +28,7 @@ fn test_constant_folding_binary_add() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     let original_rvalue = mir.functions[0].basic_blocks[0].statements[0].rvalue.clone();
@@ -69,6 +70,7 @@ fn test_constant_folding_multiply() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     optimize_mir(&mut mir, 1).expect("Optimization failed");
@@ -101,6 +103,7 @@ fn test_constant_folding_unary_negate() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     optimize_mir(&mut mir, 1).expect("Optimization failed");
@@ -134,6 +137,7 @@ fn test_constant_folding_comparison() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     optimize_mir(&mut mir, 1).expect("Optimization failed");
@@ -171,6 +175,7 @@ fn test_dead_code_elimination() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     let original_stmt_count = mir.functions[0].basic_blocks[0].statements.len();
@@ -212,6 +217,7 @@ fn test_no_optimization_level_0() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     let original_rvalue = mir.functions[0].basic_blocks[0].statements[0].rvalue.clone();
@@ -250,6 +256,7 @@ fn test_simplify_goto_chain() {
             ],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     optimize_mir(&mut mir, 2).expect("Optimization failed");
@@ -299,6 +306,7 @@ fn test_copy_propagation() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     optimize_mir(&mut mir, 3).expect("Optimization failed");
@@ -348,6 +356,7 @@ fn test_optimization_cumulative_effect() {
             }],
         }],
         globals: vec![],
+        closures: vec![],
     };
 
     let original_count = mir.functions[0].basic_blocks[0].statements.len();

@@ -313,7 +313,7 @@ fn main() {
         println!();
     }
 
-    // Phase 9: Object File Generation
+    // Phase 9: Object File Generation & Linking
     println!("{}", format_info("[Phase 9] Object File Generation (ELF format)..."));
     let asm_file = format!("{}.s", output_file);
     match fs::write(&asm_file, &assembly) {
@@ -327,19 +327,31 @@ fn main() {
         }
     }
 
+    // Phase 9b: Linking
+    println!("{}", format_info("[Phase 9b] Linking (assembling and linking executable)..."));
+    match codegen::object::link_assembly(&asm_file, &output_file) {
+        Ok(_) => {
+            println!("{} Assembly and linking completed", format_success("✓"));
+            println!("{} Executable created: {}", format_success("✓"), output_file);
+        }
+        Err(e) => {
+            eprintln!("{} [Phase 9b] Linking Error: {}", format_error("❌"), e);
+            eprintln!("   Make sure 'as' and 'gcc' are installed");
+            process::exit(1);
+        }
+    }
+
     // Phase 10: Testing & Polish
     println!("{}", format_info("[Phase 10] Testing & Polish (compilation complete)..."));
     println!("{} Compilation succeeded!", format_success("✓"));
     println!("{} Assembly written to: {}", format_success("✓"), asm_file);
+    println!("{} Executable created: {}", format_success("✓"), output_file);
     println!();
-    println!("{} Next steps to create executable:", format_header("📦"));
-    println!("  1. Assemble:  as {} -o {}.o", asm_file, output_file);
-    println!("  2. Link:      ld {}.o -o {}", output_file, output_file);
-    println!("  3. Run:       ./{}", output_file);
+    println!("{} To run the program:", format_header("📦"));
+    println!("  ./{}", output_file);
     println!();
     println!("{} Output files:", format_header("📁"));
     println!("  • Assembly:   {}", asm_file);
-    println!("  • Object:     {}.o", output_file);
     println!("  • Binary:     {}", output_file);
     println!();
     println!("{}", format_success("✨ [Status] All Phases 1-10 Complete! ✨"));

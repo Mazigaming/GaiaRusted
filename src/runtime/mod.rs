@@ -13,5 +13,8 @@ pub mod async_types;
 pub mod panic_handler;
 pub mod runtime;
 pub mod threading;
+pub mod state_machine_codegen;
+pub mod smart_pointer_ops;
 
 pub use runtime::{generate_main_wrapper, generate_runtime_assembly};
+pub use state_machine_codegen::{StateMachineCodegen, StateMachineConfig, GeneratedStateMachine};

@@ -49,6 +49,8 @@ pub mod enum_support;
 pub mod error_diagnostics;
 pub mod constraint_validation;
 pub mod guard_checker;
+pub mod smart_pointers;
+pub mod trait_objects;
 
 // Re-export main types for convenient access
 pub use types::{
@@ -133,6 +135,12 @@ pub use error_diagnostics::{
 pub use constraint_validation::{
     ConstraintValidator, ConstraintValidationConfig, TypeConstraint, ConstraintType,
     ConstraintValidationReport,
+};
+pub use smart_pointers::{
+    BoxType, RcType, ArcType, SmartPointerOp, SmartPointerError,
+};
+pub use trait_objects::{
+    DynTraitObject, FatPointer, ObjectSafetyValidator,
 };
 
 /// Type checking result

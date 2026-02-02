@@ -274,9 +274,19 @@ impl DeriveEngine {
         &self,
         struct_def: &DerivableStruct,
     ) -> Result<GeneratedImpl, DeriveError> {
+        // Generate Ord implementation using field comparisons
+        let mut comparisons = Vec::new();
+        for field in &struct_def.fields {
+            comparisons.push(format!(
+                "        match self.{}.cmp(&other.{}) {{\n            std::cmp::Ordering::Equal => {{}},\n            other => return other,\n        }}",
+                field.name, field.name
+            ));
+        }
+        
+        let comparison_code = comparisons.join("\n");
         let code = format!(
-            "impl Ord for {} {{\n    fn cmp(&self, other: &Self) -> Ordering {{\n        unimplemented!()\n    }}\n}}",
-            struct_def.name
+            "impl Ord for {} {{\n    fn cmp(&self, other: &Self) -> std::cmp::Ordering {{\n{}\n        std::cmp::Ordering::Equal\n    }}\n}}",
+            struct_def.name, comparison_code
         );
 
         Ok(GeneratedImpl {

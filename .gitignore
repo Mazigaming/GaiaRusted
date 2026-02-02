@@ -28,6 +28,9 @@ Cargo.lock
 
 # Temporary test files
 test_*.rs
+extreme_test*.rs
+extreme*
+ultimate*
 comprehensive_*.rs
 buildit.*
 mathlib.*

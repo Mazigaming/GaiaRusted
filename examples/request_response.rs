@@ -14,19 +14,19 @@ fn handle_request(req: Request) -> Response {
     match req {
         Request::GetUser(id) => {
             if id > 0 {
-                Response::Success("User found")
+                Response::Success("User found".to_string())
             } else {
                 Response::NotFound
             }
         }
-        Request::CreateUser(name) => {
-            Response::Success("User created")
+        Request::CreateUser(_name) => {
+            Response::Success("User created".to_string())
         }
         Request::DeleteUser(id) => {
             if id > 0 {
-                Response::Success("User deleted")
+                Response::Success("User deleted".to_string())
             } else {
-                Response::Error("Invalid ID")
+                Response::Error("Invalid ID".to_string())
             }
         }
     }
@@ -42,7 +42,7 @@ fn print_response(resp: Response) {
 
 fn main() {
     let req1 = Request::GetUser(1);
-    let req2 = Request::CreateUser("Alice");
+    let req2 = Request::CreateUser("Alice".to_string());
     let req3 = Request::DeleteUser(2);
 
     let resp1 = handle_request(req1);

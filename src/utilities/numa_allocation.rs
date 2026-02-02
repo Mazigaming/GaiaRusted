@@ -287,7 +287,13 @@ impl NumaAllocator {
                     .ok_or("No preferred node specified".to_string())
             }
             AllocationPolicy::LeastLoaded => {
-                self.select_least_loaded_node()
+                // If a preferred node is explicitly provided, use it as the primary choice
+                // Otherwise, select the least-loaded node
+                if let Some(node) = preferred_node {
+                    Ok(node)
+                } else {
+                    self.select_least_loaded_node()
+                }
             }
             AllocationPolicy::Local => {
                 preferred_node.ok_or("No local node available".to_string())

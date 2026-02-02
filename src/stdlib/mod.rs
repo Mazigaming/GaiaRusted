@@ -21,6 +21,8 @@ pub mod json;
 pub mod paths;
 pub mod advanced_error_handling;
 pub mod advanced_collections;
+pub mod math_functions;
+pub mod random;
 
 pub use option_result::{Option, Result};
 

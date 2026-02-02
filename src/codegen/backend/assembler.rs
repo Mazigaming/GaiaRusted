@@ -89,8 +89,9 @@ impl Assembler {
             .arg("-L/usr/lib/x86_64-linux-gnu")
             .arg("-L/usr/lib64");
 
-        // Link with C library
+        // Link with C library and math library
         cmd.arg("-lc");
+        cmd.arg("-lm");  // Math library for sin, cos, pow, sqrt, etc.
 
         // Add CRT terminator files
         if std::path::Path::new("/usr/lib/crtn.o").exists() {

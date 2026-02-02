@@ -16,11 +16,18 @@ pub struct DeriveRegistry {
     derives: HashMap<String, DeriveMacro>,
 }
 
+/// Struct field information for derive generation
+#[derive(Debug, Clone)]
+pub struct FieldInfo {
+    pub name: String,
+    pub ty: String,
+}
+
 /// Derive macro definition
 #[derive(Debug, Clone)]
 pub struct DeriveMacro {
     pub name: String,
-    pub generator: fn(&str) -> String,
+    pub generator: fn(&str, &[FieldInfo]) -> String,
 }
 
 impl DeriveRegistry {
@@ -78,15 +85,15 @@ impl DeriveRegistry {
     }
 
     /// Apply derive macro
-    pub fn apply_derive(&self, trait_name: &str, target: &str) -> Result<String, String> {
+    pub fn apply_derive(&self, trait_name: &str, target: &str, fields: &[FieldInfo]) -> Result<String, String> {
         self.derives
             .get(trait_name)
-            .map(|m| (m.generator)(target))
+            .map(|m| (m.generator)(target, fields))
             .ok_or_else(|| format!("Unknown derive: {}", trait_name))
     }
 
     /// Register custom derive
-    pub fn register(&mut self, name: String, generator: fn(&str) -> String) {
+    pub fn register(&mut self, name: String, generator: fn(&str, &[FieldInfo]) -> String) {
         self.derives.insert(name.clone(), DeriveMacro {
             name,
             generator,
@@ -96,20 +103,36 @@ impl DeriveRegistry {
 
 // Built-in derive implementations
 
-fn generate_clone_impl(target: &str) -> String {
+fn generate_clone_impl(target: &str, fields: &[FieldInfo]) -> String {
+    if fields.is_empty() {
+        return format!(
+            "impl Clone for {} {{\n\
+             fn clone(&self) -> Self {{\n\
+             Self {{}}\n\
+             }}\n\
+             }}\n",
+            target
+        );
+    }
+    
+    let mut field_clones = String::new();
+    for field in fields {
+        field_clones.push_str(&format!("    {}: self.{}.clone(),\n", field.name, field.name));
+    }
+    
     format!(
         "impl Clone for {} {{\n\
          fn clone(&self) -> Self {{\n\
-         // Auto-generated Clone implementation\n\
-         // Recursively clone all fields\n\
-         unimplemented!()\n\
+         Self {{\n\
+         {}\n\
+         }}\n\
          }}\n\
          }}\n",
-        target
+        target, field_clones
     )
 }
 
-fn generate_copy_impl(target: &str) -> String {
+fn generate_copy_impl(target: &str, _fields: &[FieldInfo]) -> String {
     format!(
         "impl Copy for {} {{\n\
          // Auto-generated Copy marker\n\
@@ -119,67 +142,147 @@ fn generate_copy_impl(target: &str) -> String {
     )
 }
 
-fn generate_debug_impl(target: &str) -> String {
+fn generate_debug_impl(target: &str, fields: &[FieldInfo]) -> String {
+    if fields.is_empty() {
+        return format!(
+            "impl Debug for {} {{\n\
+             fn fmt(&self, f: &mut Formatter) -> Result {{\n\
+             write!(f, \"{}\" {{}})\n\
+             }}\n\
+             }}\n",
+            target, "{}"
+        );
+    }
+    
+    let mut field_debug = String::new();
+    for field in fields {
+        field_debug.push_str(&format!("            .field(\"{}\", &self.{})\n", field.name, field.name));
+    }
+    
     format!(
         "impl Debug for {} {{\n\
          fn fmt(&self, f: &mut Formatter) -> Result {{\n\
-         // Auto-generated Debug implementation\n\
-         write!(f, \"{{}}({{:?}})\", \"{}\")\n\
+         f.debug_struct(\"{}\")\n\
+         {}\
+         .finish()\n\
          }}\n\
          }}\n",
-        target, target
+        target, target, field_debug
     )
 }
 
-fn generate_default_impl(target: &str) -> String {
+fn generate_default_impl(target: &str, fields: &[FieldInfo]) -> String {
+    if fields.is_empty() {
+        return format!(
+            "impl Default for {} {{\n\
+             fn default() -> Self {{\n\
+             Self {{}}\n\
+             }}\n\
+             }}\n",
+            target
+        );
+    }
+    
+    let mut defaults = String::new();
+    for field in fields {
+        defaults.push_str(&format!("    {}: Default::default(),\n", field.name));
+    }
+    
     format!(
         "impl Default for {} {{\n\
          fn default() -> Self {{\n\
-         // Auto-generated Default implementation\n\
-         unimplemented!()\n\
+         Self {{\n\
+         {}\n\
+         }}\n\
          }}\n\
          }}\n",
-        target
+        target, defaults
     )
 }
 
-fn generate_eq_impl(target: &str) -> String {
+fn generate_eq_impl(target: &str, _fields: &[FieldInfo]) -> String {
     format!(
         "impl Eq for {} {{}}\n",
         target
     )
 }
 
-fn generate_partial_eq_impl(target: &str) -> String {
+fn generate_partial_eq_impl(target: &str, fields: &[FieldInfo]) -> String {
+    if fields.is_empty() {
+        return format!(
+            "impl PartialEq for {} {{\n\
+             fn eq(&self, _other: &Self) -> bool {{\n\
+             true\n\
+             }}\n\
+             }}\n",
+            target
+        );
+    }
+    
+    let mut field_eqs = String::new();
+    for field in fields {
+        field_eqs.push_str(&format!("self.{} == other.{} && ", field.name, field.name));
+    }
+    
+    // Remove trailing && and space
+    if !field_eqs.is_empty() {
+        field_eqs.pop();
+        field_eqs.pop();
+        field_eqs.pop();
+    }
+    
     format!(
         "impl PartialEq for {} {{\n\
          fn eq(&self, other: &Self) -> bool {{\n\
-         // Auto-generated PartialEq implementation\n\
-         // Compare all fields\n\
-         unimplemented!()\n\
+         {}\n\
          }}\n\
          }}\n",
-        target
+        target, field_eqs
     )
 }
 
-fn generate_ord_impl(target: &str) -> String {
+fn generate_ord_impl(target: &str, fields: &[FieldInfo]) -> String {
+    if fields.is_empty() {
+        return format!(
+            "impl Ord for {} {{\n\
+             fn cmp(&self, _other: &Self) -> Ordering {{\n\
+             Ordering::Equal\n\
+             }}\n\
+             }}\n",
+            target
+        );
+    }
+    
+    let mut field_cmps = String::new();
+    for (i, field) in fields.iter().enumerate() {
+        let cmp_line = format!(
+            "        match self.{}.cmp(&other.{}) {{\n\
+             Ordering::Equal => {{}}\n",
+            field.name, field.name
+        );
+        field_cmps.push_str(&cmp_line);
+        
+        if i == fields.len() - 1 {
+            field_cmps.push_str("        }\n");
+        } else {
+            field_cmps.push_str("        other => return other,\n        }\n");
+        }
+    }
+    field_cmps.push_str("        Ordering::Equal\n");
+    
     format!(
         "impl Ord for {} {{\n\
          fn cmp(&self, other: &Self) -> Ordering {{\n\
-         // Auto-generated Ord implementation\n\
-         unimplemented!()\n\
-         }}\n\
+         {}}}\n\
          }}\n",
-        target
+        target, field_cmps
     )
 }
 
-fn generate_partial_ord_impl(target: &str) -> String {
+fn generate_partial_ord_impl(target: &str, _fields: &[FieldInfo]) -> String {
     format!(
         "impl PartialOrd for {} {{\n\
          fn partial_cmp(&self, other: &Self) -> Option<Ordering> {{\n\
-         // Auto-generated PartialOrd implementation\n\
          Some(self.cmp(other))\n\
          }}\n\
          }}\n",
@@ -187,15 +290,18 @@ fn generate_partial_ord_impl(target: &str) -> String {
     )
 }
 
-fn generate_hash_impl(target: &str) -> String {
+fn generate_hash_impl(target: &str, fields: &[FieldInfo]) -> String {
+    let mut field_hashes = String::new();
+    for field in fields {
+        field_hashes.push_str(&format!("        self.{}.hash(state);\n", field.name));
+    }
+    
     format!(
         "impl Hash for {} {{\n\
          fn hash<H: Hasher>(&self, state: &mut H) {{\n\
-         // Auto-generated Hash implementation\n\
-         // Hash all fields\n\
-         }}\n\
+         {}}}\n\
          }}\n",
-        target
+        target, field_hashes
     )
 }
 
@@ -214,7 +320,11 @@ mod tests {
     #[test]
     fn test_apply_clone_derive() {
         let registry = DeriveRegistry::new();
-        let code = registry.apply_derive("Clone", "MyStruct");
+        let fields = vec![
+            FieldInfo { name: "x".to_string(), ty: "i32".to_string() },
+            FieldInfo { name: "y".to_string(), ty: "i32".to_string() },
+        ];
+        let code = registry.apply_derive("Clone", "MyStruct", &fields);
         assert!(code.is_ok());
         let impl_code = code.unwrap();
         assert!(impl_code.contains("impl Clone"));
@@ -224,7 +334,11 @@ mod tests {
     #[test]
     fn test_apply_debug_derive() {
         let registry = DeriveRegistry::new();
-        let code = registry.apply_derive("Debug", "Point");
+        let fields = vec![
+            FieldInfo { name: "x".to_string(), ty: "f64".to_string() },
+            FieldInfo { name: "y".to_string(), ty: "f64".to_string() },
+        ];
+        let code = registry.apply_derive("Debug", "Point", &fields);
         assert!(code.is_ok());
         assert!(code.unwrap().contains("impl Debug"));
     }
@@ -232,14 +346,14 @@ mod tests {
     #[test]
     fn test_unknown_derive() {
         let registry = DeriveRegistry::new();
-        let result = registry.apply_derive("Unknown", "MyType");
+        let result = registry.apply_derive("Unknown", "MyType", &[]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_register_custom_derive() {
         let mut registry = DeriveRegistry::new();
-        registry.register("Custom".to_string(), |t| {
+        registry.register("Custom".to_string(), |t, _fields| {
             format!("impl Custom for {} {{}}", t)
         });
         assert!(registry.derives.contains_key("Custom"));

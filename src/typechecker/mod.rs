@@ -20,6 +20,7 @@ use crate::lowering::{
 use crate::parser::ast::GenericParam;
 use crate::iterators::IteratorMethodHandler;
 use crate::compiler::{CompileError, ErrorKind};
+use crate::macros::custom_derive::{DeriveRegistry, FieldInfo};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -193,7 +194,7 @@ impl TypeContext {
 
 /// Type checking and inference
 pub struct TypeChecker {
-    context: TypeContext,
+    pub context: TypeContext,
 }
 
 impl TypeChecker {
@@ -246,6 +247,7 @@ impl TypeChecker {
         self.context.register_function("__builtin_printf".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         
         // Type-aware print functions (used by println! lowering for different types)
+        self.context.register_function("gaia_print_i32".to_string(), vec![HirType::Int32], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_i64".to_string(), vec![HirType::Int64], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_bool".to_string(), vec![HirType::Bool], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_f64".to_string(), vec![HirType::Float64], HirType::Tuple(vec![]));
@@ -573,7 +575,11 @@ impl TypeChecker {
 
     /// Collect all type definitions (first pass)
     fn collect_definitions(&mut self, items: &[HirItem]) -> TypeCheckResult<()> {
-        self.collect_definitions_recursive(items, "".to_string())
+        // First pass: collect modules and functions
+        self.collect_definitions_recursive(items, "".to_string())?;
+        // Second pass: process use statements
+        self.process_use_statements(items, "".to_string())?;
+        Ok(())
     }
 
     fn collect_definitions_recursive(&mut self, items: &[HirItem], module_prefix: String) -> TypeCheckResult<()> {
@@ -607,9 +613,28 @@ impl TypeChecker {
                     self.context
                         .register_function(full_name, param_types, ret_type);
                 }
-                HirItem::Struct { name, fields } => {
+                HirItem::Struct { name, fields, derives } => {
                     self.context
                         .register_struct(name.clone(), fields.clone());
+                    
+                    // Apply derives to generate impl methods
+                    if !derives.is_empty() {
+                        let registry = DeriveRegistry::new();
+                        let field_infos: Vec<FieldInfo> = fields.iter()
+                            .map(|(fname, _)| FieldInfo {
+                                name: fname.clone(),
+                                ty: "T".to_string(),  // Type doesn't matter for code gen
+                            })
+                            .collect();
+                        
+                        for derive_name in derives {
+                            if let Ok(_impl_code) = registry.apply_derive(&derive_name, name, &field_infos) {
+                                // In a full implementation, we would parse and lower the generated impl code
+                                // For now, we just generate it but don't register the methods yet
+                                // TODO: Parse generated impl code and register derived methods
+                            }
+                        }
+                    }
                 }
                 HirItem::Module { name, items: module_items, .. } => {
                     let new_prefix = if module_prefix.is_empty() {
@@ -628,6 +653,7 @@ impl TypeChecker {
                 HirItem::AssociatedType { .. } => {
                 }
                 HirItem::Use { .. } => {
+                    // Use statements are processed in second pass
                 }
                 HirItem::Impl { struct_name, methods, .. } => {
                     for method in methods {
@@ -649,6 +675,75 @@ impl TypeChecker {
                 }
                 HirItem::Trait { .. } => {
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Process use statements to bring items into scope (second pass)
+    pub fn process_use_statements(&mut self, items: &[HirItem], module_prefix: String) -> TypeCheckResult<()> {
+        for item in items {
+            match item {
+                HirItem::Module { name, items: module_items, .. } => {
+                    let new_prefix = if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+                    self.process_use_statements(module_items, new_prefix)?;
+                }
+                HirItem::Use { path, is_glob, .. } => {
+                    // Process use statements to bring items into scope
+                    if !path.is_empty() {
+                        if *is_glob {
+                            // use module::* - import all items from module
+                            let module_path = path.join("::");
+                            
+                            // Import all functions that start with the module path
+                            let functions_to_import: Vec<(String, Vec<HirType>, HirType)> = self.context.functions.iter()
+                                .filter(|(fname, _)| fname.starts_with(&format!("{}::", module_path)))
+                                .map(|(fname, (params, ret))| {
+                                    // Extract the short name (after the last ::)
+                                    let short_name = fname.split("::").last().unwrap_or(fname).to_string();
+                                    (short_name, params.clone(), ret.clone())
+                                })
+                                .collect();
+                            
+                            // Register these items with their short names
+                            for (short_name, params, ret) in functions_to_import {
+                                self.context.register_function(short_name, params, ret);
+                            }
+                            
+                            // Import all structs that start with the module path
+                            let structs_to_import: Vec<(String, Vec<(String, HirType)>)> = self.context.structs.iter()
+                                .filter(|(sname, _)| sname.starts_with(&format!("{}::", module_path)))
+                                .map(|(sname, fields)| {
+                                    // Extract the short name (after the last ::)
+                                    let short_name = sname.split("::").last().unwrap_or(sname).to_string();
+                                    (short_name, fields.clone())
+                                })
+                                .collect();
+                            
+                            // Register these struct items with their short names
+                            for (short_name, fields) in structs_to_import {
+                                self.context.register_struct(short_name, fields);
+                            }
+                        } else if path.len() > 1 {
+                            // use module::item - import specific item
+                            let item_name = &path[path.len() - 1];
+                            let module_path = path[..path.len() - 1].join("::");
+                            let full_path = format!("{}::{}", module_path, item_name);
+                            
+                            // Create an alias so the item can be accessed by its short name
+                            if let Some((param_types, ret_type)) = self.context.lookup_function(&full_path) {
+                                self.context.register_function(item_name.clone(), param_types, ret_type);
+                            } else if let Some(fields) = self.context.lookup_struct(&full_path) {
+                                self.context.register_struct(item_name.clone(), fields);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -1398,36 +1493,49 @@ impl TypeChecker {
 
                             // Check argument types and collect generic substitutions
                             let mut substitutions = std::collections::HashMap::new();
-                            for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
-                                let arg_ty = self.infer_type(arg)?;
-                                
-                                // Try to unify generic types
-                                if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
-                                    substitutions.insert(gen_name, concrete_ty);
-                                } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
-                                    let msg = if arg_ty == HirType::Int64 || arg_ty == HirType::Int32 {
-                                        if param_ty.to_string().chars().all(|c| c.is_alphanumeric() || c == '_') {
-                                            format!(
-                                                "Argument {} has type {}, expected {}\n\
-                                                hint: enum variants are currently converted to integers; \
-                                                this is a known compiler limitation",
-                                                i, arg_ty, param_ty
-                                            )
+                            
+                            // Skip type checking for variadic/polymorphic functions like println
+                            let is_polymorphic = name == "println" || name == "print" || name == "eprintln" 
+                                || name == "__builtin_println" || name == "__builtin_print" || name == "__builtin_eprintln"
+                                || name == "__builtin_printf";
+                            
+                            if !is_polymorphic {
+                                for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                                    let arg_ty = self.infer_type(arg)?;
+                                    
+                                    // Try to unify generic types
+                                    if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
+                                        substitutions.insert(gen_name, concrete_ty);
+                                    } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                        let msg = if arg_ty == HirType::Int64 || arg_ty == HirType::Int32 {
+                                            if param_ty.to_string().chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                                format!(
+                                                    "Argument {} has type {}, expected {}\n\
+                                                    hint: enum variants are currently converted to integers; \
+                                                    this is a known compiler limitation",
+                                                    i, arg_ty, param_ty
+                                                )
+                                            } else {
+                                                format!(
+                                                    "Argument {} has type {}, expected {}",
+                                                    i, arg_ty, param_ty
+                                                )
+                                            }
                                         } else {
                                             format!(
                                                 "Argument {} has type {}, expected {}",
                                                 i, arg_ty, param_ty
                                             )
-                                        }
-                                    } else {
-                                        format!(
-                                            "Argument {} has type {}, expected {}",
-                                            i, arg_ty, param_ty
-                                        )
-                                    };
-                                    return Err(TypeCheckError {
-                                        message: msg,
-                                    });
+                                        };
+                                        return Err(TypeCheckError {
+                                            message: msg,
+                                        });
+                                    }
+                                }
+                            } else {
+                                // For polymorphic functions, just infer types without checking compatibility
+                                for arg in args {
+                                    let _ = self.infer_type(arg)?;  // Just make sure args are valid
                                 }
                             }
 
@@ -2895,6 +3003,157 @@ mod tests {
                 }
             }
             Err(e) => panic!("Unexpected error: {}", e),
+        }
+    }
+
+    mod module_system_tests {
+        use super::*;
+
+        #[test]
+        fn test_use_specific_function() {
+            let mut checker = TypeChecker::new();
+            
+            // Simulate having a function in a module
+            checker.context.register_function(
+                "math::add".to_string(),
+                vec![HirType::Int32, HirType::Int32],
+                HirType::Int32,
+            );
+            
+            // Create a use statement for the specific function
+            let items = vec![
+                HirItem::Use {
+                    path: vec!["math".to_string(), "add".to_string()],
+                    is_glob: false,
+                    is_public: false,
+                },
+            ];
+            
+            // Process the use statement
+            let _ = checker.process_use_statements(&items, "".to_string());
+            
+            // The function should now be accessible as "add"
+            assert!(checker.context.lookup_function("add").is_some());
+            assert!(checker.context.lookup_function("math::add").is_some());
+        }
+
+        #[test]
+        fn test_use_glob_imports() {
+            let mut checker = TypeChecker::new();
+            
+            // Register multiple functions in a module
+            checker.context.register_function(
+                "utils::max".to_string(),
+                vec![HirType::Int32, HirType::Int32],
+                HirType::Int32,
+            );
+            checker.context.register_function(
+                "utils::min".to_string(),
+                vec![HirType::Int32, HirType::Int32],
+                HirType::Int32,
+            );
+            checker.context.register_function(
+                "utils::abs".to_string(),
+                vec![HirType::Int32],
+                HirType::Int32,
+            );
+            
+            // Create a glob use statement
+            let items = vec![
+                HirItem::Use {
+                    path: vec!["utils".to_string()],
+                    is_glob: true,
+                    is_public: false,
+                },
+            ];
+            
+            // Process the use statement
+            let _ = checker.process_use_statements(&items, "".to_string());
+            
+            // All functions should be accessible by short name
+            assert!(checker.context.lookup_function("max").is_some());
+            assert!(checker.context.lookup_function("min").is_some());
+            assert!(checker.context.lookup_function("abs").is_some());
+            
+            // Original names should still work
+            assert!(checker.context.lookup_function("utils::max").is_some());
+            assert!(checker.context.lookup_function("utils::min").is_some());
+            assert!(checker.context.lookup_function("utils::abs").is_some());
+        }
+
+        #[test]
+        fn test_use_glob_struct_imports() {
+            let mut checker = TypeChecker::new();
+            
+            // Register multiple structs in a module
+            checker.context.register_struct(
+                "geometry::Point".to_string(),
+                vec![
+                    ("x".to_string(), HirType::Float64),
+                    ("y".to_string(), HirType::Float64),
+                ],
+            );
+            checker.context.register_struct(
+                "geometry::Vector".to_string(),
+                vec![
+                    ("x".to_string(), HirType::Float64),
+                    ("y".to_string(), HirType::Float64),
+                    ("z".to_string(), HirType::Float64),
+                ],
+            );
+            
+            // Create a glob use statement
+            let items = vec![
+                HirItem::Use {
+                    path: vec!["geometry".to_string()],
+                    is_glob: true,
+                    is_public: false,
+                },
+            ];
+            
+            // Process the use statement
+            let _ = checker.process_use_statements(&items, "".to_string());
+            
+            // All structs should be accessible by short name
+            assert!(checker.context.lookup_struct("Point").is_some());
+            assert!(checker.context.lookup_struct("Vector").is_some());
+            
+            // Original names should still work
+            assert!(checker.context.lookup_struct("geometry::Point").is_some());
+            assert!(checker.context.lookup_struct("geometry::Vector").is_some());
+        }
+
+        #[test]
+        fn test_nested_module_use() {
+            let mut checker = TypeChecker::new();
+            
+            // Register functions in nested modules
+            checker.context.register_function(
+                "core::math::add".to_string(),
+                vec![HirType::Int32, HirType::Int32],
+                HirType::Int32,
+            );
+            checker.context.register_function(
+                "core::math::sub".to_string(),
+                vec![HirType::Int32, HirType::Int32],
+                HirType::Int32,
+            );
+            
+            // Create a glob use statement for a nested module
+            let items = vec![
+                HirItem::Use {
+                    path: vec!["core".to_string(), "math".to_string()],
+                    is_glob: true,
+                    is_public: false,
+                },
+            ];
+            
+            // Process the use statement
+            let _ = checker.process_use_statements(&items, "".to_string());
+            
+            // Functions should be accessible by short name
+            assert!(checker.context.lookup_function("add").is_some());
+            assert!(checker.context.lookup_function("sub").is_some());
         }
     }
 }

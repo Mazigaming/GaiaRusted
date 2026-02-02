@@ -197,9 +197,50 @@ pub fn generate_assembly_file(assembly: &str) -> ObjectResult<String> {
     Ok(assembly.to_string())
 }
 
-/// Link assembly file using system linker
-pub fn link_assembly(_asm_file: &str, _output: &str) -> ObjectResult<()> {
-    // TODO: Implement linking using system assembler and linker
+/// Link assembly file using system assembler and linker
+pub fn link_assembly(asm_file: &str, output: &str) -> ObjectResult<()> {
+    use std::process::Command;
+    use std::path::Path;
+
+    // Step 1: Assemble .s file to .o file
+    let obj_file = asm_file.replace(".s", ".o");
+    
+    let assemble_status = Command::new("as")
+        .arg("-o")
+        .arg(&obj_file)
+        .arg(asm_file)
+        .status()
+        .map_err(|e| ObjectError {
+            message: format!("Failed to run assembler (as): {}", e),
+        })?;
+    
+    if !assemble_status.success() {
+        return Err(ObjectError {
+            message: format!("Assembly failed with status: {}", assemble_status),
+        });
+    }
+
+    // Step 2: Link object file to executable
+    let link_status = Command::new("gcc")
+        .arg("-o")
+        .arg(output)
+        .arg(&obj_file)
+        .arg("-lc")      // Link with C library
+        .arg("-lm")      // Link with math library (must come after object file)
+        .status()
+        .map_err(|e| ObjectError {
+            message: format!("Failed to run linker (gcc): {}", e),
+        })?;
+    
+    if !link_status.success() {
+        return Err(ObjectError {
+            message: format!("Linking failed with status: {}", link_status),
+        });
+    }
+
+    // Clean up object file
+    let _ = std::fs::remove_file(&obj_file);
+
     Ok(())
 }
 
