@@ -21,6 +21,7 @@ thread_local! {
     static ENUM_REGISTRY: RefCell<HashMap<String, HashMap<String, i64>>> = RefCell::new(HashMap::new());
     static SCOPE_TRACKER: RefCell<ScopeTracker> = RefCell::new(ScopeTracker::new());
     static STRUCT_REGISTRY: RefCell<HashMap<String, Vec<(String, HirType)>>> = RefCell::new(HashMap::new());
+    static FUNCTION_REGISTRY: RefCell<HashMap<String, HirType>> = RefCell::new(HashMap::new());
 }
 
 /// Tracks available variables in the current scope
@@ -135,6 +136,24 @@ pub fn get_struct_field_count(struct_name: &str) -> usize {
 
 fn clear_struct_registry() {
     STRUCT_REGISTRY.with(|registry| {
+        registry.borrow_mut().clear();
+    });
+}
+
+fn register_function_return_type(func_name: String, return_type: HirType) {
+    FUNCTION_REGISTRY.with(|registry| {
+        registry.borrow_mut().insert(func_name, return_type);
+    });
+}
+
+fn get_function_return_type(func_name: &str) -> Option<HirType> {
+    FUNCTION_REGISTRY.with(|registry| {
+        registry.borrow().get(func_name).cloned()
+    })
+}
+
+fn clear_function_registry() {
+    FUNCTION_REGISTRY.with(|registry| {
         registry.borrow_mut().clear();
     });
 }
@@ -986,6 +1005,11 @@ fn infer_hir_type(expr: &HirExpression) -> HirType {
         HirExpression::Call { func, args } => {
             // For method calls, try to infer from the method name
             if let HirExpression::Variable(func_name) = &**func {
+                // First, check if it's a user-defined function
+                if let Some(ret_ty) = get_function_return_type(func_name) {
+                    return ret_ty;
+                }
+                
                 // Methods that return i64/usize
                 if func_name == "len" || func_name.contains("::len") {
                     return HirType::Int64;
@@ -2053,6 +2077,11 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                  None
              };
 
+             // Register this function's return type for type inference
+             if let Some(ref rt) = ret_type_hir {
+                 register_function_return_type(name.clone(), rt.clone());
+             }
+
              let mut body_hir = lower_block(body)?;
              
              // Handle implicit returns: if the last statement is an expression or if statement,
@@ -2318,6 +2347,7 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
 pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
     clear_enum_registry();
     clear_struct_registry();
+    clear_function_registry();
     
     // Helper function to replace Self with actual struct name in types
     fn replace_self_in_type(ty: &Type, struct_name: &str) -> Type {
