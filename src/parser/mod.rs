@@ -349,20 +349,62 @@ impl Parser {
 
     /// Parse a top-level item (function, struct, enum, trait, impl, mod, use)
     fn parse_item(&mut self) -> ParseResult<Item> {
-        // Skip attributes (#[...])
+        // Parse attributes (#[...])
+        let mut attributes = Vec::new();
         while self.check(&Token::Hash) {
             self.advance(); // consume #
             if self.check(&Token::LeftBracket) {
                 self.advance(); // consume [
-                // Skip until we find the matching ]
-                let mut bracket_depth = 1;
-                while bracket_depth > 0 && self.current() != &Token::Eof {
-                    match self.current() {
-                        Token::LeftBracket => bracket_depth += 1,
-                        Token::RightBracket => bracket_depth -= 1,
-                        _ => {}
+                // Parse attribute contents
+                let attr_name = if self.current() != &Token::RightBracket {
+                    let name = self.expect_identifier()?;
+                    let mut args = Vec::new();
+                    
+                    // Parse attribute arguments if present: #[derive(Clone, Debug)]
+                    if self.check(&Token::LeftParen) {
+                        self.advance(); // consume (
+                        while !self.check(&Token::RightParen) && self.current() != &Token::Eof {
+                            if let Token::Identifier(id) = self.current() {
+                                args.push(id.clone());
+                                self.advance();
+                                if self.check(&Token::Comma) {
+                                    self.advance();
+                                }
+                            } else {
+                                self.advance();
+                            }
+                        }
+                        if self.check(&Token::RightParen) {
+                            self.advance(); // consume )
+                        }
                     }
-                    self.advance();
+                    
+                    attributes.push(Attribute {
+                        name,
+                        args,
+                        is_macro: true,
+                    });
+                    
+                    Some(())
+                } else {
+                    None
+                };
+                
+                // Skip until we find the matching ]
+                if attr_name.is_some() {
+                    if self.check(&Token::RightBracket) {
+                        self.advance();
+                    }
+                } else {
+                    let mut bracket_depth = 1;
+                    while bracket_depth > 0 && self.current() != &Token::Eof {
+                        match self.current() {
+                            Token::LeftBracket => bracket_depth += 1,
+                            Token::RightBracket => bracket_depth -= 1,
+                            _ => {}
+                        }
+                        self.advance();
+                    }
                 }
             } else {
                 // Malformed attribute, but continue parsing
@@ -389,7 +431,7 @@ impl Parser {
 
         match self.current() {
             Token::Keyword(Keyword::Fn) => self.parse_function(),
-            Token::Keyword(Keyword::Struct) => self.parse_struct(),
+            Token::Keyword(Keyword::Struct) => self.parse_struct_with_attributes(attributes),
             Token::Keyword(Keyword::Enum) => self.parse_enum(),
             Token::Keyword(Keyword::Trait) => self.parse_trait(),
             Token::Keyword(Keyword::Impl) => self.parse_impl(),
@@ -797,7 +839,7 @@ impl Parser {
     }
 
     /// Parse a struct definition
-    fn parse_struct(&mut self) -> ParseResult<Item> {
+    fn parse_struct_with_attributes(&mut self, attributes: Vec<ast::Attribute>) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Struct)?;
         let name = self.expect_identifier()?;
 
@@ -836,9 +878,13 @@ impl Parser {
             generics,
             fields,
             is_pub: false,
-            attributes: Vec::new(),
+            attributes,
             where_clause,
         })
+    }
+    
+    fn parse_struct(&mut self) -> ParseResult<Item> {
+        self.parse_struct_with_attributes(Vec::new())
     }
 
     /// Parse a block: { statements; expression? }
@@ -2369,6 +2415,7 @@ impl Parser {
                 }
                 break;
             } else if self.check(&Token::Star) {
+                path.push("*".to_string());
                 self.advance();
                 break;
             } else {

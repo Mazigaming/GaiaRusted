@@ -380,6 +380,11 @@ pub struct Codegen {
     array_variables: HashMap<String, (usize, i64)>,
     /// Maps function name to its return type (for handling struct returns on call site)
     function_return_types: HashMap<String, crate::lowering::HirType>,
+    /// Set of function names that have struct returns (any struct - use return-by-reference ABI)
+    /// These functions receive a return buffer address in RDI and return the address in RAX
+    multifield_struct_returns: std::collections::HashSet<String>,
+    /// Maps struct name to field count (discovered from Aggregate statements in MIR)
+    struct_field_counts: HashMap<String, usize>,
 }
 
 impl Codegen {
@@ -399,6 +404,8 @@ impl Codegen {
             var_struct_types: HashMap::new(),
             array_variables: HashMap::new(),
             function_return_types: HashMap::new(),
+            multifield_struct_returns: std::collections::HashSet::new(),
+            struct_field_counts: HashMap::new(),
         }
     }
 
@@ -412,7 +419,19 @@ impl Codegen {
         asm.push_str(".globl gaia_main\n");
         asm.push_str(".globl main\n\n");
         
-        // Pre-pass: build function return type map (needed for struct return handling on call site)
+        // Pre-pass: build function return type map and struct field counts
+        // First, scan all functions to find aggregate statements and count fields
+        for func in &mir.functions {
+            for block in &func.basic_blocks {
+                for stmt in &block.statements {
+                    if let crate::mir::Rvalue::Aggregate(struct_name, operands) = &stmt.rvalue {
+                        self.struct_field_counts.insert(struct_name.clone(), operands.len());
+                    }
+                }
+            }
+        }
+        
+        // Now build function return type map
         for func in &mir.functions {
             let func_name = if func.name == "main" {
                 "gaia_main".to_string()
@@ -421,7 +440,22 @@ impl Codegen {
             } else {
                 func.name.clone()
             };
-            self.function_return_types.insert(func_name, func.return_type.clone());
+            self.function_return_types.insert(func_name.clone(), func.return_type.clone());
+            
+            // Track if this function returns a struct (any struct, not just multi-field)
+            // ALL struct returns use return-by-reference convention to avoid returning pointers to stack
+            if let crate::lowering::HirType::Named(ref struct_name) = func.return_type {
+                // Use the manually discovered field count from Aggregate statements
+                let field_count = self.struct_field_counts.get(struct_name)
+                    .copied()
+                    .unwrap_or_else(|| crate::lowering::get_struct_field_count(struct_name));
+                
+                // Mark ALL struct returns for return-by-reference, not just multi-field
+                // This prevents returning pointers to stack data
+                if field_count > 0 {
+                    self.multifield_struct_returns.insert(func_name);
+                }
+            }
         }
         
         // Generate code for each function
@@ -489,6 +523,7 @@ impl Codegen {
         // Reset per-function state
         self.var_locations.clear();
         self.var_struct_types.clear();
+        self.struct_data_locations.clear();  // IMPORTANT: Clear struct data locations for new function
         self.stack_offset = -8;
         self.min_collection_offset = i64::MAX;
         self.collection_size = 0;
@@ -503,6 +538,9 @@ impl Codegen {
         } else {
             func.name.clone()
         };
+        
+        // Determine if this function needs to use a return buffer (for multi-field struct returns)
+        let needs_return_buffer = self.multifield_struct_returns.contains(&func_name);
         
         // Function label
         self.instructions.push(X86Instruction::Label {
@@ -527,8 +565,12 @@ impl Codegen {
         }
         
         // Load parameters from incoming registers to their allocated locations
-        let param_regs = vec![Register::RDI, Register::RSI, Register::RDX, Register::RCX, Register::R8, Register::R9];
-        for (i, param_reg) in param_regs.iter().enumerate() {
+        // If needs_return_buffer is true, RDI is used for the return buffer, so parameters start at RSI
+        let mut param_regs = vec![Register::RDI, Register::RSI, Register::RDX, Register::RCX, Register::R8, Register::R9];
+        let param_reg_offset = if needs_return_buffer { 1 } else { 0 };
+        let effective_param_regs = param_regs[param_reg_offset..].to_vec();
+        
+        for (i, param_reg) in effective_param_regs.iter().enumerate() {
             if i < func.params.len() {
                 let offset = -8 - (i as i64 * 8);
                 self.instructions.push(X86Instruction::Mov {
@@ -561,8 +603,11 @@ impl Codegen {
         }
         
         // Load stack-passed parameters (arg 6+)
-        for i in 6..func.params.len() {
-            let stack_offset = 16 + ((i - 6) as i64 * 8);
+        // When using return-by-reference, parameter 0 becomes parameter 1 on the stack,
+        // so we need to shift the indices
+        let stack_param_start = if needs_return_buffer { 6 } else { 6 };  // RSI is reg 1, so args 6+ from RDI start are still 6+
+        for i in stack_param_start..func.params.len() {
+            let stack_offset = 16 + ((i - stack_param_start) as i64 * 8);
             let frame_offset = -8 - (i as i64 * 8);
             self.instructions.push(X86Instruction::Mov {
                 dst: X86Operand::Register(Register::RAX),
@@ -628,14 +673,51 @@ impl Codegen {
                     self.instructions.push(X86Instruction::Ret);
                 }
                 Terminator::Return(Some(operand)) => {
-                    // For main function (gaia_main), always return 0, not the last expression
-                    if func_name == "gaia_main" {
+                     // For main function (gaia_main), always return 0, not the last expression
+                     if func_name == "gaia_main" {
                         self.instructions.push(X86Instruction::Mov {
                             dst: X86Operand::Register(Register::RAX),
                             src: X86Operand::Immediate(0),
                         });
+                    } else if needs_return_buffer {
+                        // This function returns a multi-field struct via return buffer in RDI
+                        // Copy struct fields to the return buffer and return the buffer pointer
+                        if let crate::mir::Operand::Copy(crate::mir::Place::Local(ref var_name)) |
+                               crate::mir::Operand::Move(crate::mir::Place::Local(ref var_name)) = operand 
+                        {
+                            if let Some(struct_type) = self.var_struct_types.get(var_name) {
+                                // Use the detected field count from struct_field_counts
+                                let field_count = self.struct_field_counts.get(struct_type)
+                                    .copied()
+                                    .unwrap_or_else(|| crate::lowering::get_struct_field_count(struct_type));
+                                
+                                if let Some(&struct_base) = self.struct_data_locations.get(var_name) {
+                                    // Copy each field from our stack to the return buffer (RDI)
+                                    for field_idx in 0..field_count {
+                                        let src_offset = struct_base - (field_idx as i64) * 8;
+                                        let dst_offset = (field_idx as i64) * 8;
+                                        
+                                        // Load field from our stack
+                                        self.instructions.push(X86Instruction::Mov {
+                                            dst: X86Operand::Register(Register::RAX),
+                                            src: X86Operand::Memory { base: Register::RBP, offset: src_offset },
+                                        });
+                                        // Store field to return buffer
+                                        self.instructions.push(X86Instruction::Mov {
+                                            dst: X86Operand::Memory { base: Register::RDI, offset: dst_offset },
+                                            src: X86Operand::Register(Register::RAX),
+                                        });
+                                    }
+                                    // Return the buffer address in RAX
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RAX),
+                                        src: X86Operand::Register(Register::RDI),
+                                    });
+                                }
+                            }
+                        }
                     } else {
-                        // For other functions, handle return value
+                        // For other functions, handle return value normally
                         // Special handling for struct returns (aggregate types)
                         if let crate::mir::Operand::Copy(crate::mir::Place::Local(ref var_name)) |
                                crate::mir::Operand::Move(crate::mir::Place::Local(ref var_name)) = operand 
@@ -756,6 +838,7 @@ impl Codegen {
                 // Check operand type for debugging
                 let _is_field = matches!(operand, crate::mir::Operand::Copy(crate::mir::Place::Field(_, _)) | crate::mir::Operand::Move(crate::mir::Place::Field(_, _)));
                 match operand {
+
                     crate::mir::Operand::Constant(crate::mir::Constant::String(s)) => {
                         let label = self.allocate_string(s.clone());
                         self.instructions.push(X86Instruction::Lea {
@@ -2780,8 +2863,55 @@ impl Codegen {
                         func_name.clone()
                     };
                     
+                    // Check if this function returns a multi-field struct
+                    // If so, allocate a return buffer and pass its address in RDI
+                    let return_buffer_info = if self.multifield_struct_returns.contains(&mangled_func_name) {
+                        // Get the struct field count from return_types
+                        if let Some(crate::lowering::HirType::Named(struct_name)) = self.function_return_types.get(&mangled_func_name) {
+                            let field_count = crate::lowering::get_struct_field_count(struct_name);
+                            let struct_size = (field_count as i64) * 8;
+                            
+                            // Allocate buffer space on the caller's stack
+                            // The buffer must be contiguous for the callee to write fields at [RDI], [RDI+8], etc.
+                            // Since the stack grows downward but we want upward field offsets,
+                            // we allocate the buffer at the END of the new space
+                            self.stack_offset -= struct_size;  // First, make space
+                            let buffer_base = self.stack_offset;  // Buffer starts at the new bottom
+                            
+                            // Calculate buffer address and store in RAX
+                            // RDI should point to buffer_base (the lowest address in our allocation)
+                            self.instructions.push(X86Instruction::Mov {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Register(Register::RBP),
+                            });
+                            self.instructions.push(X86Instruction::Add {
+                                dst: X86Operand::Register(Register::RAX),
+                                src: X86Operand::Immediate(buffer_base),
+                            });
+                            
+                            // We'll move RAX to RDI as the first argument
+                            // Note: for now, we'll handle this after loading arguments
+                            Some((buffer_base, field_count))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    
                     let mut stack_adjust = 0;
+                    
+                    // If we have a return buffer, move it to RDI first
+                    if return_buffer_info.is_some() {
+                        self.instructions.push(X86Instruction::Mov {
+                            dst: X86Operand::Register(Register::RDI),
+                            src: X86Operand::Register(Register::RAX),
+                        });
+                    }
+                    
                     for (i, arg) in args.iter().enumerate() {
+                        // If we're using RDI for return buffer, shift arguments by 1
+                        let arg_idx = if return_buffer_info.is_some() { i + 1 } else { i };
                         // Special handling for string constants - need to load their address
                         // Special handling for float constants - need to load from memory
                         let arg_val = if let crate::mir::Operand::Constant(crate::mir::Constant::String(s)) = arg {
@@ -2836,12 +2966,15 @@ impl Codegen {
                             self.operand_to_x86(arg)?
                         };
                         
-                        match i {
+                        match arg_idx {
                             0 => {
-                                self.instructions.push(X86Instruction::Mov {
-                                    dst: X86Operand::Register(Register::RDI),
-                                    src: arg_val,
-                                });
+                                if return_buffer_info.is_none() {
+                                    self.instructions.push(X86Instruction::Mov {
+                                        dst: X86Operand::Register(Register::RDI),
+                                        src: arg_val,
+                                    });
+                                }
+                                // If return_buffer_info is Some, RDI is already set to the buffer
                             }
                             1 => {
                                 self.instructions.push(X86Instruction::Mov {
@@ -2886,13 +3019,28 @@ impl Codegen {
                         }
                     }
                     self.instructions.push(X86Instruction::Call {
-                        func: mangled_func_name,
+                        func: mangled_func_name.clone(),
                     });
                     if stack_adjust > 0 {
                         self.instructions.push(X86Instruction::Add {
                             dst: X86Operand::Register(Register::RSP),
                             src: X86Operand::Immediate(stack_adjust),
                         });
+                    }
+                    
+                    // Handle multi-field struct returns
+                    // After the call, RAX contains the return buffer address
+                    // We need to register the destination variable so field access works correctly
+                    if let Some((buffer_base, field_count)) = return_buffer_info {
+                        if let crate::mir::Place::Local(ref var_name) = stmt.place {
+                            // Register this variable as a struct with known field count
+                            // When accessing fields, we'll dereference through the buffer address
+                            if let Some(crate::lowering::HirType::Named(struct_name)) = self.function_return_types.get(&mangled_func_name) {
+                                self.var_struct_types.insert(var_name.clone(), struct_name.clone());
+                                self.struct_data_locations.insert(var_name.clone(), buffer_base);
+                                skip_final_store = true;  // Don't do a final store, struct is already set up
+                            }
+                        }
                     }
                 }
             }
@@ -3215,9 +3363,12 @@ impl Codegen {
                                // Check if source is a struct variable
                                if let Some(struct_type) = self.var_struct_types.get(src_name).cloned() {
                                    self.var_struct_types.insert(name.clone(), struct_type);
-                                   // IMPORTANT: Register the destination's struct data location
-                                   // The copied struct data is now at this variable's offset
-                                   self.struct_data_locations.insert(name.clone(), offset);
+                                   // IMPORTANT: For struct variables, inherit the struct data location from source
+                                   // The struct data is NOT copied to the new location - it stays at the original location
+                                   // Only the reference/binding is updated
+                                   if let Some(&struct_data_loc) = self.struct_data_locations.get(src_name) {
+                                       self.struct_data_locations.insert(name.clone(), struct_data_loc);
+                                   }
                                }
                                
                                // Check if source is an array variable
@@ -3468,24 +3619,29 @@ impl Codegen {
         let struct_size = (field_count as i64) * 8;
         
         // Allocate space on the stack for the struct
-        // IMPORTANT: Get the base BEFORE decrement (to match normal Aggregate layout)
-        let struct_base = self.stack_offset;
-        self.stack_offset -= struct_size;
+        // Use the Call handler's allocated buffer space as-is
+        // The Call handler already allocated struct_size bytes for the buffer
+        // We just need to allocate space for our local copy of the struct
+        let first_field_offset = self.get_var_location(dst_var);  // Allocates first 8 bytes
         
-        // RAX contains the source address of the struct data
-        // The function returns the address of the FIRST FIELD (struct_base)
-        // Fields in source are laid out downward: [RAX], [RAX-8], [RAX-16], ...
-        // We need to copy them to our destination (also downward): struct_base, struct_base-8, ...
-        // So field[i] is at [RAX - i*8] in source
+        // Allocate remaining fields
+        let struct_base = first_field_offset;
+        for _i in 1..field_count {
+            self.stack_offset -= 8;  // Allocate 8 bytes per field
+        }
+        
+        // ALL structs now use return-by-reference ABI
+        // RAX contains a pointer to the return buffer, we need to copy fields from there
+        // Fields in buffer are laid out contiguously: [RAX+0], [RAX+8], [RAX+16], ...
+        // We store them sequentially downward from struct_base
         for i in 0..field_count {
-            // Load from source address: [RAX - i*8]
-            let source_offset = -(i as i64) * 8;  // Note: negative offset for downward layout
+            let source_offset = (i as i64) * 8;  // Fields are at [RAX], [RAX+8], [RAX+16], ...
+            let dest_offset = struct_base - (i as i64) * 8;  // Our stack layout: struct_base, struct_base-8, struct_base-16, ...
+            
             self.instructions.push(X86Instruction::Mov {
                 dst: X86Operand::Register(Register::R10),
                 src: X86Operand::Memory { base: Register::RAX, offset: source_offset },
             });
-            // Store to destination (following the downward field layout)
-            let dest_offset = struct_base - (i as i64) * 8;
             self.instructions.push(X86Instruction::Mov {
                 dst: X86Operand::Memory { base: Register::RBP, offset: dest_offset },
                 src: X86Operand::Register(Register::R10),
@@ -3493,7 +3649,6 @@ impl Codegen {
         }
         
         // Register this variable in both var_locations and struct_data_locations
-        self.var_locations.insert(dst_var.to_string(), struct_base);
         self.var_struct_types.insert(dst_var.to_string(), struct_name.to_string());
         self.struct_data_locations.insert(dst_var.to_string(), struct_base);
         

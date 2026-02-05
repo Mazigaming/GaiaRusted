@@ -20,7 +20,7 @@ use crate::lowering::{
 use crate::parser::ast::GenericParam;
 use crate::iterators::IteratorMethodHandler;
 use crate::compiler::{CompileError, ErrorKind};
-use crate::macros::custom_derive::{DeriveRegistry, FieldInfo};
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -617,21 +617,82 @@ impl TypeChecker {
                     self.context
                         .register_struct(name.clone(), fields.clone());
                     
-                    // Apply derives to generate impl methods
+                    // Apply derives to register impl methods
                     if !derives.is_empty() {
-                        let registry = DeriveRegistry::new();
-                        let field_infos: Vec<FieldInfo> = fields.iter()
-                            .map(|(fname, _)| FieldInfo {
-                                name: fname.clone(),
-                                ty: "T".to_string(),  // Type doesn't matter for code gen
-                            })
-                            .collect();
-                        
                         for derive_name in derives {
-                            if let Ok(_impl_code) = registry.apply_derive(&derive_name, name, &field_infos) {
-                                // In a full implementation, we would parse and lower the generated impl code
-                                // For now, we just generate it but don't register the methods yet
-                                // TODO: Parse generated impl code and register derived methods
+                            match derive_name.as_str() {
+                                "Clone" => {
+                                    // Clone method takes self and returns Self
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "clone".to_string(),
+                                        vec![],  // self is implicit
+                                        HirType::Named(name.clone()),
+                                    );
+                                }
+                                "Copy" => {
+                                    // Copy is a marker trait, no methods to register
+                                }
+                                "Debug" => {
+                                    // Debug::fmt(&self, f: &Formatter) -> Result
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "fmt".to_string(),
+                                        vec![HirType::Named("Formatter".to_string())],
+                                        HirType::Named("Result".to_string()),
+                                    );
+                                }
+                                "Default" => {
+                                    // Default::default() -> Self
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "default".to_string(),
+                                        vec![],
+                                        HirType::Named(name.clone()),
+                                    );
+                                }
+                                "PartialEq" => {
+                                    // PartialEq::eq(&self, other: &Self) -> bool
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "eq".to_string(),
+                                        vec![HirType::Named(name.clone())],
+                                        HirType::Bool,
+                                    );
+                                }
+                                "Eq" => {
+                                    // Eq is a marker trait extending PartialEq
+                                }
+                                "Ord" => {
+                                    // Ord::cmp(&self, other: &Self) -> Ordering
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "cmp".to_string(),
+                                        vec![HirType::Named(name.clone())],
+                                        HirType::Named("Ordering".to_string()),
+                                    );
+                                }
+                                "PartialOrd" => {
+                                    // PartialOrd::partial_cmp(&self, other: &Self) -> Option<Ordering>
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "partial_cmp".to_string(),
+                                        vec![HirType::Named(name.clone())],
+                                        HirType::Named("Option".to_string()),
+                                    );
+                                }
+                                "Hash" => {
+                                    // Hash::hash(&self, state: &mut H)
+                                    self.context.register_impl_method(
+                                        name.clone(),
+                                        "hash".to_string(),
+                                        vec![],
+                                        HirType::Tuple(vec![]),  // Unit type as empty tuple
+                                    );
+                                }
+                                _ => {
+                                    // Unknown derive - silently ignore
+                                }
                             }
                         }
                     }
@@ -697,7 +758,12 @@ impl TypeChecker {
                     if !path.is_empty() {
                         if *is_glob {
                             // use module::* - import all items from module
-                            let module_path = path.join("::");
+                            // Remove the "*" from the end of the path
+                            let module_path = path.iter()
+                                .filter(|p| *p != "*")
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join("::");
                             
                             // Import all functions that start with the module path
                             let functions_to_import: Vec<(String, Vec<HirType>, HirType)> = self.context.functions.iter()

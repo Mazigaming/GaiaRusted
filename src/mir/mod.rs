@@ -352,7 +352,7 @@ pub struct MirLowerer {
     generated_functions: Vec<MirFunction>,
     closure_vars: std::collections::HashMap<String, (String, Vec<(String, HirType)>)>, // Maps variable name -> (function name, captures)
     available_functions: std::collections::HashSet<String>, // All functions that exist (including qualified names)
-    local_types: std::collections::HashMap<String, String>, // Maps local variable names to their types
+    local_types: std::collections::HashMap<String, HirType>, // Maps local variable names to their types
 }
 
 impl MirLowerer {
@@ -509,10 +509,18 @@ impl MirLowerer {
                 } => {
                     let mut mir_builder = MirBuilder::new();
 
+                    // Register parameter types for this function
+                    for (param_name, param_type) in params {
+                        self.local_types.insert(param_name.clone(), param_type.clone());
+                    }
+
                     // Lower function body
                     for stmt in body {
                         self.lower_statement_in_builder(&mut mir_builder, stmt)?;
                     }
+                    
+                    // Clear local types after function lowering
+                    self.local_types.clear();
 
                     // Ensure proper terminator
                     if matches!(mir_builder.blocks[mir_builder.current_block].terminator, Terminator::Unreachable) {
@@ -623,8 +631,18 @@ impl MirLowerer {
                         _ => None,
                     };
                     
-                    if let Some(ty) = inferred_type {
-                        self.local_types.insert(name.clone(), ty);
+                    if let Some(ty_str) = inferred_type {
+                        // Convert inferred type string to HirType
+                        let hir_type = match ty_str.as_str() {
+                            "i32" => HirType::Int32,
+                            "i64" => HirType::Int64,
+                            "u32" => HirType::UInt32,
+                            "u64" => HirType::UInt64,
+                            "bool" => HirType::Bool,
+                            "f64" => HirType::Float64,
+                            _ => HirType::Named(ty_str),
+                        };
+                        self.local_types.insert(name.clone(), hir_type);
                     }
                     
                     let place = Place::Local(name.clone());
@@ -928,9 +946,18 @@ impl MirLowerer {
                 } = &**item
                 {
                     let mut inner_builder = MirBuilder::new();
+                    
+                    // Register parameter types for this function
+                    for (param_name, param_type) in params {
+                        self.local_types.insert(param_name.clone(), param_type.clone());
+                    }
+                    
                     for stmt in body {
                         self.lower_statement_in_builder(&mut inner_builder, stmt)?;
                     }
+                    
+                    // Clear local types after function lowering
+                    self.local_types.clear();
                     
                     if matches!(inner_builder.blocks[inner_builder.current_block].terminator, Terminator::Unreachable) {
                         inner_builder.set_terminator(Terminator::Return(None));
@@ -996,6 +1023,23 @@ impl MirLowerer {
                             let op_temp = builder.gen_temp();
                             self.lower_expression_to_place(builder, operand, Place::Local(op_temp.clone()))?;
                             let rvalue = Rvalue::UnaryOp(*op, Operand::Copy(Place::Local(op_temp)));
+                            builder.add_statement(place, rvalue);
+                        }
+                    }
+                } else if matches!(op, crate::lowering::UnaryOp::Dereference) {
+                    // For dereference, we need special handling
+                    // Extract the place from the operand
+                    match &**operand {
+                        HirExpression::Variable(var_name) => {
+                            // Dereference a variable directly
+                            let rvalue = Rvalue::Deref(Place::Local(var_name.clone()));
+                            builder.add_statement(place, rvalue);
+                        }
+                        _ => {
+                            // For complex expressions, evaluate to temp first
+                            let op_temp = builder.gen_temp();
+                            self.lower_expression_to_place(builder, operand, Place::Local(op_temp.clone()))?;
+                            let rvalue = Rvalue::Deref(Place::Local(op_temp));
                             builder.add_statement(place, rvalue);
                         }
                     }
@@ -1385,15 +1429,32 @@ impl MirLowerer {
             }
             HirExpression::FieldAccess { object, field } => {
                 // For field access, we need to handle it specially:
+                // If the object is a reference (like &self), we need to dereference it first.
                 // If the object is a simple local variable, we can directly access its field.
                 // Otherwise, we need to evaluate the object expression first.
                 match object.as_ref() {
                     HirExpression::Variable(var_name) => {
-                        // Direct field access on a variable - can access field directly without temporary
-                        builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
-                            Box::new(Place::Local(var_name.clone())),
-                            field.clone(),
-                        ))));
+                        // Check if this variable is a reference type parameter
+                        let is_reference = if let Some(ty) = self.local_types.get(var_name) {
+                            matches!(ty, HirType::Reference(_) | HirType::MutableReference(_))
+                        } else {
+                            false
+                        };
+                        
+                        // Check if this variable is a reference type parameter
+                        if is_reference {
+                            // For reference types like &self, dereference first then access field
+                            builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
+                                Box::new(Place::Deref(Box::new(Place::Local(var_name.clone())))),
+                                field.clone(),
+                            ))));
+                        } else {
+                            // Direct field access on a non-reference variable
+                            builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Field(
+                                Box::new(Place::Local(var_name.clone())),
+                                field.clone(),
+                            ))));
+                        }
                     }
                     _ => {
                         // Complex expression - evaluate to temporary first
@@ -1591,7 +1652,7 @@ impl MirLowerer {
                 self.lower_expression_to_place(builder, receiver, Place::Local(receiver_temp.clone()))?;
                 
                 // Try to infer receiver type from the expression
-                let receiver_type = match &**receiver {
+                let receiver_type: Option<HirType> = match &**receiver {
                     HirExpression::Variable(var_name) => {
                         // First check if it's a known local variable with a tracked type
                         if let Some(ty) = self.local_types.get(var_name).cloned() {
@@ -1601,7 +1662,7 @@ impl MirLowerer {
                             // (e.g., unit structs used as values like `let dog = Dog;`)
                             // For now, assume the variable name is the type if it starts with uppercase
                             if var_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                                Some(var_name.clone())
+                                Some(HirType::Named(var_name.clone()))
                             } else {
                                 None
                             }
@@ -1609,13 +1670,13 @@ impl MirLowerer {
                     }
                     HirExpression::String(_) => {
                         // String literals are String type
-                        Some("String".to_string())
+                        Some(HirType::String)
                     }
                     HirExpression::FieldAccess { object, field } => {
                         // For field accesses like self.items, check if field name is a collection
                         // e.g., if field is "items" it's likely a Vec or collection type
                         if method == "push" || method == "pop" || method == "get" || method == "len" {
-                            Some("Vec".to_string())
+                            Some(HirType::Named("Vec".to_string()))
                         } else {
                             None
                         }
@@ -1682,8 +1743,15 @@ impl MirLowerer {
 
                 // Map built-in collection methods to runtime functions
                 let func_name = if let Some(struct_type) = receiver_type {
+                    // Convert HirType to string for matching
+                    let type_str = match &struct_type {
+                        HirType::Named(n) => n.clone(),
+                        HirType::String => "String".to_string(),
+                        _ => format!("{}", struct_type),
+                    };
+                    
                     // Check if it's a built-in collection type
-                    match struct_type.as_str() {
+                    match type_str.as_str() {
                         "Vec" => {
                             match method.as_str() {
                                 "push" => "gaia_vec_push".to_string(),
@@ -1691,7 +1759,7 @@ impl MirLowerer {
                                 "get" => "gaia_vec_get".to_string(),
                                 "len" => "gaia_vec_len".to_string(),
                                 "into_iter" => "Vec::into_iter".to_string(),
-                                _ => format!("{}::{}", struct_type, method),
+                                _ => format!("{}::{}", type_str, method),
                             }
                         }
                         "Iterator" => {
@@ -1716,7 +1784,7 @@ impl MirLowerer {
                                 _ => format!("String::{}", method),
                             }
                         }
-                        _ => format!("{}::{}", struct_type, method),
+                        _ => format!("{}::{}", type_str, method),
                     }
                 } else {
                     // Try to infer type from literals
@@ -1724,6 +1792,9 @@ impl MirLowerer {
                 };
                 
                 // Collect operands: receiver followed by method arguments
+                // For methods with &self, we pass a reference to the receiver, not the value
+                // The receiver is already stored at a stack location (receiver_temp)
+                // We pass the stack location which will be treated as a pointer by the callee
                 let mut operands = vec![Operand::Copy(Place::Local(receiver_temp))];
                 for arg in args {
                     let arg_temp = builder.gen_temp();
