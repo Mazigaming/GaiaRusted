@@ -443,6 +443,26 @@ impl TypeChecker {
             vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
             HirType::Bool);                            // bool
         
+        // enumerate() -> Iterator<(usize, T)>
+        self.context.register_function("Iterator::enumerate".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Iterator".to_string())); // Iterator<(usize, T)>
+        
+        // rev() -> Iterator<T>
+        self.context.register_function("Iterator::rev".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // step_by(step: i64) -> Iterator<T>
+        self.context.register_function("Iterator::step_by".to_string(),
+            vec![HirType::Unknown, HirType::Int64], // Iterator, step
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // partition(closure: Fn(T) -> bool) -> (Vec<T>, Vec<T>)
+        self.context.register_function("Iterator::partition".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Tuple(vec![HirType::Named("Vec".to_string()), HirType::Named("Vec".to_string())])); // (Vec<T>, Vec<T>)
+        
         // vec! macro expansion builtins (Fix #3)
         // __builtin_vec_from([a, b, c]) -> Vec<T>
         self.context.register_function("__builtin_vec_from".to_string(), 

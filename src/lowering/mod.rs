@@ -134,6 +134,33 @@ pub fn get_struct_field_count(struct_name: &str) -> usize {
     })
 }
 
+/// Get the type name of a specific struct field (for codegen)
+pub fn get_struct_field_type_name(struct_name: &str, field_name: &str) -> Option<String> {
+    get_struct_field_type(struct_name, field_name).map(|ty| {
+        match ty {
+            HirType::Named(name) => name,
+            HirType::Int32 => "i32".to_string(),
+            HirType::Int64 => "i64".to_string(),
+            HirType::Bool => "bool".to_string(),
+            HirType::String => "String".to_string(),
+            _ => "unknown".to_string(),
+        }
+    })
+}
+
+/// Get the field name at a specific index in a struct
+pub fn get_struct_field_name(struct_name: &str, index: usize) -> Option<String> {
+    STRUCT_REGISTRY.with(|registry| {
+        registry.borrow().get(struct_name).and_then(|fields| {
+            if index < fields.len() {
+                Some(fields[index].0.clone())
+            } else {
+                None
+            }
+        })
+    })
+}
+
 fn clear_struct_registry() {
     STRUCT_REGISTRY.with(|registry| {
         registry.borrow_mut().clear();

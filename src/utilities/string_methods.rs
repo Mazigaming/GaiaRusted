@@ -145,6 +145,34 @@ impl StringMethodRegistry {
         ));
 
         self.register_method(StringMethod::new(
+            "strip_prefix",
+            vec!["&str".to_string()],
+            "Option<String>",
+            "builtin_str_strip_prefix",
+        ));
+
+        self.register_method(StringMethod::new(
+            "strip_suffix",
+            vec!["&str".to_string()],
+            "Option<String>",
+            "builtin_str_strip_suffix",
+        ));
+
+        self.register_method(StringMethod::new(
+            "split_whitespace",
+            vec![],
+            "Vec<String>",
+            "builtin_str_split_whitespace",
+        ));
+
+        self.register_method(StringMethod::new(
+            "lines",
+            vec![],
+            "Vec<String>",
+            "builtin_str_lines",
+        ));
+
+        self.register_method(StringMethod::new(
             "as_bytes",
             vec![],
             "&[u8]",
