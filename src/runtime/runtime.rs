@@ -100,6 +100,7 @@ pub fn generate_runtime_assembly() -> String {
 .globl String_impl_cos
 .globl String_impl_floor
 .globl String_impl_ceil
+.globl __extract_enum_value
 
 gaia_print_i32:
     push rbp
@@ -2435,6 +2436,20 @@ String_impl_ceil:
       # xmm0 = f64 value
       # Call libm ceil
       roundsd xmm0, xmm0, 2  # Round up
+      ret
+
+# __extract_enum_value: Extract the inner value from Option<T> or Result<T, E>
+# Memory layout: [tag:i64][value:i64]
+# rdi = pointer to the Option/Result (or the value itself if stored in register)
+# Returns: the inner value in rax
+__extract_enum_value:
+      push rbp
+      mov rbp, rsp
+      # For Option/Result, the value is at offset 8 from the base
+      # In our encoding, it's just the second i64
+      mov rax, [rdi + 8]  # Extract the value at offset 8
+      mov rsp, rbp
+      pop rbp
       ret
 "#
     .to_string()

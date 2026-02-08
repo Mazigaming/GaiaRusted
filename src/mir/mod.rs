@@ -353,6 +353,7 @@ pub struct MirLowerer {
     closure_vars: std::collections::HashMap<String, (String, Vec<(String, HirType)>)>, // Maps variable name -> (function name, captures)
     available_functions: std::collections::HashSet<String>, // All functions that exist (including qualified names)
     local_types: std::collections::HashMap<String, HirType>, // Maps local variable names to their types
+    var_struct_types: std::collections::HashMap<String, String>, // Maps variable names to struct type names (for operator overloading)
 }
 
 impl MirLowerer {
@@ -365,6 +366,7 @@ impl MirLowerer {
             closure_vars: std::collections::HashMap::new(),
             available_functions: std::collections::HashSet::new(),
             local_types: std::collections::HashMap::new(),
+            var_struct_types: std::collections::HashMap::new(),
         }
     }
 
@@ -595,8 +597,10 @@ impl MirLowerer {
                     let inferred_type = match init {
                         HirExpression::Call { func, .. } => {
                             if let HirExpression::Variable(func_name) = &**func {
-                                // Extract struct name from functions like "Counter::new"
-                                func_name.split("::").next().map(|s| s.to_string())
+                                // Extract struct name from functions like "Counter::new" or "Point::add"
+                                // For operator impl methods (Point::add), the return type is Point
+                                let struct_name = func_name.split("::").next().map(|s| s.to_string());
+                                struct_name
                             } else {
                                 None
                             }
@@ -640,9 +644,14 @@ impl MirLowerer {
                             "u64" => HirType::UInt64,
                             "bool" => HirType::Bool,
                             "f64" => HirType::Float64,
-                            _ => HirType::Named(ty_str),
+                            _ => HirType::Named(ty_str.clone()),
                         };
                         self.local_types.insert(name.clone(), hir_type);
+                        
+                        // Also track struct types for operator overloading (PHASE 2.1)
+                        if !matches!(ty_str.as_str(), "i32" | "i64" | "u32" | "u64" | "bool" | "f64" | "Iterator" | "Option" | "Vec") {
+                            self.var_struct_types.insert(name.clone(), ty_str);
+                        }
                     }
                     
                     let place = Place::Local(name.clone());
@@ -996,7 +1005,14 @@ impl MirLowerer {
                 builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Bool(*b))));
             }
             HirExpression::Variable(name) => {
-                builder.add_statement(place, Rvalue::Use(Operand::Copy(Place::Local(name.clone()))));
+                builder.add_statement(place.clone(), Rvalue::Use(Operand::Copy(Place::Local(name.clone()))));
+                
+                // Propagate struct type for operator overloading (PHASE 2.1)
+                if let Some(struct_type) = self.var_struct_types.get(name).cloned() {
+                    if let Place::Local(dest_name) = &place {
+                        self.var_struct_types.insert(dest_name.clone(), struct_type);
+                    }
+                }
             }
             HirExpression::BinaryOp { op, left, right } => {
                 let left_temp = builder.gen_temp();
@@ -1004,8 +1020,44 @@ impl MirLowerer {
                 self.lower_expression_to_place(builder, left, Place::Local(left_temp.clone()))?;
                 self.lower_expression_to_place(builder, right, Place::Local(right_temp.clone()))?;
                 
-                let rvalue = Rvalue::BinaryOp(*op, Operand::Copy(Place::Local(left_temp)), Operand::Copy(Place::Local(right_temp)));
-                builder.add_statement(place, rvalue);
+                // PHASE 2.1: Operator Overloading
+                // Try to determine the type of the left operand for operator impl lookup
+                let left_type_name = if let HirExpression::Variable(var_name) = left.as_ref() {
+                    // For variables, check if we already know their type
+                    self.var_struct_types.get(var_name).cloned()
+                } else if let HirExpression::StructLiteral { name, .. } = left.as_ref() {
+                    // For struct literals, we know the type directly
+                    Some(name.clone())
+                } else {
+                    None
+                };
+                
+                let use_operator_impl = if let Some(struct_type) = left_type_name {
+                    self.var_struct_types.insert(left_temp.clone(), struct_type.clone());
+                    crate::lowering::find_operator_impl(&struct_type, op).is_some()
+                } else if let Some(struct_type) = self.var_struct_types.get(&left_temp) {
+                    crate::lowering::find_operator_impl(struct_type, op).is_some()
+                } else {
+                    false
+                };
+                
+                if use_operator_impl {
+                    // Desugar to method call
+                    if let Some(struct_type) = self.var_struct_types.get(&left_temp) {
+                        if let Some(impl_method) = crate::lowering::find_operator_impl(struct_type, op) {
+                            let rvalue = Rvalue::Call(impl_method, vec![Operand::Copy(Place::Local(left_temp)), Operand::Copy(Place::Local(right_temp))]);
+                            builder.add_statement(place, rvalue);
+                        } else {
+                            // Fallback to primitive
+                            let rvalue = Rvalue::BinaryOp(*op, Operand::Copy(Place::Local(left_temp)), Operand::Copy(Place::Local(right_temp)));
+                            builder.add_statement(place, rvalue);
+                        }
+                    }
+                } else {
+                    // Primitive operation
+                    let rvalue = Rvalue::BinaryOp(*op, Operand::Copy(Place::Local(left_temp)), Operand::Copy(Place::Local(right_temp)));
+                    builder.add_statement(place, rvalue);
+                }
             }
             HirExpression::UnaryOp { op, operand } => {
                 // Special handling for Reference and MutableReference:
@@ -1510,7 +1562,12 @@ impl MirLowerer {
                     operands.push(Operand::Copy(Place::Local(field_temp)));
                 }
                 // Create aggregate with proper struct name
-                builder.add_statement(place, Rvalue::Aggregate(name.clone(), operands));
+                builder.add_statement(place.clone(), Rvalue::Aggregate(name.clone(), operands));
+                
+                // Register struct type for operator overloading (PHASE 2.1)
+                if let Place::Local(var_name) = &place {
+                    self.var_struct_types.insert(var_name.clone(), name.clone());
+                }
             }
             HirExpression::ArrayLiteral(elements) => {
                 // Convert each array element to an operand
@@ -1632,19 +1689,33 @@ impl MirLowerer {
                 
                 builder.switch_block(continue_block);
             }
-            HirExpression::EnumVariant { enum_name: _, variant_name: _, args } => {
+            HirExpression::EnumVariant { enum_name, variant_name, args } => {
+                // Evaluate all arguments first
                 for arg in args {
                     let temp = builder.gen_temp();
                     self.lower_expression_to_place(builder, arg, Place::Local(temp))?;
                 }
-                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+                // Store the discriminant value for this variant
+                if let Some(discriminant) = crate::lowering::get_enum_variant(enum_name, variant_name) {
+                    builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(discriminant))));
+                } else {
+                    // Unknown variant, default to 0
+                    builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+                }
             }
-            HirExpression::EnumStructVariant { enum_name: _, variant_name: _, fields } => {
+            HirExpression::EnumStructVariant { enum_name, variant_name, fields } => {
+                // Evaluate all field expressions first
                 for (_, field_expr) in fields {
                     let temp = builder.gen_temp();
                     self.lower_expression_to_place(builder, field_expr, Place::Local(temp))?;
                 }
-                builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+                // Store the discriminant value for this variant
+                if let Some(discriminant) = crate::lowering::get_enum_variant(enum_name, variant_name) {
+                    builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(discriminant))));
+                } else {
+                    // Unknown variant, default to 0
+                    builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Integer(0))));
+                }
             }
             HirExpression::MethodCall { receiver, method, args } => {
                 // Evaluate receiver to a temporary

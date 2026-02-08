@@ -211,6 +211,8 @@ impl UnsafeCheckerEnhanced {
             HirType::Range => "Range".to_string(),
             HirType::Vec(element_type) => format!("Vec<{}>", self.type_name(element_type)),
             HirType::Option(inner_type) => format!("Option<{}>", self.type_name(inner_type)),
+            HirType::Box(inner_type) => format!("Box<{}>", self.type_name(inner_type)),
+            HirType::Result { ok_type, err_type } => format!("Result<{}, {}>", self.type_name(ok_type), self.type_name(err_type)),
             HirType::Unknown => "?".to_string(),
         }
     }

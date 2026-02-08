@@ -22,6 +22,7 @@ thread_local! {
     static SCOPE_TRACKER: RefCell<ScopeTracker> = RefCell::new(ScopeTracker::new());
     static STRUCT_REGISTRY: RefCell<HashMap<String, Vec<(String, HirType)>>> = RefCell::new(HashMap::new());
     static FUNCTION_REGISTRY: RefCell<HashMap<String, HirType>> = RefCell::new(HashMap::new());
+    static IMPL_REGISTRY: RefCell<HashMap<String, HashMap<String, Vec<String>>>> = RefCell::new(HashMap::new());
 }
 
 /// Tracks available variables in the current scope
@@ -77,7 +78,7 @@ impl ScopeTracker {
     }
 }
 
-fn get_enum_variant(enum_name: &str, variant_name: &str) -> Option<i64> {
+pub fn get_enum_variant(enum_name: &str, variant_name: &str) -> Option<i64> {
     ENUM_REGISTRY.with(|registry| {
         registry.borrow().get(enum_name).and_then(|variants| {
             variants.get(variant_name).copied()
@@ -148,6 +149,16 @@ pub fn get_struct_field_type_name(struct_name: &str, field_name: &str) -> Option
     })
 }
 
+/// Get nested struct name from a field (for nested access like o.inner.x)
+pub fn get_field_type(struct_name: &str, field_name: &str) -> Option<String> {
+    get_struct_field_type(struct_name, field_name).and_then(|ty| {
+        match ty {
+            HirType::Named(name) => Some(name),
+            _ => None,
+        }
+    })
+}
+
 /// Get the field name at a specific index in a struct
 pub fn get_struct_field_name(struct_name: &str, index: usize) -> Option<String> {
     STRUCT_REGISTRY.with(|registry| {
@@ -212,6 +223,63 @@ fn get_available_bindings() -> HashMap<String, HirType> {
 fn clear_scope_tracker() {
     SCOPE_TRACKER.with(|tracker| {
         *tracker.borrow_mut() = ScopeTracker::new();
+    });
+}
+
+// ============================================================================
+// OPERATOR TRAIT HANDLING
+// ============================================================================
+
+/// Map binary operator to trait name and method name
+pub fn get_operator_trait_info(op: &BinaryOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        BinaryOp::Add => Some(("Add", "add")),
+        BinaryOp::Subtract => Some(("Sub", "sub")),
+        BinaryOp::Multiply => Some(("Mul", "mul")),
+        BinaryOp::Divide => Some(("Div", "div")),
+        BinaryOp::Modulo => Some(("Rem", "rem")),
+        BinaryOp::Equal => Some(("PartialEq", "eq")),
+        BinaryOp::NotEqual => Some(("PartialEq", "ne")),
+        BinaryOp::Less => Some(("PartialOrd", "lt")),
+        BinaryOp::LessEqual => Some(("PartialOrd", "le")),
+        BinaryOp::Greater => Some(("PartialOrd", "gt")),
+        BinaryOp::GreaterEqual => Some(("PartialOrd", "ge")),
+        _ => None,
+    }
+}
+
+/// Register an impl block for trait method lookup
+fn register_impl(type_name: String, trait_name: String, method_names: Vec<String>) {
+    IMPL_REGISTRY.with(|registry| {
+        let mut reg = registry.borrow_mut();
+        let type_entry = reg.entry(type_name).or_insert_with(HashMap::new);
+        type_entry.insert(trait_name, method_names);
+    });
+}
+
+/// Check if a type has an implementation of a trait operator
+pub fn find_operator_impl(type_name: &str, op: &BinaryOp) -> Option<String> {
+    let (trait_name, method_name) = get_operator_trait_info(op)?;
+    
+    IMPL_REGISTRY.with(|registry| {
+        let reg = registry.borrow();
+        reg.get(type_name)
+            .and_then(|traits| traits.get(trait_name))
+            .and_then(|methods| {
+                if methods.contains(&method_name.to_string()) {
+                    // Return qualified method name: "TypeName::method"
+                    Some(format!("{}::{}", type_name, method_name))
+                } else {
+                    None
+                }
+            })
+    })
+}
+
+/// Clear the impl registry (for testing/cleanup)
+fn clear_impl_registry() {
+    IMPL_REGISTRY.with(|registry| {
+        registry.borrow_mut().clear();
     });
 }
 
@@ -791,6 +859,15 @@ pub enum HirType {
     /// Option type: Option<T>
     Option(Box<HirType>),
 
+    /// Box type: Box<T> (heap allocation)
+    Box(Box<HirType>),
+
+    /// Result type: Result<T, E>
+    Result {
+        ok_type: Box<HirType>,
+        err_type: Box<HirType>,
+    },
+
     /// Unknown type (will be inferred later)
     Unknown,
 }
@@ -855,6 +932,8 @@ impl fmt::Display for HirType {
             HirType::Range => write!(f, "Range"),
             HirType::Vec(elem_type) => write!(f, "Vec<{}>", elem_type),
             HirType::Option(inner_type) => write!(f, "Option<{}>", inner_type),
+            HirType::Box(inner_type) => write!(f, "Box<{}>", inner_type),
+            HirType::Result { ok_type, err_type } => write!(f, "Result<{}, {}>", ok_type, err_type),
             HirType::Unknown => write!(f, "?"),
         }
     }
@@ -945,9 +1024,34 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
                 types.iter().map(|t| lower_type(t)).collect();
             Ok(HirType::Tuple(types_hir?))
         }
-        Type::Generic { .. } => {
-            // Generic types with type parameters - treat as a named type for now
-            Ok(HirType::Named("Generic".to_string()))
+        Type::Generic { name, type_args } => {
+            // Handle common generic types
+            match name.as_str() {
+                "Vec" if !type_args.is_empty() => {
+                    let elem_type = lower_type(&type_args[0])?;
+                    Ok(HirType::Vec(Box::new(elem_type)))
+                }
+                "Option" if !type_args.is_empty() => {
+                    let inner_type = lower_type(&type_args[0])?;
+                    Ok(HirType::Option(Box::new(inner_type)))
+                }
+                "Box" if !type_args.is_empty() => {
+                    let inner_type = lower_type(&type_args[0])?;
+                    Ok(HirType::Box(Box::new(inner_type)))
+                }
+                "Result" if type_args.len() == 2 => {
+                    let ok_type = lower_type(&type_args[0])?;
+                    let err_type = lower_type(&type_args[1])?;
+                    Ok(HirType::Result {
+                        ok_type: Box::new(ok_type),
+                        err_type: Box::new(err_type),
+                    })
+                }
+                _ => {
+                    // For other generics, treat as a named type
+                    Ok(HirType::Named(name.clone()))
+                }
+            }
         }
         Type::TypeVar(_name) => {
             // Type variable - treat as unknown for now
@@ -1035,6 +1139,16 @@ fn infer_hir_type(expr: &HirExpression) -> HirType {
                 // First, check if it's a user-defined function
                 if let Some(ret_ty) = get_function_return_type(func_name) {
                     return ret_ty;
+                }
+                
+                // Enum value extraction - infer from the argument's inner type
+                if func_name == "__extract_enum_value" && !args.is_empty() {
+                    let arg_type = infer_hir_type(&args[0]);
+                    match arg_type {
+                        HirType::Option(ref inner) => return (**inner).clone(),
+                        HirType::Result { ref ok_type, .. } => return (**ok_type).clone(),
+                        _ => return HirType::Int64, // Default fallback
+                    }
                 }
                 
                 // Methods that return i64/usize
@@ -1243,9 +1357,23 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                         // Identifiers always match (binding), so use true
                         HirExpression::Bool(true)
                     }
-                    Pattern::EnumVariant { .. } => {
-                        // Simplified enum patterns
-                        HirExpression::Bool(true)
+                    Pattern::EnumVariant { path, data } => {
+                        // For builtin enum variants, check the variant
+                        if path.len() == 1 {
+                            match path[0].as_str() {
+                                "Some" => {
+                                    // Check if scrutinee is Some (not None)
+                                    // We'll use a method call is_some() when available
+                                    // For now, just match - proper implementation pending
+                                    HirExpression::Bool(true)
+                                }
+                                "Ok" => HirExpression::Bool(true),
+                                "Err" => HirExpression::Bool(true),
+                                _ => HirExpression::Bool(true),
+                            }
+                        } else {
+                            HirExpression::Bool(true)
+                        }
                     }
                     Pattern::Tuple(_) => {
                         // Simplified tuple patterns
@@ -1273,19 +1401,60 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                 let mut arm_body = Vec::new();
                 
                 // Add let bindings for pattern variables
-                if let Pattern::EnumVariant { path: _, data: Some(inner_pattern) } = &arm.pattern {
+                if let Pattern::EnumVariant { path, data: Some(inner_pattern) } = &arm.pattern {
                     // Extract variable name from inner pattern
                     if let Pattern::Identifier(var_name) = &**inner_pattern {
-                        // Create a dummy binding for now - ideally we'd extract the actual value
-                        // For now, treat the variable as bound to the scrutinee value
+                        // Infer the type of the scrutinee to extract the inner type
+                        let scrutinee_type = infer_hir_type(&scrutinee_hir);
+                        
+                        // Determine the inner type from the pattern
+                        let inner_type = if path.len() == 1 {
+                            match path[0].as_str() {
+                                "Some" => {
+                                    // Extract inner type from Option<T>
+                                    match scrutinee_type {
+                                        HirType::Option(ref inner) => (**inner).clone(),
+                                        _ => HirType::Int64, // Default fallback
+                                    }
+                                }
+                                "Ok" => {
+                                    // Extract ok type from Result<T, E>
+                                    match scrutinee_type {
+                                        HirType::Result { ref ok_type, .. } => (**ok_type).clone(),
+                                        _ => HirType::Int64, // Default fallback
+                                    }
+                                }
+                                "Err" => {
+                                    // Extract error type from Result<T, E>
+                                    match scrutinee_type {
+                                        HirType::Result { ref err_type, .. } => (**err_type).clone(),
+                                        _ => HirType::Int64, // Default fallback
+                                    }
+                                }
+                                _ => HirType::Unknown,
+                            }
+                        } else {
+                            HirType::Unknown
+                        };
+                        
+                        // Extract the value using a special method call that codegen will recognize
+                        // This desugars to calling __extract_enum_value(scrutinee, variant_index)
+                        let extract_expr = HirExpression::Call {
+                            func: Box::new(HirExpression::Variable("__extract_enum_value".to_string())),
+                            args: vec![scrutinee_hir.clone()],
+                        };
+                        
                         arm_body.push(HirStatement::Let {
-                            name: var_name.clone(),
-                            mutable: false,
-                            ty: HirType::Unknown,
-                            init: scrutinee_hir.clone(),
+                             name: var_name.clone(),
+                             mutable: false,
+                             ty: inner_type.clone(),
+                             init: extract_expr,
                         });
-                    }
-                }
+                        
+                        // Add the binding to the scope tracker so it's available for the arm body
+                        add_binding(var_name.clone(), inner_type);
+                     }
+                 }
                 
                 let arm_body_expr = lower_expression(&arm.body)?;
                 arm_body.push(HirStatement::Expression(arm_body_expr));
@@ -2375,6 +2544,8 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
     clear_enum_registry();
     clear_struct_registry();
     clear_function_registry();
+    clear_impl_registry();
+    clear_scope_tracker();
     
     // Helper function to replace Self with actual struct name in types
     fn replace_self_in_type(ty: &Type, struct_name: &str) -> Type {
@@ -2443,9 +2614,22 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
     }
     
     // Extract impl block methods and add them as regular functions with qualified names
+    // Also register trait impls for operator overloading
     let mut expanded_items = Vec::new();
     for item in &all_items {
-        if let Item::Impl { struct_name, methods, .. } = item {
+        if let Item::Impl { struct_name, trait_name, methods, .. } = item {
+            // Register trait impl methods for operator lookup
+            if let Some(trait_name) = trait_name {
+                let method_names: Vec<String> = methods.iter().filter_map(|method| {
+                    if let Item::Function { name, .. } = method {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                }).collect();
+                register_impl(struct_name.clone(), trait_name.clone(), method_names);
+            }
+            
             for method in methods {
                 if let Item::Function {
                     name,

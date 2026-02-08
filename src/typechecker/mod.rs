@@ -126,6 +126,8 @@ pub struct TypeContext {
     impl_methods: HashMap<(String, String), (Vec<HirType>, HirType)>,
     /// Generic parameter trait bounds: param_name -> Vec<trait_name>
     generic_bounds: HashMap<String, Vec<String>>,
+    /// Trait impls: (struct_name, trait_name) -> output_type (for operator traits)
+    trait_impls: HashMap<(String, String), HirType>,
 }
 
 impl TypeContext {
@@ -138,6 +140,7 @@ impl TypeContext {
             traits: HashMap::new(),
             impl_methods: HashMap::new(),
             generic_bounds: HashMap::new(),
+            trait_impls: HashMap::new(),
         }
     }
 
@@ -189,6 +192,16 @@ impl TypeContext {
     /// Look up an impl block method
     fn lookup_impl_method(&self, struct_name: &str, method_name: &str) -> Option<(Vec<HirType>, HirType)> {
         self.impl_methods.get(&(struct_name.to_string(), method_name.to_string())).cloned()
+    }
+
+    /// Register a trait impl with output type (for operator traits)
+    fn register_trait_impl(&mut self, struct_name: String, trait_name: String, output_type: HirType) {
+        self.trait_impls.insert((struct_name, trait_name), output_type);
+    }
+
+    /// Look up a trait impl for a type
+    fn lookup_trait_impl(&self, struct_name: &str, trait_name: &str) -> Option<HirType> {
+        self.trait_impls.get(&(struct_name.to_string(), trait_name.to_string())).cloned()
     }
 }
 
@@ -246,6 +259,11 @@ impl TypeChecker {
         self.context.register_function("__builtin_eprintln".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_printf".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         
+        // Enum/pattern matching helper - extracts value from Some/Ok/Err
+        // This is a polymorphic function that returns the inner type
+        // Type checker will infer return type from context
+        self.context.register_function("__extract_enum_value".to_string(), vec![HirType::Unknown], HirType::Unknown);
+        
         // Type-aware print functions (used by println! lowering for different types)
         self.context.register_function("gaia_print_i32".to_string(), vec![HirType::Int32], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_i64".to_string(), vec![HirType::Int64], HirType::Tuple(vec![]));
@@ -271,6 +289,57 @@ impl TypeChecker {
         self.context.register_function("HashSet::new".to_string(), vec![], HirType::Named("HashSet".to_string()));
         self.context.register_function("LinkedList::new".to_string(), vec![], HirType::Named("LinkedList".to_string()));
         self.context.register_function("BTreeMap::new".to_string(), vec![], HirType::Named("BTreeMap".to_string()));
+        
+        // Smart pointer constructors (PHASE 2.2 & 2.3)
+        // Box::new(value) - signature handled specially in typechecker/codegen
+        self.context.register_function("Box::new".to_string(), vec![HirType::Unknown], HirType::Named("Box".to_string()));
+        
+        // Rc::new(value) - reference counting smart pointer (PHASE 2.3)
+        self.context.register_function("Rc::new".to_string(), vec![HirType::Unknown], HirType::Named("Rc".to_string()));
+        
+
+        
+        // Operator traits (PHASE 2.1)
+        // These are builtin traits for operator overloading
+        let mut add_trait = HashMap::new();
+        add_trait.insert("add".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Add".to_string(), add_trait);
+        
+        let mut sub_trait = HashMap::new();
+        sub_trait.insert("sub".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Sub".to_string(), sub_trait);
+        
+        let mut mul_trait = HashMap::new();
+        mul_trait.insert("mul".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Mul".to_string(), mul_trait);
+        
+        let mut div_trait = HashMap::new();
+        div_trait.insert("div".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Div".to_string(), div_trait);
+        
+        let mut rem_trait = HashMap::new();
+        rem_trait.insert("rem".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Rem".to_string(), rem_trait);
+        
+        let mut bitand_trait = HashMap::new();
+        bitand_trait.insert("bitand".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("BitAnd".to_string(), bitand_trait);
+        
+        let mut bitor_trait = HashMap::new();
+        bitor_trait.insert("bitor".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("BitOr".to_string(), bitor_trait);
+        
+        let mut bitxor_trait = HashMap::new();
+        bitxor_trait.insert("bitxor".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("BitXor".to_string(), bitxor_trait);
+        
+        let mut shl_trait = HashMap::new();
+        shl_trait.insert("shl".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Shl".to_string(), shl_trait);
+        
+        let mut shr_trait = HashMap::new();
+        shr_trait.insert("shr".to_string(), (vec![HirType::Unknown, HirType::Unknown], HirType::Unknown));
+        self.context.register_trait("Shr".to_string(), shr_trait);
         
         // Collection methods (qualified with collection type)
         // Vec methods
@@ -736,7 +805,24 @@ impl TypeChecker {
                 HirItem::Use { .. } => {
                     // Use statements are processed in second pass
                 }
-                HirItem::Impl { struct_name, methods, .. } => {
+                HirItem::Impl { struct_name, trait_name, methods, .. } => {
+                    // If this is a trait impl for an operator trait, register it
+                    if let Some(trait_name) = trait_name {
+                        let operator_traits = ["Add", "Sub", "Mul", "Div", "Rem", "BitAnd", "BitOr", "BitXor", "Shl", "Shr"];
+                        if operator_traits.contains(&trait_name.as_str()) {
+                            // For operator traits, use the return type of the operator method
+                            for method in methods {
+                                if let HirItem::Function { name: method_name, return_type, .. } = method {
+                                    if let Some(ret_type) = return_type {
+                                        // Register the operator trait impl
+                                        self.context.register_trait_impl(struct_name.clone(), trait_name.clone(), ret_type.clone());
+                                        break; // Only need the first method's return type
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     for method in methods {
                         if let HirItem::Function { name, params, return_type, .. } = method {
                             let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
@@ -839,8 +925,13 @@ impl TypeChecker {
     /// Returns a substitution map (generic name -> concrete type) if successful
     fn try_unify_type(&self, generic_ty: &HirType, actual_ty: &HirType) -> Option<(String, HirType)> {
         match generic_ty {
+            // Single uppercase letter like T, U, V
             HirType::Named(name) if name.len() == 1 && name.chars().next().unwrap().is_uppercase() => {
-                // This looks like a generic type parameter (single uppercase letter like T, U, etc.)
+                Some((name.clone(), actual_ty.clone()))
+            }
+            // Also handle multi-character generic names like `Type`, `Element`, etc.
+            HirType::Named(name) if !self.context.structs.contains_key(name) => {
+                // If it's not a known struct, treat it as a generic parameter
                 Some((name.clone(), actual_ty.clone()))
             }
             _ => None
@@ -856,6 +947,25 @@ impl TypeChecker {
                 } else {
                     ty.clone()
                 }
+            }
+            HirType::Reference(inner) => {
+                HirType::Reference(
+                    Box::new(self.apply_substitutions(inner, subs))
+                )
+            }
+            HirType::MutableReference(inner) => {
+                HirType::MutableReference(
+                    Box::new(self.apply_substitutions(inner, subs))
+                )
+            }
+            HirType::Array { element_type, size } => {
+                HirType::Array {
+                    element_type: Box::new(self.apply_substitutions(element_type, subs)),
+                    size: *size,
+                }
+            }
+            HirType::Tuple(types) => {
+                HirType::Tuple(types.iter().map(|t| self.apply_substitutions(t, subs)).collect())
             }
             _ => ty.clone()
         }
@@ -1339,63 +1449,88 @@ impl TypeChecker {
             }
 
             HirExpression::BinaryOp { op, left, right } => {
-                let left_ty = self.infer_type(left)?;
-                let right_ty = self.infer_type(right)?;
+               let left_ty = self.infer_type(left)?;
+               let right_ty = self.infer_type(right)?;
 
-                // Type compatibility check with support for Unknown (type inference)
-                let result_ty = if left_ty == HirType::Unknown && right_ty != HirType::Unknown {
-                    right_ty.clone()
-                } else if right_ty == HirType::Unknown && left_ty != HirType::Unknown {
-                    left_ty.clone()
-                } else if left_ty == HirType::Unknown && right_ty == HirType::Unknown {
-                    HirType::Unknown
-                } else if left_ty != right_ty && left_ty != HirType::Unknown && right_ty != HirType::Unknown {
-                    // Allow coercion between integer types (i32 <-> i64)
-                    let is_integer_coercion = matches!((left_ty.clone(), right_ty.clone()), 
-                        (HirType::Int32, HirType::Int64) | (HirType::Int64, HirType::Int32));
-                    
-                    if !is_integer_coercion {
-                        return Err(TypeCheckError {
-                            message: format!(
-                                "Type mismatch in binary operation: {} and {}",
-                                left_ty, right_ty
-                            ),
-                        });
-                    }
-                    
-                    // For mixed int operations, promote to i64
-                    if matches!((left_ty.clone(), right_ty.clone()),
-                        (HirType::Int32, HirType::Int64) | (HirType::Int64, HirType::Int32)) {
-                        HirType::Int64
-                    } else {
-                        left_ty.clone()
-                    }
-                } else {
-                    left_ty.clone()
-                };
+               // Map BinaryOp to operator trait name
+               let op_trait_name = match op {
+                   BinaryOp::Add => Some("Add"),
+                   BinaryOp::Subtract => Some("Sub"),
+                   BinaryOp::Multiply => Some("Mul"),
+                   BinaryOp::Divide => Some("Div"),
+                   BinaryOp::Modulo => Some("Rem"),
+                   BinaryOp::BitwiseAnd => Some("BitAnd"),
+                   BinaryOp::BitwiseOr => Some("BitOr"),
+                   BinaryOp::BitwiseXor => Some("BitXor"),
+                   BinaryOp::LeftShift => Some("Shl"),
+                   BinaryOp::RightShift => Some("Shr"),
+                   _ => None,
+               };
+
+               // Check for custom operator impl
+               if let Some(trait_name) = op_trait_name {
+                   if let HirType::Named(type_name) = &left_ty {
+                       if let Some(output_ty) = self.context.lookup_trait_impl(type_name, trait_name) {
+                           // Custom impl found, use that output type
+                           return Ok(output_ty);
+                       }
+                   }
+               }
+
+               // Type compatibility check with support for Unknown (type inference)
+               let result_ty = if left_ty == HirType::Unknown && right_ty != HirType::Unknown {
+                   right_ty.clone()
+               } else if right_ty == HirType::Unknown && left_ty != HirType::Unknown {
+                   left_ty.clone()
+               } else if left_ty == HirType::Unknown && right_ty == HirType::Unknown {
+                   HirType::Unknown
+               } else if left_ty != right_ty && left_ty != HirType::Unknown && right_ty != HirType::Unknown {
+                   // Allow coercion between integer types (i32 <-> i64)
+                   let is_integer_coercion = matches!((left_ty.clone(), right_ty.clone()), 
+                       (HirType::Int32, HirType::Int64) | (HirType::Int64, HirType::Int32));
+                   
+                   if !is_integer_coercion {
+                       return Err(TypeCheckError {
+                           message: format!(
+                               "Type mismatch in binary operation: {} and {}",
+                               left_ty, right_ty
+                           ),
+                       });
+                   }
+                   
+                   // For mixed int operations, promote to i64
+                   if matches!((left_ty.clone(), right_ty.clone()),
+                       (HirType::Int32, HirType::Int64) | (HirType::Int64, HirType::Int32)) {
+                       HirType::Int64
+                   } else {
+                       left_ty.clone()
+                   }
+               } else {
+                   left_ty.clone()
+               };
 
                 // Determine result type based on operator
-                match op {
-                    BinaryOp::Add
-                    | BinaryOp::Subtract
-                    | BinaryOp::Multiply
-                    | BinaryOp::Divide
-                    | BinaryOp::Modulo
-                    | BinaryOp::BitwiseAnd
-                    | BinaryOp::BitwiseOr
-                    | BinaryOp::BitwiseXor
-                    | BinaryOp::LeftShift
-                    | BinaryOp::RightShift => Ok(result_ty),
+               match op {
+                   BinaryOp::Add
+                   | BinaryOp::Subtract
+                   | BinaryOp::Multiply
+                   | BinaryOp::Divide
+                   | BinaryOp::Modulo
+                   | BinaryOp::BitwiseAnd
+                   | BinaryOp::BitwiseOr
+                   | BinaryOp::BitwiseXor
+                   | BinaryOp::LeftShift
+                   | BinaryOp::RightShift => Ok(result_ty),
 
-                    BinaryOp::Equal
-                    | BinaryOp::NotEqual
-                    | BinaryOp::Less
-                    | BinaryOp::LessEqual
-                    | BinaryOp::Greater
-                    | BinaryOp::GreaterEqual
-                    | BinaryOp::And
-                    | BinaryOp::Or => Ok(HirType::Bool),
-                }
+                   BinaryOp::Equal
+                   | BinaryOp::NotEqual
+                   | BinaryOp::Less
+                   | BinaryOp::LessEqual
+                   | BinaryOp::Greater
+                   | BinaryOp::GreaterEqual
+                   | BinaryOp::And
+                   | BinaryOp::Or => Ok(HirType::Bool),
+               }
             }
 
             HirExpression::UnaryOp { op, operand } => {
@@ -1425,14 +1560,20 @@ impl TypeChecker {
                             UnaryOp::Negate | UnaryOp::BitwiseNot => Ok(operand_ty),
                             UnaryOp::Not => Ok(HirType::Bool),
                             UnaryOp::Dereference => {
-                                match &operand_ty {
-                                    HirType::Reference(inner) => Ok((**inner).clone()),
-                                    HirType::Pointer(inner) => Ok((**inner).clone()),
-                                    _ => Err(TypeCheckError {
-                                        message: format!("Cannot dereference type: {}", operand_ty),
-                                    }),
-                                }
-                            }
+                                 match &operand_ty {
+                                     HirType::Reference(inner) => Ok((**inner).clone()),
+                                     HirType::Pointer(inner) => Ok((**inner).clone()),
+                                     HirType::Box(inner) => Ok((**inner).clone()),
+                                     HirType::Named(name) if name.starts_with("Rc<") && name.ends_with(">") => {
+                                        // Extract inner type from Rc<T>
+                                        let inner_str = &name[3..name.len()-1];  // "Rc<T>" -> "T"
+                                        Ok(HirType::Named(inner_str.to_string()))
+                                     }
+                                     _ => Err(TypeCheckError {
+                                         message: format!("Cannot dereference type: {}", operand_ty),
+                                     }),
+                                 }
+                             }
                             _ => unreachable!(),
                         }
                     }
@@ -1562,7 +1703,35 @@ impl TypeChecker {
                         }
                         
                         // Try to look it up as a function
-                        if let Some((param_types, ret_type)) = self.context.lookup_function(name) {
+                         if let Some((param_types, ret_type)) = self.context.lookup_function(name) {
+                             // Special handling for Box::new - return Box<T> based on argument type
+                             if name == "Box::new" {
+                                 if args.len() != 1 {
+                                     return Err(TypeCheckError {
+                                         message: format!(
+                                             "Box::new expects 1 argument, got {}",
+                                             args.len()
+                                         ),
+                                     });
+                                 }
+                                 let arg_ty = self.infer_type(&args[0])?;
+                                 return Ok(HirType::Box(Box::new(arg_ty)));
+                             }
+                             
+                             // Special handling for Rc::new - return Rc<T> based on argument type (PHASE 2.3)
+                             if name == "Rc::new" {
+                                 if args.len() != 1 {
+                                     return Err(TypeCheckError {
+                                         message: format!(
+                                             "Rc::new expects 1 argument, got {}",
+                                             args.len()
+                                         ),
+                                     });
+                                 }
+                                 let arg_ty = self.infer_type(&args[0])?;
+                                 return Ok(HirType::Named(format!("Rc<{}>", arg_ty)));
+                             }
+                            
                             // Check argument count (allow variadic for builtin print functions)
                             let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
                                 || name == "println" || name == "print" || name == "eprintln" || name == "__builtin_printf";
@@ -1764,11 +1933,20 @@ impl TypeChecker {
             HirExpression::FieldAccess { object, field } => {
                 let mut obj_ty = self.infer_type(object)?;
 
-                // Dereference references and mutable references for field access
+                // Dereference references, mutable references, boxes, and Rc for field access
                 loop {
                     match &obj_ty {
                         HirType::Reference(inner) | HirType::MutableReference(inner) => {
                             obj_ty = (**inner).clone();
+                        }
+                        HirType::Box(inner) => {
+                            obj_ty = (**inner).clone();
+                        }
+                        HirType::Named(name) if name.starts_with("Rc<") && name.ends_with(">") => {
+                           // Extract inner type from Rc<T>
+                           // For simplicity, try to extract the type name (supports single-word types)
+                           let inner_str = &name[3..name.len()-1];  // "Rc<T>" -> "T"
+                           obj_ty = HirType::Named(inner_str.to_string());
                         }
                         _ => break,
                     }
@@ -2173,6 +2351,19 @@ impl TypeChecker {
                                 return Ok(receiver_ty.clone());
                             }
                         }
+                    }
+                }
+                
+                // Special handling for Rc<T>::clone() (PHASE 2.3)
+                if let HirType::Named(type_name) = &receiver_ty {
+                    if type_name.starts_with("Rc<") && type_name.ends_with(">") && method == "clone" {
+                        if !args.is_empty() {
+                            return Err(TypeCheckError {
+                                message: format!("Rc::clone expects 0 arguments, got {}", args.len()),
+                            });
+                        }
+                        // clone() on Rc<T> returns another Rc<T> (same type)
+                        return Ok(receiver_ty.clone());
                     }
                 }
                 

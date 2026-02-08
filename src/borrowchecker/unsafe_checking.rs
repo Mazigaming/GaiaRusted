@@ -169,6 +169,15 @@ impl UnsafeChecker {
                 // Check inner type
                 self.check_type(inner_type)
             }
+            HirType::Box(inner_type) => {
+                // Box<T> - check inner type
+                self.check_type(inner_type)
+            }
+            HirType::Result { ok_type, err_type } => {
+                // Result<T, E> - check both types
+                self.check_type(ok_type)?;
+                self.check_type(err_type)
+            }
             HirType::Named(_) |
             HirType::Int32 |
             HirType::Int64 |

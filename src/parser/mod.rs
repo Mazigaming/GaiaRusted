@@ -866,9 +866,11 @@ impl Parser {
                 });
 
                 if !self.check(&Token::RightBrace) {
+                    eprintln!("DEBUG match_expr: About to consume comma, current token = {:?}", self.current());
                     self.consume(",")?;
+                    eprintln!("DEBUG match_expr: Consumed comma, current token = {:?}", self.current());
                 }
-            }
+                }
 
             self.consume("}")?;
         }
@@ -1855,9 +1857,9 @@ impl Parser {
 
             arms.push(MatchArm { pattern, guard, body });
 
-            if !self.check(&Token::RightBrace) {
-                self.consume(",")?;
-            }
+             if !self.check(&Token::RightBrace) && self.check(&Token::Comma) {
+                 self.consume(",")?;
+             }
         }
 
         self.consume("}")?;
