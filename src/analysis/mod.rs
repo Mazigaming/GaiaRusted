@@ -24,6 +24,7 @@ pub mod lifetime_resolution;
 pub mod pattern_exhaustiveness;
 pub mod error_propagation;
 pub mod associated_types;  // Associated types and where clauses
+pub mod object_safety;  // Object safety checking for dyn Trait
 
 pub use pattern_matching::{
     EnhancedPatternMatcher, PatternAnalyzer, PatternCompiler, ReachabilityChecker,

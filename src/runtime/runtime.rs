@@ -976,8 +976,8 @@ __into_iter:
 
 __next:
     # Get next element from iterator
-    # rdi = iterator/collection pointer (must match what was passed to __into_iter)
-    # Returns: next element value or 0 (indicating end of iteration)
+    # rdi = iterator/collection pointer
+    # Returns: rax = element value (or 0 if iteration done)
     push rbp
     mov rbp, rsp
     sub rsp, 32
@@ -993,12 +993,10 @@ __next:
     
     # Check if index < length
     cmp r8, r9
-    jge __next_end                  # if index >= length, return 0
+    jge __next_done_no_more
     
     # Get element at data[index]
-    # data starts at rdi + 16
-    # element = *(rdi + 16 + index*8)
-    lea rax, [rdi + 16]             # rax = data pointer
+    lea rax, [rdi + 16]             # data starts at rdi + 16
     mov rcx, qword ptr [rbp - 8]    # rcx = index
     mov r10, 8
     imul rcx, r10                   # rcx = index * 8
@@ -1006,20 +1004,20 @@ __next:
     mov rax, qword ptr [rax]        # rax = element value
     mov qword ptr [rbp - 24], rax
     
-    # Increment and store index
+    # Increment index
     mov r8, qword ptr [rbp - 8]
     add r8, 1
     lea rcx, [rip + __current_iter_idx]
     mov qword ptr [rcx], r8
     
-    # Return element
+    # Return element value
     mov rax, qword ptr [rbp - 24]
     mov rsp, rbp
     pop rbp
     ret
-    
-__next_end:
-    # Return 0 to indicate end of iteration
+
+__next_done_no_more:
+    # Iteration complete - return 0
     xor rax, rax
     mov rsp, rbp
     pop rbp

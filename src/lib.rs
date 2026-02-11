@@ -43,6 +43,14 @@ pub mod lexer;
 pub mod parser;
 pub mod macros;
 pub mod frontend;
+pub mod formatter;
+pub mod error_suggestions;
+pub mod source_display;
+pub mod borrow_error_display;
+
+// Developer Tools
+pub mod repl;
+pub mod dashboard;
 
 // Analysis: Type Checking, Traits, Lifetimes, Pattern Matching
 pub mod typechecker;
@@ -102,7 +110,7 @@ pub mod pattern_matching {
     pub use crate::analysis::pattern_matching::*;
 }
 pub mod option_result {
-    pub use crate::stdlib::option_result::*;
+    pub use crate::stdlib::options_results::*;
 }
 pub mod library_api {
     pub use crate::compiler::*;
@@ -122,7 +130,7 @@ pub use cargo_api::{CargoAPI, CargoProject, CargoManifest, CargoBuildConfig, Bui
 
 // Analysis re-exports
 pub use analysis::pattern_matching::{PatternAnalyzer, PatternCompiler, ReachabilityChecker};
-pub use stdlib::option_result::{Option, Result};
+pub use stdlib::options_results::{OptionMethods, ResultMethods};
 
 /// Compilation statistics
 #[derive(Debug, Clone)]

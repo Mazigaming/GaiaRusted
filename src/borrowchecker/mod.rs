@@ -50,10 +50,65 @@ use crate::lowering::{HirExpression, HirItem, HirStatement, HirType};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Borrow checking error
+/// Borrow checking error with optional structured information for narrative formatting
 #[derive(Debug, Clone)]
 pub struct BorrowCheckError {
     pub message: String,
+    /// Error code like E0382 for use of moved value
+    pub error_code: Option<String>,
+    /// Variable that caused the error
+    pub variable: Option<String>,
+    /// Line number where error occurs
+    pub line: Option<usize>,
+    /// Column number where error occurs
+    pub column: Option<usize>,
+    /// Events that led to the error (line, description)
+    pub events: Vec<(usize, String)>,
+    /// Suggestions for fixing
+    pub suggestions: Vec<String>,
+}
+
+impl BorrowCheckError {
+    /// Create a simple error with just a message
+    pub fn simple(message: impl Into<String>) -> Self {
+        BorrowCheckError {
+            message: message.into(),
+            error_code: None,
+            variable: None,
+            line: None,
+            column: None,
+            events: vec![],
+            suggestions: vec![],
+        }
+    }
+
+    /// Create a structured borrow error for narrative formatting
+    pub fn with_variable(
+        message: impl Into<String>,
+        error_code: &str,
+        variable: &str,
+        line: usize,
+    ) -> Self {
+        BorrowCheckError {
+            message: message.into(),
+            error_code: Some(error_code.to_string()),
+            variable: Some(variable.to_string()),
+            line: Some(line),
+            column: None,
+            events: vec![],
+            suggestions: vec![],
+        }
+    }
+
+    /// Add an ownership event to the error narrative
+    pub fn add_event(&mut self, line: usize, description: &str) {
+        self.events.push((line, description.to_string()));
+    }
+
+    /// Add a suggestion for fixing
+    pub fn add_suggestion(&mut self, suggestion: &str) {
+        self.suggestions.push(suggestion.to_string());
+    }
 }
 
 impl fmt::Display for BorrowCheckError {
@@ -143,9 +198,7 @@ impl BorrowEnv {
     pub fn bind(&mut self, name: String, ty: HirType, is_mutable: bool) -> BorrowCheckResult<()> {
         self.scopes
             .add_binding(name.clone(), ty, is_mutable, None)
-            .map_err(|e| BorrowCheckError {
-                message: e,
-            })?;
+            .map_err(|e| BorrowCheckError::simple(e))?;
         self.ownership_states.insert(name, OwnershipState::Owned);
         Ok(())
     }
@@ -160,9 +213,7 @@ impl BorrowEnv {
     ) -> BorrowCheckResult<()> {
         self.scopes
             .add_binding(name.clone(), ty, is_mutable, Some(lifetime))
-            .map_err(|e| BorrowCheckError {
-                message: e,
-            })?;
+            .map_err(|e| BorrowCheckError::simple(e))?;
         self.ownership_states.insert(name, OwnershipState::Owned);
         Ok(())
     }
@@ -201,9 +252,7 @@ impl BorrowEnv {
     pub fn move_binding(&mut self, name: &str) -> BorrowCheckResult<()> {
         // Check if binding exists
         if !self.scopes.contains(name) {
-            return Err(BorrowCheckError {
-                message: format!("Undefined variable: {}", name),
-            });
+            return Err(BorrowCheckError::simple(format!("Undefined variable: {}", name)));
         }
 
         // Check current state
@@ -215,19 +264,13 @@ impl BorrowEnv {
 
         match current_state {
             OwnershipState::Moved => {
-                return Err(BorrowCheckError {
-                    message: format!("Value {} used after move", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Value {} used after move", name)));
             }
             OwnershipState::BorrowedMutable => {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot move borrowed value {}", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Cannot move borrowed value {}", name)));
             }
             OwnershipState::BorrowedImmutable => {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot move borrowed value {}", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Cannot move borrowed value {}", name)));
             }
             _ => {}
         }
@@ -240,9 +283,7 @@ impl BorrowEnv {
     pub fn borrow_immutable(&mut self, name: &str) -> BorrowCheckResult<()> {
         // Check if binding exists
         if !self.scopes.contains(name) {
-            return Err(BorrowCheckError {
-                message: format!("Undefined variable: {}", name),
-            });
+            return Err(BorrowCheckError::simple(format!("Undefined variable: {}", name)));
         }
 
         // Check current state
@@ -254,14 +295,10 @@ impl BorrowEnv {
 
         match current_state {
             OwnershipState::Moved => {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot borrow moved value {}", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Cannot borrow moved value {}", name)));
             }
             OwnershipState::BorrowedMutable => {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot immutably borrow mutably borrowed value {}", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Cannot immutably borrow mutably borrowed value {}", name)));
             }
             _ => {}
         }
@@ -275,20 +312,16 @@ impl BorrowEnv {
     pub fn borrow_mutable(&mut self, name: &str) -> BorrowCheckResult<()> {
         // Check if binding exists
         if !self.scopes.contains(name) {
-            return Err(BorrowCheckError {
-                message: format!("Undefined variable: {}", name),
-            });
+            return Err(BorrowCheckError::simple(format!("Undefined variable: {}", name)));
         }
 
         // Get the binding info
-        let scope_binding = self.scopes.lookup(name).ok_or_else(|| BorrowCheckError {
-            message: format!("Undefined variable: {}", name),
+        let scope_binding = self.scopes.lookup(name).ok_or_else(|| {
+            BorrowCheckError::simple(format!("Undefined variable: {}", name))
         })?;
 
         if !scope_binding.is_mutable {
-            return Err(BorrowCheckError {
-                message: format!("Cannot create mutable borrow of immutable value {}", name),
-            });
+            return Err(BorrowCheckError::simple(format!("Cannot create mutable borrow of immutable value {}", name)));
         }
 
         // Check current state
@@ -300,22 +333,16 @@ impl BorrowEnv {
 
         match current_state {
             OwnershipState::Moved => {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot borrow moved value {}", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Cannot borrow moved value {}", name)));
             }
             OwnershipState::BorrowedImmutable => {
-                return Err(BorrowCheckError {
-                    message: format!(
-                        "Cannot mutably borrow {} with existing immutable borrows",
-                        name
-                    ),
-                });
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot mutably borrow {} with existing immutable borrows",
+                    name
+                )));
             }
             OwnershipState::BorrowedMutable => {
-                return Err(BorrowCheckError {
-                    message: format!("Cannot create multiple mutable borrows of {}", name),
-                });
+                return Err(BorrowCheckError::simple(format!("Cannot create multiple mutable borrows of {}", name)));
             }
             _ => {}
         }
@@ -505,9 +532,7 @@ impl BorrowChecker {
                 // Reading a variable - check it hasn't been moved
                 if let Some(binding) = self.env.lookup(name) {
                     if binding.state == OwnershipState::Moved {
-                        return Err(BorrowCheckError {
-                            message: format!("Value {} used after move", name),
-                        });
+                        return Err(BorrowCheckError::simple(format!("Value {} used after move", name)));
                     }
                 }
                 Ok(())

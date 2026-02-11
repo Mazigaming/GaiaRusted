@@ -7,12 +7,16 @@
 //! - Type compatibility checking
 //! - Function signature validation
 //! - Generic instantiation (basic)
+//! - Standard library type method resolution
 //!
 //! ## Algorithm:
 //! 1. Collect all type definitions (structs, functions)
 //! 2. Infer types for expressions with unknown types
 //! 3. Check all operations are type-safe
 //! 4. Generate typed HIR with all type information
+//! 5. Resolve stdlib methods for String, Vec, etc.
+
+pub mod stdlib_integration;
 
 use crate::lowering::{
     HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp, ClosureTrait,
@@ -2519,12 +2523,39 @@ impl TypeChecker {
                 } else {
                     // Verify inferred type matches annotation (with coercion)
                     if !self.types_compatible(&init_ty, ty) && init_ty != HirType::Unknown {
-                        return Err(TypeCheckError {
-                            message: format!(
-                                "Variable {} has type {}, but initializer has type {}",
-                                name, ty, init_ty
-                            ),
-                        });
+                       // Format nice error with suggestions
+                       let expected_str = format!("{}", ty);
+                       let found_str = format!("{}", init_ty);
+                       
+                       // Get suggestions for this type mismatch
+                       let suggestions = crate::error_suggestions::TypeErrorSuggester::suggest_type_mismatch(
+                           &expected_str,
+                           &found_str,
+                           Some(name)
+                       );
+                       
+                       // Build suggestion list for display
+                       let mut suggestion_strs = vec![];
+                       for suggestion in suggestions.iter().take(3) {
+                           suggestion_strs.push(suggestion.code.clone());
+                       }
+                       
+                       // Use format that will be parsed for rustc-style display
+                       let mut error_msg = format!(
+                           "mismatched types\nVARIABLE: {}\nExpected: {}\nFound: {}",
+                           name, expected_str, found_str
+                       );
+                       
+                       for (idx, sugg) in suggestion_strs.iter().enumerate() {
+                           if idx == 0 {
+                               error_msg.push_str("\nSUGGESTIONS:");
+                           }
+                           error_msg.push_str(&format!("\n|{}", sugg));
+                       }
+                       
+                       return Err(TypeCheckError {
+                           message: error_msg,
+                       });
                     }
                     ty.clone()
                 };

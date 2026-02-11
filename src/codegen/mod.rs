@@ -39,6 +39,7 @@ pub mod refcount_scheduler;
 pub mod smart_pointer_codegen;
 pub mod vtable_generation;
 pub mod dynamic_dispatch;
+pub mod stdlib_codegen;
 
 use crate::mir::{Mir, MirFunction, Statement, Terminator};
 use crate::runtime;
@@ -1902,10 +1903,13 @@ impl Codegen {
                         self.var_locations.insert(var_name.clone(), vec_ptr_offset);
                     }
                     
-                    // Initialize capacity = 30 (space for 30 i64 values)
+                    // Initialize capacity = 14 (space for 14 i64 values)
+                    // Vec is stack-allocated with 128 bytes (16 bytes for metadata + 112 bytes for data)
+                    // 112 / 8 = 14 i64 elements max
+                    // TODO: Implement heap allocation and dynamic growth for larger Vecs
                     self.instructions.push(X86Instruction::Mov {
                         dst: X86Operand::Memory { base: Register::RBP, offset: vec_data_offset },
-                        src: X86Operand::Immediate(30),
+                        src: X86Operand::Immediate(14),
                     });
                     
                     // Initialize length = 0

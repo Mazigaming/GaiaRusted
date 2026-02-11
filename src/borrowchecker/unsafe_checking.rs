@@ -190,6 +190,7 @@ impl UnsafeChecker {
             HirType::Char |
             HirType::String |
             HirType::Range |
+            HirType::DynTrait { .. } |
             HirType::Unknown => Ok(()),
         }
     }

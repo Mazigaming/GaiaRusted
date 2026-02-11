@@ -17,6 +17,10 @@ use std::fmt;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+// Module for for-loop desugaring to iterator protocol
+pub mod for_loop_desugar;
+pub use for_loop_desugar::desugar_for_loop;
+
 thread_local! {
     static ENUM_REGISTRY: RefCell<HashMap<String, HashMap<String, i64>>> = RefCell::new(HashMap::new());
     static SCOPE_TRACKER: RefCell<ScopeTracker> = RefCell::new(ScopeTracker::new());
@@ -868,6 +872,11 @@ pub enum HirType {
         err_type: Box<HirType>,
     },
 
+    /// Dynamic trait object: dyn Trait
+    DynTrait {
+        trait_name: String,
+    },
+
     /// Unknown type (will be inferred later)
     Unknown,
 }
@@ -934,6 +943,7 @@ impl fmt::Display for HirType {
             HirType::Option(inner_type) => write!(f, "Option<{}>", inner_type),
             HirType::Box(inner_type) => write!(f, "Box<{}>", inner_type),
             HirType::Result { ok_type, err_type } => write!(f, "Result<{}, {}>", ok_type, err_type),
+            HirType::DynTrait { trait_name } => write!(f, "dyn {}", trait_name),
             HirType::Unknown => write!(f, "?"),
         }
     }
@@ -1061,9 +1071,14 @@ fn lower_type(ty: &Type) -> LowerResult<HirType> {
             // impl Trait - treat as unknown for now
             Ok(HirType::Unknown)
         }
-        Type::TraitObject { .. } => {
-            // dyn Trait - treat as a named type for now
-            Ok(HirType::Named("TraitObject".to_string()))
+        Type::TraitObject { bounds, .. } => {
+            // dyn Trait - extract the trait name from the first bound
+            if !bounds.is_empty() {
+                let trait_name = bounds[0].clone();
+                Ok(HirType::DynTrait { trait_name })
+            } else {
+                Ok(HirType::Named("TraitObject".to_string()))
+            }
         }
         Type::AssociatedType { .. } => {
             // Associated types like T::Item - treat as unknown for now
@@ -1911,10 +1926,26 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             }
         }
 
-        Expression::VecMacro { elements: _ } => {
-            Err(LowerError {
-                message: "Vec! macro not yet fully supported".to_string(),
-            })
+        Expression::VecMacro { elements } => {
+            // Lower vec![a, b, c] to a function call to __builtin_vec_from
+            // with an array literal as argument
+            if elements.is_empty() {
+                // vec![] -> Vec::new() call
+                Ok(HirExpression::Call {
+                    func: Box::new(HirExpression::Variable("Vec::new".to_string())),
+                    args: vec![],
+                })
+            } else {
+                // vec![a, b, c] -> __builtin_vec_from([a, b, c])
+                let lowered_elements: Result<Vec<_>, _> = 
+                    elements.iter().map(|e| lower_expression(e)).collect();
+                let lowered_elements = lowered_elements?;
+                
+                Ok(HirExpression::Call {
+                    func: Box::new(HirExpression::Variable("__builtin_vec_from".to_string())),
+                    args: vec![HirExpression::ArrayLiteral(lowered_elements)],
+                })
+            }
         }
 
         Expression::FormatString { parts: _, args: _ } => {

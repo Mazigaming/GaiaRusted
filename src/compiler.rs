@@ -144,6 +144,9 @@ impl CompilationStats {
 pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, CompileError> {
     let total_start = Instant::now();
     
+    // Initialize dashboard for real-time progress display
+    let mut dashboard = crate::dashboard::Dashboard::new();
+    
     config.validate().map_err(|e| CompileError::new("Configuration", &e, ErrorKind::InternalError))?;
 
     let mut stats = CompilationStats::new();
@@ -151,6 +154,8 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     let mut output_files = Vec::new();
     let mut all_hir_items = Vec::new();
 
+    // Parsing phase
+    dashboard.start_phase("Parsing");
     for source_file in &config.source_files {
         if config.verbose {
             println!("📝 Compiling: {}", source_file.display());
@@ -173,6 +178,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             }
         }
     }
+    dashboard.end_phase("Parsing");
 
     if !errors.is_empty() {
         let total_elapsed = total_start.elapsed().as_millis();
@@ -185,6 +191,8 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         });
     }
 
+    // Type Checking phase
+    dashboard.start_phase("Type Checking");
     let tc_start = Instant::now();
     if let Err(mut e) = typechecker::check_types(&all_hir_items) {
         if e.file.is_none() && !config.source_files.is_empty() {
@@ -193,12 +201,16 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         errors.push(e);
     }
     stats.typechecking_time_ms = tc_start.elapsed().as_millis();
+    dashboard.end_phase("Type Checking");
 
+    // Borrow Checking phase
+    dashboard.start_phase("Borrow Checking");
     let bc_start = Instant::now();
     if let Err(e) = borrowchecker::check_borrows(&all_hir_items) {
         errors.push(CompileError::new("Borrow Checking", &e.to_string(), ErrorKind::CodeIssue));
     }
     stats.borrowchecking_time_ms = bc_start.elapsed().as_millis();
+    dashboard.end_phase("Borrow Checking");
 
     if !errors.is_empty() {
         let total_elapsed = total_start.elapsed().as_millis();
@@ -211,10 +223,13 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         });
     }
 
+    // MIR Lowering phase
+    dashboard.start_phase("MIR Lowering");
     let mir_lower_start = Instant::now();
     match mir::lower_to_mir(&all_hir_items) {
         Ok(mir_items) => {
             stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
+            dashboard.end_phase("MIR Lowering");
             
             let mir_opt_start = Instant::now();
             let mut optimized_mir = mir_items.clone();
@@ -224,11 +239,14 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             stats.mir_optimization_time_ms = mir_opt_start.elapsed().as_millis();
 
             if errors.is_empty() {
+                // Code Generation phase
+                dashboard.start_phase("Code Generation");
                 let codegen_start = Instant::now();
                 match codegen::generate_code(&optimized_mir) {
                     Ok(assembly) => {
                         stats.codegen_time_ms = codegen_start.elapsed().as_millis();
                         stats.assembly_size = assembly.len();
+                        dashboard.end_phase("Code Generation");
                         
                         let output_start = Instant::now();
                         match write_output(&config, &assembly) {
@@ -244,6 +262,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                     }
                     Err(e) => {
                         stats.codegen_time_ms = codegen_start.elapsed().as_millis();
+                        dashboard.end_phase("Code Generation");
                         errors.push(CompileError::new("Code Generation", &e.to_string(), ErrorKind::InternalError));
                     }
                 }
@@ -251,8 +270,14 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         }
         Err(e) => {
             stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
+            dashboard.end_phase("MIR Lowering");
             errors.push(CompileError::new("MIR Lowering", &e.to_string(), ErrorKind::InternalError));
         }
+    }
+
+    // Display dashboard report
+    if errors.is_empty() {
+        dashboard.display_report();
     }
 
     let total_elapsed = total_start.elapsed().as_millis();

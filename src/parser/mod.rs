@@ -1648,9 +1648,16 @@ impl Parser {
                     } else if self.check(&Token::LeftBracket) {
                         // Handle bracket-style macros like vec![1, 2, 3]
                         self.advance();
-                        let args = self.parse_bracket_contents()?;
+                        let elements = self.parse_bracket_contents()?;
                         self.consume("]")?;
-                        Ok(Expression::FunctionCall { name: macro_name, args })
+                        
+                        // Special case: vec! macro gets its own expression type
+                        if macro_name == "vec" {
+                            Ok(Expression::VecMacro { elements })
+                        } else {
+                            // Other bracket macros treated as function calls (for now)
+                            Ok(Expression::FunctionCall { name: macro_name, args: elements })
+                        }
                     } else {
                         return Err(ParseError::InvalidSyntax(
                             "Expected '(' or '[' after macro '!'".to_string(),

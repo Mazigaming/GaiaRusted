@@ -1,7 +1,7 @@
 //! Dynamic Dispatch Code Generation for Trait Objects
 //! Generates assembly for calling methods through vtables
 
-use super::vtable_generation::VtableLayout;
+use super::vtable_generation::{VtableLayout, VtableEntry};
 
 pub struct DynamicDispatchCodegen;
 
@@ -29,7 +29,7 @@ impl DynamicDispatchCodegen {
     pub fn generate_fat_pointer_construction(
         data_ptr_reg: &str,      // rdi
         vtable_symbol: &str,
-        dest_reg: &str,          // Where to store fat pointer
+        _dest_reg: &str,          // Where to store fat pointer
     ) -> String {
         let mut code = String::new();
         code.push_str(&format!("    ;; Construct fat pointer for dyn Trait\n"));
@@ -52,11 +52,11 @@ impl DynamicDispatchCodegen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen::vtable_generation::{VtableGenerator, VtableEntry};
+    use crate::codegen::vtable_generation::VTableGenerator;
 
     #[test]
     fn test_trait_method_call_generation() {
-        let mut gen = VtableGenerator::new();
+        let mut gen = VTableGenerator::new();
         let layout = gen.generate_vtable("Display", "String", vec!["fmt".to_string()]);
 
         let code = DynamicDispatchCodegen::generate_trait_method_call(&layout, "fmt", "rdi", "rax");

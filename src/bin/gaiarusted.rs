@@ -7,7 +7,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use gaiarusted::{CompilationConfig, OutputFormat, compile_files};
+use gaiarusted::{CompilationConfig, OutputFormat, compile_files, formatter};
+use std::time::Instant;
 
 #[derive(Debug)]
 struct CliArgs {
@@ -242,17 +243,141 @@ impl CliArgs {
     }
 }
 
+fn extract_type_info(message: &str) -> Option<(String, String, String)> {
+    // Parse message like "mismatched types\nVARIABLE: x\nExpected: String\nFound: &str"
+    let lines: Vec<&str> = message.lines().collect();
+    let mut expected = String::new();
+    let mut found = String::new();
+    let mut variable = String::new();
+    
+    for line in lines {
+        if line.starts_with("Expected:") {
+            expected = line.replace("Expected:", "").trim().to_string();
+        } else if line.starts_with("Found:") {
+            found = line.replace("Found:", "").trim().to_string();
+        } else if line.starts_with("VARIABLE:") {
+            variable = line.replace("VARIABLE:", "").trim().to_string();
+        }
+    }
+    
+    if !expected.is_empty() && !found.is_empty() {
+        Some((expected, found, variable))
+    } else {
+        None
+    }
+}
+
+fn extract_borrow_info(message: &str) -> Option<(String, String, String)> {
+    // Parse message like "use of moved value\nVARIABLE: x\nREASON: ownership transferred to y"
+    let lines: Vec<&str> = message.lines().collect();
+    let mut error_type = String::new();
+    let mut variable = String::new();
+    let mut reason = String::new();
+    
+    for line in lines {
+        if line.starts_with("ERROR_TYPE:") {
+            error_type = line.replace("ERROR_TYPE:", "").trim().to_string();
+        } else if line.starts_with("VARIABLE:") {
+            variable = line.replace("VARIABLE:", "").trim().to_string();
+        } else if line.starts_with("REASON:") {
+            reason = line.replace("REASON:", "").trim().to_string();
+        }
+    }
+    
+    if !variable.is_empty() {
+        Some((error_type, variable, reason))
+    } else {
+        None
+    }
+}
+
 fn print_detailed_error(error: &gaiarusted::CompileError, error_num: usize, total_errors: usize) {
+    // Try to extract line/column from error message or use provided values
+    let (line_num, col_num) = if let Some(line) = error.line {
+        (line, error.column.unwrap_or(0))
+    } else {
+        (0, 0)
+    };
+    
+    // Parse error message for type mismatch info
+    let message = &error.message;
+    let is_type_mismatch = message.to_lowercase().contains("type mismatch");
+    let is_mismatched_types = message.to_lowercase().contains("mismatched types");
+    let is_borrow_error = message.to_lowercase().contains("moved value") 
+        || message.to_lowercase().contains("borrow")
+        || message.to_lowercase().contains("ownership");
+    
+    // If it's a borrow error with file info, try to show rustc-style format
+    if is_borrow_error && error.file.is_some() {
+        if let Some((error_type, variable, _reason)) = extract_borrow_info(message) {
+            let file_path = error.file.as_ref().unwrap().display().to_string();
+            let borrow_error = gaiarusted::borrow_error_display::BorrowError::new(
+                "E0382",
+                &error_type,
+                &variable,
+                &file_path,
+                line_num.max(1),
+            );
+            
+            eprint!("{}", borrow_error.display());
+            return;
+        }
+    }
+    
+    // If it's a type error with file info, try to show rustc-style format
+    if (is_type_mismatch || is_mismatched_types) && error.file.is_some() {
+        // Try to use source-aware formatter
+        let file_path = error.file.as_ref().unwrap().display().to_string();
+        
+        // Extract expected/found types from message
+        if let Some(caps) = extract_type_info(message) {
+            let (expected, found, variable) = caps;
+            let mut src_error = gaiarusted::source_display::SourceError::new(
+                "E0308",
+                "mismatched types",
+                &file_path,
+                line_num.max(1),
+                col_num.max(1),
+                expected.len().max(1),
+                &expected,
+                &found,
+            );
+            
+            // Try to find the actual line by searching for the variable name
+            if !variable.is_empty() {
+                let _ = src_error.find_source_line_by_pattern(&variable);
+            }
+            
+            // Add suggestions from message
+            if message.contains("SUGGESTIONS:") {
+                let suggestions: Vec<&str> = message.split("\n|").collect();
+                for sugg in suggestions.iter().skip(1) {
+                    src_error = src_error.with_suggestion(sugg.to_string());
+                }
+            }
+            
+            eprint!("{}", src_error.display());
+            return;
+        }
+    }
+    
+    // Fall back to simple error display
     let location = match (error.line, error.column) {
         (Some(line), Some(col)) => format!("{}:{}", line, col),
         (Some(line), None) => format!("{}:1", line),
-        _ => "unknown location".to_string(),
+        _ => String::new(),
     };
     
     let file_location = if let Some(file) = &error.file {
-        format!("{}:{}", file.display(), location)
+        if location.is_empty() {
+            file.display().to_string()
+        } else {
+            format!("{}:{}", file.display(), location)
+        }
+    } else if !location.is_empty() {
+        location.clone()
     } else {
-        format!("[{}]", location)
+        "[unknown]".to_string()
     };
     
     let severity = match error.kind {
@@ -414,33 +539,19 @@ fn main() {
         }
     }
 
-    println!("GiaRusted Compiler v0.8.0");
-    println!("==================================================");
-    println!("Input files: {}", config.source_files.len());
-    for file in &config.source_files {
-        println!("   - {}", file.display());
-    }
-    println!("Output: {} [{}]", 
-        config.output_path.display(), 
-        config.output_format);
-    println!("Optimization level: {}", config.opt_level);
-    if config.debug {
-        println!("Debug info: enabled");
-    }
-    println!("==================================================");
-    println!();
+    let start = Instant::now();
+    formatter::start_compilation(&format!("{} file(s)", config.source_files.len()));
 
     // Compile
     match compile_files(&config) {
         Ok(result) => {
+            let total_time = start.elapsed();
             if result.success {
-                println!("Compilation successful!");
+                formatter::success(&format!("compiled to '{}'", config.output_path.display()));
                 println!();
-                println!("Statistics:");
-                println!("   Files compiled: {}", result.stats.files_compiled);
-                println!("   Lines of code: {}", result.stats.total_lines);
-                println!("   Assembly size: {} bytes", result.stats.assembly_size);
-                println!("   Compilation time: {}ms", result.stats.compilation_time_ms);
+                println!("{}summary{}", formatter::Colors::DIM, formatter::Colors::RESET);
+                println!("  {}•{} {} lines of code", formatter::Colors::CYAN, formatter::Colors::RESET, result.stats.total_lines);
+                println!("  {}•{} {} ms total", formatter::Colors::CYAN, formatter::Colors::RESET, total_time.as_millis());
                 println!();
                 
                 if cli_args.show_output {

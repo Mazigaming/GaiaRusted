@@ -76,12 +76,18 @@ pub enum Type {
     Bool,
     Char,
     Str,
+    /// String: owned heap-allocated string (String)
+    String,
     
     // === Special Types ===
     /// Never type (!): represents diverging functions
     Never,
     /// Unit type (): empty tuple
     Unit,
+    
+    // === Standard Library Types ===
+    /// Vec<T>: growable dynamic array
+    Vec(Box<Type>),
     
     // === Composite Types ===
     /// Tuple: (T1, T2, ...)
@@ -151,8 +157,10 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::Char => write!(f, "char"),
             Type::Str => write!(f, "str"),
+            Type::String => write!(f, "String"),
             Type::Never => write!(f, "!"),
             Type::Unit => write!(f, "()"),
+            Type::Vec(inner) => write!(f, "Vec<{}>", inner),
             Type::Tuple(tys) => {
                 write!(f, "(")?;
                 for (i, ty) in tys.iter().enumerate() {
@@ -261,6 +269,29 @@ impl Type {
                 ..
             }
         )
+    }
+
+    /// Check if this is a String type
+    pub fn is_string(&self) -> bool {
+        matches!(self, Type::String)
+    }
+
+    /// Check if this is a Vec<T> type
+    pub fn is_vec(&self) -> bool {
+        matches!(self, Type::Vec(_))
+    }
+
+    /// Get the element type of Vec<T>
+    pub fn vec_element_type(&self) -> Option<&Type> {
+        match self {
+            Type::Vec(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    /// Check if this is a collection type (String or Vec)
+    pub fn is_collection(&self) -> bool {
+        matches!(self, Type::String | Type::Vec(_))
     }
 }
 
