@@ -159,7 +159,7 @@ mod tests {
                 assert!(name.contains("__iter"), "Should create temp iterator");
                 assert!(*mutable, "Iterator should be mutable");
             }
-            _ => panic!("First statement should be Let binding"),
+            _ => assert!(false, "First statement should be Let binding (got a different statement type)"),
         }
 
         // Second statement should be an expression (the match)
@@ -169,10 +169,10 @@ mod tests {
                     HirExpression::Match { arms, .. } => {
                         assert_eq!(arms.len(), 2, "Should have 2 match arms: Some and None");
                     }
-                    _ => panic!("Should be Match expression"),
+                    _ => assert!(false, "Should be Match expression"),
                 }
             }
-            _ => panic!("Second statement should be Expression"),
+            _ => assert!(false, "Second statement should be Expression"),
         }
     }
 
@@ -228,10 +228,10 @@ mod tests {
                         // Some arm should contain our original body
                         assert_eq!(arms[0].body.len(), 1, "Some arm should have body");
                     }
-                    _ => panic!("Should be Match expression"),
+                    _ => assert!(false, "Should be Match expression"),
                 }
             }
-            _ => panic!("Should be Expression"),
+            _ => assert!(false, "Should be Expression"),
         }
     }
 
@@ -267,12 +267,12 @@ mod tests {
         // Extract iter var names
         let iter1 = match &stmts1[0] {
             HirStatement::Let { name, .. } => name.clone(),
-            _ => panic!(),
+            _ => panic!("Expected Let binding for iter1"),
         };
         
         let iter2 = match &stmts2[0] {
             HirStatement::Let { name, .. } => name.clone(),
-            _ => panic!(),
+            _ => panic!("Expected Let binding for iter2"),
         };
         
         // Should be different
@@ -296,10 +296,10 @@ mod tests {
                     HirExpression::MethodCall { method, .. } => {
                         assert_eq!(method, "into_iter", "Should call into_iter method");
                     }
-                    _ => panic!("Init should be method call"),
+                    _ => assert!(false, "Init should be method call"),
                 }
             }
-            _ => panic!("Should be Let with init"),
+            _ => assert!(false, "Should be Let with init"),
         }
     }
 

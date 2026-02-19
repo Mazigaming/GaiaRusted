@@ -155,21 +155,21 @@ mod tests {
         let ty = hirtype_to_type(&hir_vec);
         assert!(ty.is_some());
         let Type::Vec(inner) = ty.unwrap() else {
-            panic!("Should be Vec");
+            assert!(false, "Should be Vec");
         };
         assert_eq!(*inner, Type::I32);
-    }
+        }
 
-    #[test]
-    fn test_type_string_to_hirtype() {
+        #[test]
+        fn test_type_string_to_hirtype() {
         let ty = Type::String;
         let hir_ty = type_to_hirtype(&ty);
         assert!(hir_ty.is_some());
         assert_eq!(hir_ty.unwrap(), HirType::String);
-    }
+        }
 
-    #[test]
-    fn test_type_vec_to_hirtype() {
+        #[test]
+        fn test_type_vec_to_hirtype() {
         let ty = Type::Vec(Box::new(Type::I32));
         let hir_ty = type_to_hirtype(&ty);
         assert!(hir_ty.is_some());
@@ -177,9 +177,9 @@ mod tests {
             HirType::Vec(element) => {
                 assert_eq!(*element, HirType::Int32);
             }
-            _ => panic!("Should be Vec"),
+            _ => assert!(false, "Should be Vec"),
         }
-    }
+        }
 
     #[test]
     fn test_hirtype_string_conversion() {

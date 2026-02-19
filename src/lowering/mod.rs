@@ -12,9 +12,11 @@
 //! ## Algorithm:
 //! Single recursive pass over the AST, transforming nodes as we go.
 
-use crate::parser::{self, Expression, Statement, Item, Type, Block, Parameter, StructField, Pattern, EnumVariant, GenericParam};
+use crate::parser::{self, Expression, Statement, Item, Type, Block, Parameter, StructField, Pattern, EnumVariant, GenericParam, Visibility};
+use crate::macros::MacroExpander;
 use std::fmt;
 use std::cell::RefCell;
+use std::io::Write;
 use std::collections::{HashMap, HashSet};
 
 // Module for for-loop desugaring to iterator protocol
@@ -27,6 +29,18 @@ thread_local! {
     static STRUCT_REGISTRY: RefCell<HashMap<String, Vec<(String, HirType)>>> = RefCell::new(HashMap::new());
     static FUNCTION_REGISTRY: RefCell<HashMap<String, HirType>> = RefCell::new(HashMap::new());
     static IMPL_REGISTRY: RefCell<HashMap<String, HashMap<String, Vec<String>>>> = RefCell::new(HashMap::new());
+    static MODULE_PATH: RefCell<Vec<String>> = RefCell::new(vec!["crate".to_string()]);
+    static CURRENT_FILE: RefCell<String> = RefCell::new("main.rs".to_string());
+    // Visibility registry: maps function/struct names to their visibility modifiers
+    static VISIBILITY_REGISTRY: RefCell<HashMap<String, Visibility>> = RefCell::new(HashMap::new());
+    // Temporary visibility holder during parsing/lowering
+    static TEMP_VISIBILITY: RefCell<Visibility> = RefCell::new(Visibility::Private);
+    // PHASE 4.2: Unsafe context tracking - depth counter (0 = not in unsafe, >0 = in unsafe)
+    static UNSAFE_DEPTH: RefCell<usize> = RefCell::new(0);
+    // Registry of unsafe functions
+    static UNSAFE_FUNCTIONS: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
+    // PHASE 5.2: Macro expansion - global macro expander with builtin macros registered
+    static MACRO_EXPANDER: RefCell<MacroExpander> = RefCell::new(MacroExpander::with_builtins());
 }
 
 /// Tracks available variables in the current scope
@@ -183,14 +197,46 @@ fn clear_struct_registry() {
 }
 
 fn register_function_return_type(func_name: String, return_type: HirType) {
+    // Get qualified name with module path or file name
+    let qualified_name = CURRENT_FILE.with(|f| {
+        let file = f.borrow().clone();
+        if file != "main" && file != "lib" {
+            // For non-main files like utils.rs, prefix with module name
+            format!("{}::{}", file, func_name)
+        } else {
+            // For main/lib, use regular module path
+            MODULE_PATH.with(|path| {
+                let mut parts = path.borrow().clone();
+                parts.push(func_name.clone());
+                parts.join("::")
+            })
+        }
+    });
+    
     FUNCTION_REGISTRY.with(|registry| {
+        // Register both qualified and unqualified names for backwards compatibility
+        registry.borrow_mut().insert(qualified_name, return_type.clone());
         registry.borrow_mut().insert(func_name, return_type);
     });
 }
 
 fn get_function_return_type(func_name: &str) -> Option<HirType> {
-    FUNCTION_REGISTRY.with(|registry| {
+    // Try qualified name first
+    if let Some(ret_ty) = FUNCTION_REGISTRY.with(|registry| {
         registry.borrow().get(func_name).cloned()
+    }) {
+        return Some(ret_ty);
+    }
+    
+    // If not found, try with module prefix
+    let qualified = MODULE_PATH.with(|path| {
+        let mut parts = path.borrow().clone();
+        parts.push(func_name.to_string());
+        parts.join("::")
+    });
+    
+    FUNCTION_REGISTRY.with(|registry| {
+        registry.borrow().get(&qualified).cloned()
     })
 }
 
@@ -198,6 +244,82 @@ fn clear_function_registry() {
     FUNCTION_REGISTRY.with(|registry| {
         registry.borrow_mut().clear();
     });
+}
+
+pub fn register_visibility(name: String, visibility: Visibility) {
+    VISIBILITY_REGISTRY.with(|registry| {
+        registry.borrow_mut().insert(name, visibility);
+    });
+}
+
+pub fn get_visibility(name: &str) -> Option<Visibility> {
+    VISIBILITY_REGISTRY.with(|registry| {
+        registry.borrow().get(name).cloned()
+    })
+}
+
+fn clear_visibility_registry() {
+    VISIBILITY_REGISTRY.with(|registry| {
+        registry.borrow_mut().clear();
+    });
+}
+
+// PHASE 4.2: Unsafe context tracking functions
+fn enter_unsafe_context() {
+    UNSAFE_DEPTH.with(|depth| {
+        *depth.borrow_mut() += 1;
+    });
+}
+
+fn exit_unsafe_context() {
+    UNSAFE_DEPTH.with(|depth| {
+        let mut d = depth.borrow_mut();
+        if *d > 0 {
+            *d -= 1;
+        }
+    });
+}
+
+pub fn is_in_unsafe_context() -> bool {
+    UNSAFE_DEPTH.with(|depth| {
+        *depth.borrow() > 0
+    })
+}
+
+pub fn register_unsafe_function(name: String) {
+    UNSAFE_FUNCTIONS.with(|funcs| {
+        funcs.borrow_mut().insert(name);
+    });
+}
+
+pub fn is_unsafe_function(name: &str) -> bool {
+    UNSAFE_FUNCTIONS.with(|funcs| {
+        funcs.borrow().contains(name)
+    })
+}
+
+fn clear_unsafe_functions() {
+    UNSAFE_FUNCTIONS.with(|funcs| {
+        funcs.borrow_mut().clear();
+    });
+}
+
+// PHASE 5.2: Macro expansion functions
+pub fn register_macro(name: String, rules: Vec<crate::macros::MacroRule>) {
+    use crate::macros::MacroDefinition;
+    MACRO_EXPANDER.with(|expander| {
+        let def = MacroDefinition {
+            name,
+            rules,
+        };
+        expander.borrow_mut().define(def);
+    });
+}
+
+pub fn expand_macro(name: &str, input: Vec<crate::macros::TokenTree>) -> Result<Vec<crate::macros::TokenTree>, String> {
+    MACRO_EXPANDER.with(|expander| {
+        expander.borrow().expand(name, input)
+    })
 }
 
 fn push_scope() {
@@ -210,6 +332,40 @@ fn pop_scope() {
     SCOPE_TRACKER.with(|tracker| {
         tracker.borrow_mut().pop_scope();
     });
+}
+
+fn push_module(module_name: String) {
+    MODULE_PATH.with(|path| {
+        path.borrow_mut().push(module_name);
+    });
+}
+
+fn pop_module() {
+    MODULE_PATH.with(|path| {
+        let mut p = path.borrow_mut();
+        if p.len() > 1 {
+            p.pop();
+        }
+    });
+}
+
+pub fn set_current_file(file_path: &str) {
+    // Extract module name from file path (e.g., "utils.rs" -> "utils")
+    let file_name = std::path::Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("crate");
+    
+    CURRENT_FILE.with(|f| {
+        *f.borrow_mut() = file_name.to_string();
+    });
+}
+
+/// Get the current fully-qualified module path
+pub fn get_current_module_path() -> String {
+    MODULE_PATH.with(|path| {
+        path.borrow().join("::")
+    })
 }
 
 fn add_binding(name: String, ty: HirType) {
@@ -491,20 +647,23 @@ fn get_printf_format_spec(ty: &HirType) -> &'static str {
 /// Similar to AST but with syntactic sugar removed
 #[derive(Debug, Clone)]
 pub enum HirItem {
-    /// Function definition
-    Function {
-        name: String,
-        generics: Vec<GenericParam>,
-        params: Vec<(String, HirType)>,
-        return_type: Option<HirType>,
-        body: Vec<HirStatement>,
-    },
+     /// Function definition
+     Function {
+         name: String,
+         generics: Vec<GenericParam>,
+         params: Vec<(String, HirType)>,
+         return_type: Option<HirType>,
+         body: Vec<HirStatement>,
+         is_public: bool,
+         where_clause: Vec<parser::WhereConstraint>,
+     },
     /// Struct definition
     Struct {
         name: String,
         fields: Vec<(String, HirType)>,
         #[doc(hidden)]
         derives: Vec<String>, // derive attributes like ["Clone", "Debug"]
+        is_public: bool,
     },
     /// Module definition
     Module {
@@ -516,6 +675,7 @@ pub enum HirItem {
     AssociatedType {
         name: String,
         ty: Option<HirType>,
+        is_public: bool,
     },
     /// Use statement / re-export: `use path::to::item;` or `pub use path::to::item;`
     Use {
@@ -545,17 +705,20 @@ pub enum HirItem {
         methods: Vec<HirItem>,
         generics: Vec<String>,
         is_unsafe: bool,
+        is_public: bool,
     },
     /// Enum definition
     Enum {
         name: String,
         variants: Vec<(String, Option<HirType>)>,
+        is_public: bool,
     },
     /// Trait definition
     Trait {
         name: String,
         methods: Vec<HirItem>,
         generics: Vec<String>,
+        is_public: bool,
     },
 }
 
@@ -1225,6 +1388,38 @@ fn infer_hir_type(expr: &HirExpression) -> HirType {
 }
 
 /// Lower an expression from AST to HIR
+/// Phase 6.5b: Constant folding - evaluate binary operations at compile time
+fn try_fold_binary_op(left: i64, right: i64, op: &parser::BinaryOp) -> Option<i64> {
+    match op {
+        parser::BinaryOp::Add => Some(left.wrapping_add(right)),
+        parser::BinaryOp::Subtract => Some(left.wrapping_sub(right)),
+        parser::BinaryOp::Multiply => Some(left.wrapping_mul(right)),
+        parser::BinaryOp::Divide => {
+            if right == 0 { None } else { Some(left / right) }
+        }
+        parser::BinaryOp::Modulo => {
+            if right == 0 { None } else { Some(left % right) }
+        }
+        parser::BinaryOp::Equal => Some(if left == right { 1 } else { 0 }),
+        parser::BinaryOp::NotEqual => Some(if left != right { 1 } else { 0 }),
+        parser::BinaryOp::Less => Some(if left < right { 1 } else { 0 }),
+        parser::BinaryOp::LessEq => Some(if left <= right { 1 } else { 0 }),
+        parser::BinaryOp::Greater => Some(if left > right { 1 } else { 0 }),
+        parser::BinaryOp::GreaterEq => Some(if left >= right { 1 } else { 0 }),
+        parser::BinaryOp::And => Some(if left != 0 && right != 0 { 1 } else { 0 }),
+        parser::BinaryOp::Or => Some(if left != 0 || right != 0 { 1 } else { 0 }),
+        parser::BinaryOp::BitwiseAnd => Some(left & right),
+        parser::BinaryOp::BitwiseOr => Some(left | right),
+        parser::BinaryOp::BitwiseXor => Some(left ^ right),
+        parser::BinaryOp::LeftShift => {
+            if right < 0 || right >= 64 { None } else { Some(left << right) }
+        }
+        parser::BinaryOp::RightShift => {
+            if right < 0 || right >= 64 { None } else { Some(left >> right) }
+        }
+    }
+}
+
 fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
     match expr {
         Expression::Integer(n) => Ok(HirExpression::Integer(*n)),
@@ -1243,6 +1438,14 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         Expression::Binary { left, op, right } => {
             let left_hir = lower_expression(left)?;
             let right_hir = lower_expression(right)?;
+            
+            // Phase 6.5b: Constant folding - evaluate compile-time constants
+            if let (HirExpression::Integer(l), HirExpression::Integer(r)) = (&left_hir, &right_hir) {
+                if let Some(result) = try_fold_binary_op(*l, *r, op) {
+                    return Ok(HirExpression::Integer(result));
+                }
+            }
+            
             let op_hir = match op {
                 parser::BinaryOp::Add => BinaryOp::Add,
                 parser::BinaryOp::Subtract => BinaryOp::Subtract,
@@ -1492,6 +1695,13 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         }
 
         Expression::FunctionCall { name, args } => {
+            // PHASE 4.2: Validate unsafe function calls
+            if is_unsafe_function(name) && !is_in_unsafe_context() {
+                return Err(LowerError {
+                    message: format!("cannot call unsafe function '{}' outside of unsafe block", name),
+                });
+            }
+            
             let args_hir: Result<Vec<_>, _> =
                 args.iter().map(|arg| lower_expression(arg)).collect();
             let mut args_final = args_hir?;
@@ -1539,7 +1749,8 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                             let printf_fmt = convert_rust_format_to_printf_with_types(fmt_str, &arg_types);
                             args_final[0] = HirExpression::String(printf_fmt);
                         }
-                        "__builtin_printf".to_string()
+                        // Use printf directly (codegen will handle ABI calling conventions)
+                        "printf".to_string()
                     } else if args_final.len() == 1 {
                         // Type-aware println: check argument type
                         let arg_type = infer_hir_type(&args_final[0]);
@@ -1580,12 +1791,54 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                             };
                             args_final[0] = HirExpression::String(printf_fmt_no_newline);
                         }
-                        "__builtin_printf".to_string()
+                        // Use printf directly (codegen will handle ABI calling conventions)
+                        "printf".to_string()
+                    } else if args_final.len() == 1 {
+                        // Single argument - check its type
+                        let arg_type = infer_hir_type(&args_final[0]);
+                        match arg_type {
+                            HirType::String => {
+                                // Use gaia_print_str for string printing without newline
+                                "gaia_print_str".to_string()
+                            }
+                            _ => {
+                                // Default to string representation
+                                "gaia_print_str".to_string()
+                            }
+                        }
                     } else {
-                        "__builtin_print".to_string()
+                        "gaia_print_str".to_string()
                     }
                 }
-                "eprintln" => "__builtin_eprintln".to_string(),
+                "eprintln" => {
+                    // For eprintln, use printf (which can write to stderr with appropriate format)
+                    if args_final.len() > 1 {
+                        if let HirExpression::String(fmt_str) = &args_final[0] {
+                            let arg_types: Vec<HirType> = args_final[1..].iter().map(infer_hir_type).collect();
+                            let printf_fmt = convert_rust_format_to_printf_with_types(fmt_str, &arg_types);
+                            args_final[0] = HirExpression::String(printf_fmt);
+                        }
+                        "printf".to_string()
+                    } else {
+                        // Single string argument - print to stderr
+                        // For now, we'll use a workaround: print to stdout
+                        "gaia_print_str".to_string()
+                    }
+                }
+                // PHASE 5.3d: dbg!() - print value and return it
+                "dbg" => {
+                    if args_final.len() == 1 {
+                        let arg_type = infer_hir_type(&args_final[0]);
+                        match arg_type {
+                            HirType::Int64 | HirType::Int32 | HirType::USize | HirType::ISize => {
+                                "dbg".to_string()
+                            }
+                            _ => "dbg".to_string()
+                        }
+                    } else {
+                        "dbg".to_string()
+                    }
+                }
                 "__builtin_println_args" => {
                     if !args_final.is_empty() {
                         if let HirExpression::String(fmt_str) = &args_final[0] {
@@ -1596,6 +1849,7 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
                     }
                     "__builtin_printf".to_string()
                 }
+                // PHASE 5.2: Use existing handling for print/eprintln (don't convert here)
                 _ => name.clone(),
             };
             
@@ -1842,13 +2096,22 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
         }
 
         Expression::UnsafeBlock(block) => {
-            let block_hir = lower_block(block)?;
+            // PHASE 4.2: Enter unsafe context
+            enter_unsafe_context();
+            let block_hir = lower_block(block);
             let last_expr = if let Some(e) = &block.expression {
-                Some(Box::new(lower_expression(e)?))
+                let expr_result = lower_expression(e);
+                if expr_result.is_ok() {
+                    Some(Box::new(expr_result?))
+                } else {
+                    exit_unsafe_context();
+                    return expr_result;
+                }
             } else {
                 None
             };
-            Ok(HirExpression::Block(block_hir, last_expr))
+            exit_unsafe_context();
+            Ok(HirExpression::Block(block_hir?, last_expr))
         }
 
         Expression::AsyncBlock(_) => {
@@ -1897,6 +2160,10 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             let args_hir: Result<Vec<_>, _> =
                 args.iter().map(|arg| lower_expression(arg)).collect();
             let args_final = args_hir?;
+            
+            // Debug: log GenericCall lowering
+            let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+                .and_then(|mut f| writeln!(f, "[LOWER] GenericCall: name='{}' (args: {})", name, args_final.len()));
             
             if name.contains("::") {
                 let parts: Vec<&str> = name.split("::").collect();
@@ -1960,9 +2227,19 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             })
         }
 
-        Expression::Deref { value: _ } => {
-            Err(LowerError {
-                message: "Dereference expressions not yet fully supported".to_string(),
+        Expression::Deref { value } => {
+            // PHASE 4.3: Raw pointer dereference support
+            // Dereferencing raw pointers requires unsafe context
+            if !is_in_unsafe_context() {
+                return Err(LowerError {
+                    message: "cannot dereference raw pointer outside of unsafe block".to_string(),
+                });
+            }
+            
+            let value_hir = lower_expression(value)?;
+            Ok(HirExpression::UnaryOp {
+                op: UnaryOp::Dereference,
+                operand: Box::new(value_hir),
             })
         }
 
@@ -1984,10 +2261,33 @@ fn lower_expression(expr: &Expression) -> LowerResult<HirExpression> {
             })
         }
 
-        Expression::MacroInvocation { name: _, args: _ } => {
-            Err(LowerError {
-                message: "Macro invocations not yet fully supported".to_string(),
-            })
+        Expression::MacroInvocation { name, args } => {
+            // PHASE 5.2: Handle macro invocations
+            // Convert args to lowered expressions
+            let mut lowered_args = Vec::new();
+            for arg in args {
+                lowered_args.push(lower_expression(arg)?);
+            }
+            
+            // For now, treat macros as special function calls
+            // The actual expansion happens at parse/compile time, but we still need to process them
+            match name.as_str() {
+                "println" | "print" | "eprintln" | "format" | "vec" | "assert" | "assert_eq" | "assert_ne" | "panic" | "dbg" => {
+                    // Built-in macros - convert to function calls with special names
+                    let builtin_name = format!("__builtin_{}", name);
+                    Ok(HirExpression::Call {
+                        func: Box::new(HirExpression::Variable(builtin_name)),
+                        args: lowered_args,
+                    })
+                }
+                _ => {
+                    // User-defined macros - try to expand them
+                    // For now, return an error if not found
+                    Err(LowerError {
+                        message: format!("Unknown or unexpanded macro: {}", name),
+                    })
+                }
+            }
         }
     }
 }
@@ -2107,10 +2407,32 @@ fn lower_statement(stmt: &Statement) -> LowerResult<HirStatement> {
             Ok(HirStatement::Item(Box::new(item_hir)))
         }
 
-        Statement::MacroInvocation { name: _, args: _ } => {
-            Err(LowerError {
-                message: "Macro invocations not yet fully supported".to_string(),
-            })
+        Statement::MacroInvocation { name, args } => {
+            // PHASE 5.2: Handle macro invocations in statement position
+            // Convert args to lowered expressions
+            let mut lowered_args = Vec::new();
+            for arg in args {
+                lowered_args.push(lower_expression(arg)?);
+            }
+            
+            // Treat as expression statement with special macro call
+            match name.as_str() {
+                "println" | "print" | "eprintln" | "format" | "vec" | "assert" | "assert_eq" | "assert_ne" | "panic" | "dbg" => {
+                    // Built-in macros
+                    let builtin_name = format!("__builtin_{}", name);
+                    let call = HirExpression::Call {
+                        func: Box::new(HirExpression::Variable(builtin_name)),
+                        args: lowered_args,
+                    };
+                    Ok(HirStatement::Expression(call))
+                }
+                _ => {
+                    // User-defined macros
+                    Err(LowerError {
+                        message: format!("Unknown or unexpanded macro: {}", name),
+                    })
+                }
+            }
         }
     }
 }
@@ -2260,243 +2582,354 @@ fn lower_statements(stmts: &[Statement]) -> LowerResult<Vec<HirStatement>> {
 fn lower_item(item: &Item) -> LowerResult<HirItem> {
      match item {
          Item::Function {
-             name,
-             generics,
-             params,
-             return_type,
-             body,
-             is_unsafe: _,
-             is_async: _,
-             is_pub: _,
-             attributes: _,
-             where_clause: _,
-             abi: _,
-         } => {
-             // Skip enum constructor functions (they have empty bodies with no statements/expression)
-             // These will be handled specially during codegen
-             if body.statements.is_empty() && body.expression.is_none() && name.contains("::") {
-                 // Check if this looks like an enum constructor (EnumName::VariantName)
-                 let parts: Vec<&str> = name.split("::").collect();
-                 if parts.len() == 2 {
-                     // This is likely an enum constructor - skip it
-                     // Create a dummy function that won't be called
-                     return Ok(HirItem::Function {
-                         name: format!("_enum_constructor_{}", name.replace("::", "_impl_")),
-                         generics: vec![],
-                         params: vec![],
-                         return_type: None,
-                         body: vec![],
-                     });
-                 }
-             }
+              name,
+              generics,
+              params,
+              return_type,
+              body,
+              is_unsafe,
+              is_async: _,
+              is_pub,
+              attributes: _,
+              where_clause,
+              abi: _,
+          } => {
+              // PHASE 4.2: Register unsafe functions
+              if *is_unsafe {
+                  register_unsafe_function(name.clone());
+              }
+               // Check if visibility was already registered during parsing
+               let qualified_name = CURRENT_FILE.with(|f| {
+                   let file = f.borrow().clone();
+                   if file != "main" && file != "lib" {
+                       format!("{}::{}", file, name)
+                   } else {
+                       MODULE_PATH.with(|path| {
+                           let mut parts = path.borrow().clone();
+                           parts.push(name.clone());
+                           parts.join("::")
+                       })
+                   }
+               });
+               
+               // First try to get visibility from registry (registered by parser)
+               let visibility = if let Some(vis) = get_visibility(&qualified_name) {
+                   vis
+               } else if let Some(vis) = get_visibility(name) {
+                   vis
+               } else {
+                   // Fall back to reading from current visibility
+                   crate::parser::get_current_visibility()
+               };
+               
+               // Register visibility for this function (if not already registered)
+               register_visibility(qualified_name.clone(), visibility.clone());
+               register_visibility(name.clone(), visibility);
+              
+              // Skip enum constructor functions (they have empty bodies with no statements/expression)
+              // These will be handled specially during codegen
+              if body.statements.is_empty() && body.expression.is_none() && name.contains("::") {
+                  // Check if this looks like an enum constructor (EnumName::VariantName)
+                  let parts: Vec<&str> = name.split("::").collect();
+                  if parts.len() == 2 {
+                      // This is likely an enum constructor - skip it
+                      // Create a dummy function that won't be called
+                      return Ok(HirItem::Function {
+                          name: format!("_enum_constructor_{}", name.replace("::", "_impl_")),
+                          generics: vec![],
+                          params: vec![],
+                          return_type: None,
+                          body: vec![],
+                          is_public: true,  // Constructors are always accessible
+                          where_clause: vec![],
+                      });
+                  }
+              }
 
-             let params_hir: Result<Vec<_>, _> = params
+              let params_hir: Result<Vec<_>, _> = params
+                  .iter()
+                  .map(|param: &Parameter| {
+                      let ptype_hir = lower_type(&param.ty)?;
+                      Ok((param.name.clone(), ptype_hir))
+                  })
+                  .collect();
+
+              let ret_type_hir = if let Some(rt) = return_type {
+                  Some(lower_type(rt)?)
+              } else {
+                  None
+              };
+
+              // Register this function's return type for type inference
+              if let Some(ref rt) = ret_type_hir {
+                  register_function_return_type(name.clone(), rt.clone());
+              }
+
+              let mut body_hir = lower_block(body)?;
+              
+              // Handle implicit returns: if the last statement is an expression or if statement,
+              // convert it to an explicit return statement
+              if !body_hir.is_empty() {
+                  match &body_hir[body_hir.len() - 1] {
+                      HirStatement::Expression(expr) => {
+                          let expr_clone = expr.clone();
+                          // Remove the expression statement and replace with return
+                          body_hir.pop();
+                          body_hir.push(HirStatement::Return(Some(expr_clone)));
+                      }
+                      HirStatement::If { condition, then_body, else_body } => {
+                          // If statement at the end of the function body should return the if expression result
+                          // Convert the if statement to an if expression by converting it to Return(If expression)
+                          let if_expr = HirExpression::If {
+                              condition: condition.clone(),
+                              then_body: then_body.clone(),
+                              else_body: else_body.clone(),
+                          };
+                          body_hir.pop();
+                          body_hir.push(HirStatement::Return(Some(if_expr)));
+                      }
+                      _ => {}
+                  }
+              }
+
+              Ok(HirItem::Function {
+                  name: name.clone(),
+                  generics: generics.clone(),
+                  params: params_hir?,
+                  return_type: ret_type_hir,
+                  body: body_hir,
+                  is_public: *is_pub,
+                  where_clause: where_clause.clone(),
+              })
+          }
+
+        Item::Struct { name, generics: _, fields, is_pub, attributes, where_clause: _ } => {
+             // Get visibility from registry (registered by parser)
+             let visibility = if let Some(vis) = get_visibility(name) {
+                 vis
+             } else {
+                 crate::parser::get_current_visibility()
+             };
+             register_visibility(name.clone(), visibility);
+             
+             let fields_hir: Result<Vec<_>, _> = fields
                  .iter()
-                 .map(|param: &Parameter| {
-                     let ptype_hir = lower_type(&param.ty)?;
-                     Ok((param.name.clone(), ptype_hir))
+                 .map(|field: &StructField| {
+                     let ftype_hir = lower_type(&field.ty)?;
+                     Ok((field.name.clone(), ftype_hir))
                  })
                  .collect();
 
-             let ret_type_hir = if let Some(rt) = return_type {
-                 Some(lower_type(rt)?)
-             } else {
-                 None
-             };
-
-             // Register this function's return type for type inference
-             if let Some(ref rt) = ret_type_hir {
-                 register_function_return_type(name.clone(), rt.clone());
-             }
-
-             let mut body_hir = lower_block(body)?;
-             
-             // Handle implicit returns: if the last statement is an expression or if statement,
-             // convert it to an explicit return statement
-             if !body_hir.is_empty() {
-                 match &body_hir[body_hir.len() - 1] {
-                     HirStatement::Expression(expr) => {
-                         let expr_clone = expr.clone();
-                         // Remove the expression statement and replace with return
-                         body_hir.pop();
-                         body_hir.push(HirStatement::Return(Some(expr_clone)));
-                     }
-                     HirStatement::If { condition, then_body, else_body } => {
-                         // If statement at the end of the function body should return the if expression result
-                         // Convert the if statement to an if expression by converting it to Return(If expression)
-                         let if_expr = HirExpression::If {
-                             condition: condition.clone(),
-                             then_body: then_body.clone(),
-                             else_body: else_body.clone(),
-                         };
-                         body_hir.pop();
-                         body_hir.push(HirStatement::Return(Some(if_expr)));
-                     }
-                     _ => {}
+             // Extract derives from #[derive(...)] attributes
+             let mut derives = Vec::new();
+             for attr in attributes {
+                 if attr.name == "derive" {
+                     derives.extend(attr.args.clone());
                  }
              }
 
-             Ok(HirItem::Function {
+             Ok(HirItem::Struct {
                  name: name.clone(),
-                 generics: generics.clone(),
-                 params: params_hir?,
-                 return_type: ret_type_hir,
-                 body: body_hir,
+                 fields: fields_hir?,
+                 derives,
+                 is_public: *is_pub,
              })
          }
 
-        Item::Struct { name, generics: _, fields, is_pub: _, attributes, where_clause: _ } => {
-            let fields_hir: Result<Vec<_>, _> = fields
-                .iter()
-                .map(|field: &StructField| {
-                    let ftype_hir = lower_type(&field.ty)?;
-                    Ok((field.name.clone(), ftype_hir))
-                })
-                .collect();
+        Item::Enum { name, generics: _, variants, is_pub, attributes: _, where_clause: _ } => {
+             // Get visibility from registry (registered by parser)
+             let visibility = if let Some(vis) = get_visibility(name) {
+                 vis
+             } else {
+                 crate::parser::get_current_visibility()
+             };
+             register_visibility(name.clone(), visibility);
+             
+             // Register enum variants for later resolution (important for inner enums)
+             let variant_names_list: Vec<String> = variants
+                 .iter()
+                 .map(|v| match v {
+                     EnumVariant::Unit(n) => n.clone(),
+                     EnumVariant::Tuple(n, _) => n.clone(),
+                     EnumVariant::Struct(n, _) => n.clone(),
+                 })
+                 .collect();
+             register_enum_variants(name.clone(), variant_names_list.clone());
+             
+             // Properly lower enum variants
+             let variant_names: Vec<(String, Option<HirType>)> = variant_names_list
+                 .iter()
+                 .map(|variant_name| {
+                     (variant_name.clone(), Some(HirType::Named(name.clone())))
+                 })
+                 .collect();
+             
+             Ok(HirItem::Enum {
+                 name: name.clone(),
+                 variants: variant_names,
+                 is_public: *is_pub,
+             })
+         }
 
-            // Extract derives from #[derive(...)] attributes
-            let mut derives = Vec::new();
-            for attr in attributes {
-                if attr.name == "derive" {
-                    derives.extend(attr.args.clone());
-                }
-            }
+        Item::Trait { name, generics, supertraits: _, methods, is_pub, attributes: _, where_clause: _ } => {
+             let mut lowered_methods = Vec::new();
+             for item in methods {
+                 if let Item::Function {
+                     name: method_name,
+                     params,
+                     return_type,
+                     body,
+                     is_pub: method_is_pub,
+                     ..
+                 } = item
+                 {
+                     let params_hir: Result<Vec<_>, _> = params
+                         .iter()
+                         .map(|p| {
+                             let ptype = lower_type(&p.ty)?;
+                             Ok((p.name.clone(), ptype))
+                         })
+                         .collect();
 
-            Ok(HirItem::Struct {
-                name: name.clone(),
-                fields: fields_hir?,
-                derives,
-            })
-        }
+                     let ret_type_hir = if let Some(rt) = return_type {
+                         Some(lower_type(rt)?)
+                     } else {
+                         None
+                     };
 
-        Item::Enum { name, generics: _, variants, is_pub: _, attributes: _, where_clause: _ } => {
-            // Register enum variants for later resolution (important for inner enums)
-            let variant_names_list: Vec<String> = variants
-                .iter()
-                .map(|v| match v {
-                    EnumVariant::Unit(n) => n.clone(),
-                    EnumVariant::Tuple(n, _) => n.clone(),
-                    EnumVariant::Struct(n, _) => n.clone(),
-                })
-                .collect();
-            register_enum_variants(name.clone(), variant_names_list.clone());
-            
-            // Properly lower enum variants
-            let variant_names: Vec<(String, HirType)> = variant_names_list
-                .iter()
-                .map(|variant_name| {
-                    (variant_name.clone(), HirType::Named(name.clone()))
-                })
-                .collect();
-            
-            Ok(HirItem::Struct {
-                derives: Vec::new(),
-                name: name.clone(),
-                fields: variant_names,
-            })
-        }
+                     let body_hir = lower_block(body)?;
 
-        Item::Trait { name, generics: _, supertraits: _, methods, is_pub: _, attributes: _, where_clause: _ } => {
-            let mut fields = Vec::new();
-            
-            for item in methods {
-                match item {
-                    Item::Function { name: fn_name, .. } => {
-                        fields.push((fn_name.clone(), HirType::Unknown));
-                    }
-                    Item::AssociatedType { name: assoc_name, .. } => {
-                        fields.push((format!("_assoc_{}", assoc_name), HirType::Unknown));
-                    }
-                    _ => {}
-                }
-            }
-            
-            Ok(HirItem::Struct {
-                derives: Vec::new(),
-                name: format!("trait_{}", name),
-                fields,
-            })
-        }
+                     lowered_methods.push(HirItem::Function {
+                         name: method_name.clone(),
+                         generics: vec![],
+                         params: params_hir?,
+                         return_type: ret_type_hir,
+                         body: body_hir,
+                         is_public: *method_is_pub,
+                         where_clause: vec![],
+                     });
+                 }
+             }
+             
+             let generics_names: Vec<String> = generics
+                 .iter()
+                 .map(|g| match g {
+                     GenericParam::Type { name, .. } => name.clone(),
+                     GenericParam::Lifetime(name) => name.clone(),
+                     GenericParam::Const { name, .. } => name.clone(),
+                 })
+                 .collect();
+             
+             Ok(HirItem::Trait {
+                 name: name.clone(),
+                 methods: lowered_methods,
+                 generics: generics_names,
+                 is_public: *is_pub,
+             })
+         }
 
         Item::Impl {
-            generics: _,
-            trait_name: _,
-            struct_name,
-            methods,
-            is_unsafe: _,
-            attributes: _,
-            where_clause: _,
-        } => {
-            // Lower impl block methods with qualified names
-            // This allows them to be called as Type::method(args)
-            let methods_hir: Result<Vec<_>, _> = methods
-                .iter()
-                .filter_map(|item| {
-                    if let Item::Function { name, params, return_type, body, .. } = item {
-                        let qualified_name = format!("{}::{}", struct_name, name);
-                        
-                        let params_hir: Result<Vec<_>, _> = params
-                            .iter()
-                            .map(|param: &Parameter| {
-                                let ptype_hir = lower_type(&param.ty);
-                                match ptype_hir {
-                                    Ok(t) => Ok((param.name.clone(), t)),
-                                    Err(e) => Err(e),
-                                }
-                            })
-                            .collect();
+             generics,
+             trait_name,
+             struct_name,
+             methods,
+             is_unsafe,
+             attributes: _,
+             where_clause: _,
+         } => {
+             // Lower impl block methods with qualified names
+             // This allows them to be called as Type::method(args)
+             let methods_hir: Result<Vec<_>, _> = methods
+                 .iter()
+                 .filter_map(|item| {
+                     if let Item::Function { name, params, return_type, body, is_pub, .. } = item {
+                         let qualified_name = format!("{}::{}", struct_name, name);
+                         
+                         let params_hir: Result<Vec<_>, _> = params
+                             .iter()
+                             .map(|param: &Parameter| {
+                                 let ptype_hir = lower_type(&param.ty);
+                                 match ptype_hir {
+                                     Ok(t) => Ok((param.name.clone(), t)),
+                                     Err(e) => Err(e),
+                                 }
+                             })
+                             .collect();
 
-                        let ret_type_hir = if let Some(rt) = return_type {
-                            Some(lower_type(rt).ok())
-                        } else {
-                            None
-                        };
+                         let ret_type_hir = if let Some(rt) = return_type {
+                             Some(lower_type(rt).ok())
+                         } else {
+                             None
+                         };
 
-                        let body_hir = lower_block(body);
+                         let body_hir = lower_block(body);
 
-                        return Some(match (params_hir, ret_type_hir, body_hir) {
-                            (Ok(p), Some(Some(r)), Ok(b)) => {
-                                Ok(HirItem::Function {
-                                    name: qualified_name,
-                                    generics: vec![],
-                                    params: p,
-                                    return_type: Some(r),
-                                    body: b,
-                                })
-                            }
-                            (Ok(p), None, Ok(b)) => {
-                                Ok(HirItem::Function {
-                                    name: qualified_name,
-                                    generics: vec![],
-                                    params: p,
-                                    return_type: None,
-                                    body: b,
-                                })
-                            }
-                            _ => Err(LowerError {
-                                message: format!("Failed to lower impl method {}", name),
-                            }),
-                        });
-                    }
-                    None
-                })
-                .collect();
-            
-            // Return a marker struct that impl was processed
-            // The actual method functions will be collected by the compiler
-            Ok(HirItem::Struct {
-                derives: Vec::new(),
-                name: format!("impl_{}", struct_name),
-                fields: vec![],
-            })
-        }
+                         return Some(match (params_hir, ret_type_hir, body_hir) {
+                             (Ok(p), Some(Some(r)), Ok(b)) => {
+                                 Ok(HirItem::Function {
+                                     name: qualified_name,
+                                     generics: vec![],
+                                     params: p,
+                                     return_type: Some(r),
+                                     body: b,
+                                     is_public: *is_pub,
+                                     where_clause: vec![],
+                                 })
+                             }
+                             (Ok(p), None, Ok(b)) => {
+                                 Ok(HirItem::Function {
+                                     name: qualified_name,
+                                     generics: vec![],
+                                     params: p,
+                                     return_type: None,
+                                     body: b,
+                                     is_public: *is_pub,
+                                     where_clause: vec![],
+                                 })
+                             }
+                             _ => Err(LowerError {
+                                 message: format!("Failed to lower impl method {}", name),
+                             }),
+                         });
+                     }
+                     None
+                 })
+                 .collect();
+             
+             let generics_names: Vec<String> = generics
+                 .iter()
+                 .map(|g| match g {
+                     GenericParam::Type { name, .. } => name.clone(),
+                     GenericParam::Lifetime(name) => name.clone(),
+                     GenericParam::Const { name, .. } => name.clone(),
+                 })
+                 .collect();
+             
+             // Return a marker struct that impl was processed
+             // The actual method functions will be collected by the compiler
+             Ok(HirItem::Impl {
+                 trait_name: trait_name.clone(),
+                 struct_name: struct_name.clone(),
+                 methods: methods_hir?,
+                 generics: generics_names,
+                 is_unsafe: *is_unsafe,
+                 is_public: true,  // Impl blocks are always accessible (methods control visibility)
+             })
+         }
 
         Item::Module { name, items: module_items, is_inline: _, is_pub, attributes: _ } => {
+            // Push module context for qualified names
+            push_module(name.clone());
+            
             // Recursively lower all items in the module
             let mut lowered_items = Vec::new();
             for item in module_items {
                 lowered_items.push(lower_item(item)?);
             }
+            
+            // Pop module context
+            pop_module();
+            
             Ok(HirItem::Module {
                 name: name.clone(),
                 items: lowered_items,
@@ -2512,13 +2945,18 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
             })
         }
 
-        Item::TypeAlias { name, generics: _, ty, is_pub: _, attributes: _ } => {
-            Ok(HirItem::Struct {
-                derives: Vec::new(),
-                name: name.clone(),
-                fields: vec![(format!("_alias"), convert_type(ty))],
-            })
-        }
+        Item::TypeAlias { name, generics: _, ty: _, is_pub: _, attributes: _ } => {
+             // Phase 6.4c: Type aliases are registered in type checker for substitution
+             // but don't generate code themselves
+             // For now, just skip them - they're resolved at type-check time
+             // In future, could create a marker item for the module
+             // Return a marker Use statement or similar
+             Ok(HirItem::Use {
+                 path: vec![name.clone()],
+                 is_glob: false,
+                 is_public: true,
+             })
+         }
 
         Item::Const { name, ty, value: _, is_pub, attributes: _ } => {
             Ok(HirItem::Const {
@@ -2544,29 +2982,45 @@ fn lower_item(item: &Item) -> LowerResult<HirItem> {
                 derives: Vec::new(),
                 name: "extern".to_string(),
                 fields: vec![(format!("_extern_marker"), HirType::Tuple(vec![]))],
+                is_public: false,
             })
         }
 
-        Item::MacroDefinition { name, rules: _, attributes: _ } => {
+        Item::MacroDefinition { name, rules, attributes: _ } => {
+            // PHASE 5.2: Register user-defined macros
+            let mut macro_rules = Vec::new();
+            for rule in rules {
+                if let Some(actual_rule) = &rule.actual_rule {
+                    macro_rules.push((**actual_rule).clone());
+                }
+            }
+            
+            if !macro_rules.is_empty() {
+                register_macro(name.clone(), macro_rules);
+            }
+            
+            // Return a dummy struct for now (macros don't generate code)
             Ok(HirItem::Struct {
                 derives: Vec::new(),
                 name: format!("macro_{}", name),
                 fields: Vec::new(),
+                is_public: false,
             })
         }
 
         Item::AssociatedType { name, bounds: _, ty, attributes: _ } => {
-            let ty_hir = if let Some(t) = ty {
-                Some(lower_type(t)?)
-            } else {
-                None
-            };
+             let ty_hir = if let Some(t) = ty {
+                 Some(lower_type(t)?)
+             } else {
+                 None
+             };
 
-            Ok(HirItem::AssociatedType {
-                name: name.clone(),
-                ty: ty_hir,
-            })
-        }
+             Ok(HirItem::AssociatedType {
+                 name: name.clone(),
+                 ty: ty_hir,
+                 is_public: true,  // Associated types in traits are public by default
+             })
+         }
     }
 }
 
@@ -2577,6 +3031,11 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
     clear_function_registry();
     clear_impl_registry();
     clear_scope_tracker();
+    // PHASE 4.2: Clear unsafe tracking for fresh lowering
+    clear_unsafe_functions();
+    UNSAFE_DEPTH.with(|d| { *d.borrow_mut() = 0; });
+    // DON'T clear visibility registry here - parser already registered values
+    // We'll clear it at the end after lowering is complete
     
     // Helper function to replace Self with actual struct name in types
     fn replace_self_in_type(ty: &Type, struct_name: &str) -> Type {
@@ -2620,7 +3079,7 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
         }
     }
     
-    // First pass: register enums and structs, and collect impl methods
+    // First pass: register enums, structs, and unsafe functions
     let mut all_items = ast.to_vec();
     
     for item in ast {
@@ -2641,6 +3100,11 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
                 .map(|f| (f.name.clone(), lower_type(&f.ty).unwrap_or(HirType::Unknown)))
                 .collect();
             register_struct_fields(name.clone(), field_types);
+        } else if let Item::Function { name, is_unsafe, .. } = item {
+            // PHASE 4.2: Register unsafe functions before processing bodies
+            if *is_unsafe {
+                register_unsafe_function(name.clone());
+            }
         }
     }
     
@@ -2774,7 +3238,51 @@ pub fn lower(ast: &[Item]) -> LowerResult<Vec<HirItem>> {
         }
     }
     
-    expanded_items.iter().map(lower_item).collect()
+    // Lower all items
+    let mut hir_items: Vec<HirItem> = expanded_items.iter().map(lower_item).collect::<Result<Vec<_>, _>>()?;
+    
+    // If this is not the main file, wrap all items in an implicit module
+    let file_name = MODULE_PATH.with(|path| {
+        let p = path.borrow();
+        if p.len() > 1 {
+            // Already in a module from explicit mod declarations
+            None
+        } else {
+            // Get file name from CURRENT_FILE
+            CURRENT_FILE.with(|f| {
+                let fname = f.borrow().clone();
+                // Only wrap if it's explicitly a non-main file (e.g., "utils", not "test_fib_simple")
+                // Main entry points are main.rs or lib.rs
+                // Module files should be named after what they export (e.g., utils.rs -> utils module)
+                // For now, only wrap files that are explicitly NOT main or lib and have simple names
+                if fname == "main" || fname == "lib" {
+                    None
+                } else if fname.starts_with("test_") || fname.starts_with("example_") {
+                    // Don't wrap test or example files - they're entry points
+                    None
+                } else {
+                    // This is a module file like utils.rs
+                    Some(fname)
+                }
+            })
+        }
+    });
+    
+    if let Some(module_name) = file_name {
+        // Wrap in implicit module - set module context for the wrapped items
+        push_module(module_name.clone());
+        hir_items = vec![HirItem::Module {
+            name: module_name,
+            items: hir_items,
+            is_public: true,
+        }];
+        pop_module();
+    }
+    
+    // Clear visibility registry now that lowering is complete
+    clear_visibility_registry();
+    
+    Ok(hir_items)
 }
 
 #[cfg(test)]
@@ -2798,8 +3306,8 @@ mod tests {
         let expr = Expression::Integer(42);
         match lower_expression(&expr) {
             Ok(HirExpression::Integer(42)) => {},
-            Ok(other) => panic!("Expected Integer(42), got {:?}", other),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Ok(other) => assert!(false, "Expected Integer(42), got {:?}", other),
+            Err(e) => assert!(false, "Unexpected error: {}", e),
         }
     }
 }

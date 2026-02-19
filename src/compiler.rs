@@ -154,14 +154,23 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     let mut output_files = Vec::new();
     let mut all_hir_items = Vec::new();
 
-    // Parsing phase
+    // Parsing phase - compile main file first, then handle modules
     dashboard.start_phase("Parsing");
-    for source_file in &config.source_files {
+    let mut module_loader = crate::module_loader::ModuleLoader::new(".");
+    
+    // Find the main file (conventionally main.rs or lib.rs)
+    let main_file_path = config.source_files.iter()
+        .find(|f| f.file_name().map(|n| n == "main.rs" || n == "lib.rs").unwrap_or(false))
+        .or_else(|| config.source_files.first())
+        .cloned();
+    
+    // Compile main file first
+    if let Some(main_source_file) = &main_file_path {
         if config.verbose {
-            println!("📝 Compiling: {}", source_file.display());
+            println!("📝 Compiling: {}", main_source_file.display());
         }
 
-        match compile_single_file(source_file, config, &mut stats) {
+        match compile_single_file(main_source_file, config, &mut stats, &mut module_loader) {
             Ok((hir_items, loc)) => {
                 stats.files_compiled += 1;
                 stats.total_lines += loc;
@@ -169,12 +178,38 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             }
             Err(e) => {
                 if config.verbose {
-                    println!("❌ Error compiling {}: {}", source_file.display(), e.message);
+                    println!("❌ Error compiling {}: {}", main_source_file.display(), e.message);
                 }
                 errors.push(CompileError {
-                    file: Some(source_file.clone()),
+                    file: Some(main_source_file.clone()),
                     ..e
                 });
+            }
+        }
+    }
+    
+    // Then compile other files
+    for source_file in &config.source_files {
+        if Some(source_file) != main_file_path.as_ref() {
+            if config.verbose {
+                println!("📝 Compiling: {}", source_file.display());
+            }
+
+            match compile_single_file(source_file, config, &mut stats, &mut module_loader) {
+                Ok((hir_items, loc)) => {
+                    stats.files_compiled += 1;
+                    stats.total_lines += loc;
+                    all_hir_items.extend(hir_items);
+                }
+                Err(e) => {
+                    if config.verbose {
+                        println!("❌ Error compiling {}: {}", source_file.display(), e.message);
+                    }
+                    errors.push(CompileError {
+                        file: Some(source_file.clone()),
+                        ..e
+                    });
+                }
             }
         }
     }
@@ -191,9 +226,16 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         });
     }
 
+    // Merge modules with same name to fix qualified name resolution
+    // When we have inline `mod foo;` in one file and actual foo.rs, we get two modules
+    all_hir_items = merge_duplicate_modules(all_hir_items);
+
     // Type Checking phase
     dashboard.start_phase("Type Checking");
     let tc_start = Instant::now();
+    use std::io::Write;
+    let _ = std::fs::File::create("/tmp/type_checking_started.txt")
+        .and_then(|mut f| writeln!(f, "Type checking started with {} HIR items", all_hir_items.len()));
     if let Err(mut e) = typechecker::check_types(&all_hir_items) {
         if e.file.is_none() && !config.source_files.is_empty() {
             e.file = Some(config.source_files[0].clone());
@@ -296,6 +338,7 @@ fn compile_single_file(
     source_file: &std::path::Path,
     _config: &CompilationConfig,
     stats: &mut CompilationStats,
+    _module_loader: &mut crate::module_loader::ModuleLoader,
 ) -> Result<(Vec<lowering::HirItem>, usize), CompileError> {
     let source = fs::read_to_string(source_file).map_err(|e| {
         CompileError::new("File Reading", &format!("Failed to read file: {}", e), ErrorKind::InternalError)
@@ -312,13 +355,15 @@ fn compile_single_file(
     stats.lexing_time_ms += lex_start.elapsed().as_millis();
 
     let parse_start = Instant::now();
-    let ast = parser::parse(tokens).map_err(|e| {
+    let ast = parser::parse_with_modules(tokens, source_file.to_str()).map_err(|e| {
         CompileError::new("Parsing", &e.to_string(), ErrorKind::CodeIssue)
             .with_file(source_file.to_path_buf())
     })?;
     stats.parsing_time_ms += parse_start.elapsed().as_millis();
 
     let lower_start = Instant::now();
+    // Set current file for module-qualified function names
+    lowering::set_current_file(source_file.to_str().unwrap_or("main.rs"));
     let hir = lowering::lower(&ast).map_err(|e| {
         CompileError::new("Lowering", &e.to_string(), ErrorKind::CodeIssue)
             .with_file(source_file.to_path_buf())
@@ -461,6 +506,70 @@ fn generate_build_script(
 
     println!("{}", instructions);
     Ok(())
+}
+
+/// Merge modules with the same name to fix qualified name resolution
+/// 
+/// When compiling multi-file projects:
+/// - File 1 might have `mod utils;` declaration (creates empty Module)
+/// - File 2 might be utils.rs (creates Module with content)
+/// 
+/// This causes two Module items with the same name. We merge them so that
+/// the empty declaration doesn't override the actual module content.
+fn merge_duplicate_modules(items: Vec<crate::lowering::HirItem>) -> Vec<crate::lowering::HirItem> {
+    use crate::lowering::HirItem;
+    use std::collections::HashMap;
+    use std::io::Write;
+
+    let mut module_map: HashMap<String, Vec<HirItem>> = HashMap::new();
+    let mut result = Vec::new();
+
+    let _ = std::fs::File::create("/tmp/merge_debug.log")
+        .and_then(|mut f| writeln!(f, "[MERGE] Input items: {}\n", items.len()));
+
+    for item in items {
+        match &item {
+            HirItem::Module { name, items: module_items, .. } => {
+                // Collect modules by name
+                let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/merge_debug.log")
+                    .and_then(|mut f| writeln!(f, "[MERGE] Found module '{}' with {} items", name, module_items.len()));
+                module_map.entry(name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(item);
+            }
+            _ => {
+                // Non-modules go straight to result
+                result.push(item);
+            }
+        }
+    }
+
+    // Now merge modules with the same name
+    for (module_name, modules) in module_map.into_iter() {
+        if modules.len() == 1 {
+            // Only one module with this name, add as-is
+            result.push(modules.into_iter().next().unwrap());
+        } else {
+            // Multiple modules with same name - merge them
+            let mut merged_items = Vec::new();
+            let mut is_public = false;
+
+            for module in modules {
+                if let HirItem::Module { items: module_items, is_public: pub_flag, .. } = module {
+                    merged_items.extend(module_items);
+                    is_public = is_public || pub_flag;
+                }
+            }
+
+            result.push(HirItem::Module {
+                name: module_name,
+                items: merged_items,
+                is_public,
+            });
+        }
+    }
+
+    result
 }
 
 /// Create a static library from object files

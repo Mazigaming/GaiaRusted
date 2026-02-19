@@ -201,10 +201,10 @@ pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut Conve
             }
         }
         parser_ast::Type::TraitObject { bounds: _, lifetime: _ } => {
-            Err(BridgeError::new("Trait objects not yet supported"))
+            Err(BridgeError::new("E084: Trait objects not yet supported - use generic parameters instead"))
         }
         parser_ast::Type::ImplTrait { bounds: _ } => {
-            Err(BridgeError::new("Impl trait not yet supported"))
+            Err(BridgeError::new("E085: Impl trait not yet supported - use concrete return types instead"))
         }
         parser_ast::Type::AssociatedType { ty: _, name: _ } => {
             // For simplicity, treat associated types as unit
@@ -508,7 +508,7 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
             Ok(AstExpr::Tuple(vec![cond_expr, then_expr]))
         }
         _ => {
-            Err(BridgeError::new(format!("Expression type not yet supported: {:?}", expr)))
+            Err(BridgeError::new(format!("E087: Expression type not yet supported: {:?} - use simpler expressions", expr)))
         }
     }
 }

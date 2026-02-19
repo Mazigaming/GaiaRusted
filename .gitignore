@@ -11,6 +11,9 @@
 output
 output.*
 out
+t*
+binary
+output_binary
 # Generated scripts
 build.sh
 *.sh

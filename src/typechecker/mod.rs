@@ -19,14 +19,16 @@
 pub mod stdlib_integration;
 
 use crate::lowering::{
-    HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp, ClosureTrait,
+    HirExpression, HirItem, HirStatement, HirType, BinaryOp, UnaryOp, ClosureTrait, get_visibility,
 };
 use crate::parser::ast::GenericParam;
+use crate::parser::Visibility;
 use crate::iterators::IteratorMethodHandler;
 use crate::compiler::{CompileError, ErrorKind};
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::io::Write;
 
 /// Type checking error (deprecated, use CompileError instead)
 #[derive(Debug, Clone)]
@@ -132,31 +134,241 @@ pub struct TypeContext {
     generic_bounds: HashMap<String, Vec<String>>,
     /// Trait impls: (struct_name, trait_name) -> output_type (for operator traits)
     trait_impls: HashMap<(String, String), HirType>,
+    /// Visibility tracking: item_name -> is_public
+    function_visibility: HashMap<String, bool>,
+    /// Struct visibility tracking: struct_name -> is_public
+    struct_visibility: HashMap<String, bool>,
+    /// Impl method visibility tracking: (struct_name, method_name) -> is_public
+    impl_method_visibility: HashMap<(String, String), bool>,
+    /// Current module path for visibility checks: e.g., "crate", "crate::utils"
+    current_module: Vec<String>,
+    /// Use statement aliases: short_name -> qualified_name (for resolving imports)
+    use_aliases: HashMap<String, String>,
+    /// Type aliases: alias_name -> target_type (Phase 6.4c)
+    type_aliases: HashMap<String, HirType>,
+    /// Generic parameters per function: function_name -> Vec<GenericParam>
+    generic_params: HashMap<String, Vec<GenericParam>>,
+    /// Associated type constraints: (param_name, trait_name) -> (assoc_type_name, expected_type)
+    /// Example: ("T", "Iterator") -> ("Item", "i32")
+    associated_type_constraints: HashMap<(String, String), Vec<(String, String)>>,
 }
 
 impl TypeContext {
-    /// Create a new type context
-    pub fn new() -> Self {
-        TypeContext {
-            env: TypeEnv::new(),
-            functions: HashMap::new(),
-            structs: HashMap::new(),
-            traits: HashMap::new(),
-            impl_methods: HashMap::new(),
-            generic_bounds: HashMap::new(),
-            trait_impls: HashMap::new(),
-        }
-    }
+     /// Create a new type context
+     pub fn new() -> Self {
+         let mut ctx = TypeContext {
+             env: TypeEnv::new(),
+             functions: HashMap::new(),
+             structs: HashMap::new(),
+             traits: HashMap::new(),
+             impl_methods: HashMap::new(),
+             generic_bounds: HashMap::new(),
+             trait_impls: HashMap::new(),
+             function_visibility: HashMap::new(),
+             struct_visibility: HashMap::new(),
+             impl_method_visibility: HashMap::new(),
+             current_module: vec!["crate".to_string()],
+             use_aliases: HashMap::new(),
+             type_aliases: HashMap::new(),
+             generic_params: HashMap::new(),
+             associated_type_constraints: HashMap::new(),
+         };
+         
+         // PHASE 5.2: Register builtin macros as functions
+         // These are recognized at parse time as macros but type-checked as functions
+         ctx.register_builtin_macros();
+         
+         ctx
+     }
 
-    /// Register a function signature
-    fn register_function(&mut self, name: String, params: Vec<HirType>, ret: HirType) {
-        self.functions.insert(name, (params, ret));
-    }
+     /// Register a function signature with visibility
+     fn register_function(&mut self, name: String, params: Vec<HirType>, ret: HirType) {
+         self.functions.insert(name.clone(), (params, ret));
+         // Default to public if not explicitly set elsewhere
+         self.function_visibility.entry(name).or_insert(true);
+     }
+     
+     /// PHASE 5.2: Register builtin macros as functions for type checking
+     fn register_builtin_macros(&mut self) {
+         // Builtin macros with macro syntax (!) - these are treated as functions for type checking
+         // They will be dispatched at code generation time
+         self.register_function("println".to_string(), vec![], HirType::Tuple(vec![]));
+         self.register_function("print".to_string(), vec![], HirType::Tuple(vec![]));
+         self.register_function("eprintln".to_string(), vec![], HirType::Tuple(vec![]));
+         self.register_function("format".to_string(), vec![], HirType::String);
+         self.register_function("vec".to_string(), vec![], HirType::Vec(Box::new(HirType::Unknown)));
+         self.register_function("assert".to_string(), vec![], HirType::Tuple(vec![]));
+         self.register_function("assert_eq".to_string(), vec![], HirType::Tuple(vec![]));
+         self.register_function("assert_ne".to_string(), vec![], HirType::Tuple(vec![]));
+         self.register_function("panic".to_string(), vec![], HirType::Unknown);
+         self.register_function("dbg".to_string(), vec![], HirType::Unknown);
+         self.register_function("todo".to_string(), vec![], HirType::Unknown);
+         self.register_function("unimplemented".to_string(), vec![], HirType::Unknown);
+     }
+     
+     /// Register function with explicit visibility
+     fn register_function_with_visibility(&mut self, name: String, params: Vec<HirType>, ret: HirType, is_public: bool) {
+         self.functions.insert(name.clone(), (params, ret));
+         self.function_visibility.insert(name, is_public);
+     }
 
-    /// Register a struct definition
-    fn register_struct(&mut self, name: String, fields: Vec<(String, HirType)>) {
-        self.structs.insert(name, fields);
-    }
+     /// Register a struct definition with visibility
+     fn register_struct(&mut self, name: String, fields: Vec<(String, HirType)>) {
+         self.structs.insert(name.clone(), fields);
+         // Default to public if not explicitly set elsewhere
+         self.struct_visibility.entry(name).or_insert(true);
+     }
+     
+     /// Register struct with explicit visibility
+     fn register_struct_with_visibility(&mut self, name: String, fields: Vec<(String, HirType)>, is_public: bool) {
+         self.structs.insert(name.clone(), fields);
+         self.struct_visibility.insert(name, is_public);
+     }
+     
+     /// Check if a function is accessible from current module
+     fn is_function_accessible(&self, name: &str) -> bool {
+         // For now, all registered functions are accessible
+         // This will be enhanced in phase 2.4 for cross-module visibility
+         self.function_visibility.get(name).copied().unwrap_or(true)
+     }
+     
+     /// Check if a struct is accessible from current module
+     fn is_struct_accessible(&self, name: &str) -> bool {
+         // For now, all registered structs are accessible
+         // This will be enhanced in phase 2.4 for cross-module visibility
+         self.struct_visibility.get(name).copied().unwrap_or(true)
+     }
+     
+     /// Check if an impl method is accessible from current module
+     fn is_impl_method_accessible(&self, struct_name: &str, method_name: &str) -> bool {
+         // For now, all impl methods are accessible
+         // This will be enhanced in phase 2.4 for cross-module visibility
+         self.impl_method_visibility.get(&(struct_name.to_string(), method_name.to_string())).copied().unwrap_or(true)
+     }
+     
+     /// Get the qualified name for a use statement alias
+     pub fn get_use_alias(&self, short_name: &str) -> Option<String> {
+         self.use_aliases.get(short_name).cloned()
+     }
+     
+     /// Phase 6.4c: Register a type alias
+     pub fn register_type_alias(&mut self, alias_name: String, target_type: HirType) {
+         self.type_aliases.insert(alias_name, target_type);
+     }
+     
+     /// Phase 6.4c: Resolve a type alias
+     pub fn resolve_type_alias(&self, alias_name: &str) -> Option<HirType> {
+         self.type_aliases.get(alias_name).cloned()
+     }
+     
+     /// Check if crossing module boundary requires visibility check
+     /// Returns true if we're accessing an item from a different module
+     fn is_cross_module_access(&self, item_name: &str, current_module: &[String]) -> bool {
+         // If item name has :: it's qualified (crossing module boundary)
+         item_name.contains("::")
+     }
+     
+     /// Check visibility of a function - returns error message if not accessible
+     fn check_function_visibility(&self, func_name: &str) -> Option<String> {
+         if !func_name.contains("::") {
+             // Same module or builtin - always accessible
+             return None;
+         }
+         
+         // Check advanced visibility first (from lowering phase)
+         if let Some(visibility) = get_visibility(func_name) {
+             match visibility {
+                 Visibility::Private => {
+                     return Some(format!("Private function `{}` is not accessible from another module", func_name));
+                 }
+                 Visibility::PublicCrate => {
+                     // For now, allow pub(crate) - full module tracking would be needed for proper enforcement
+                     // This would require tracking the current crate/module context
+                     return None; // Allow for now, could be enhanced later
+                 }
+                 Visibility::PublicSuper => {
+                     // pub(super) - accessible in parent module
+                     // Would require tracking module hierarchy
+                     return None; // Allow for now
+                 }
+                 Visibility::PublicInPath(_path) => {
+                     // pub(in path) - accessible in specific path
+                     // Would require path matching against current context
+                     return None; // Allow for now
+                 }
+                 Visibility::Public => {
+                     // Always accessible
+                     return None;
+                 }
+             }
+         }
+         
+         // Fall back to old boolean check for backward compatibility
+         if let Some(&is_public) = self.function_visibility.get(func_name) {
+             if !is_public {
+                 return Some(format!("Private function `{}` is not accessible from another module", func_name));
+             }
+         }
+         // Not in visibility map = public by default
+         None
+     }
+     
+     /// Check visibility of a struct - returns error message if not accessible
+     fn check_struct_visibility(&self, struct_name: &str) -> Option<String> {
+         if !struct_name.contains("::") {
+             // Same module or builtin - always accessible
+             return None;
+         }
+         
+         // Check advanced visibility first (from lowering phase)
+         if let Some(visibility) = get_visibility(struct_name) {
+             match visibility {
+                 Visibility::Private => {
+                     return Some(format!("Private struct `{}` is not accessible from another module", struct_name));
+                 }
+                 Visibility::PublicCrate => {
+                     // pub(crate) - visible in crate only
+                     return None; // Allow for now
+                 }
+                 Visibility::PublicSuper => {
+                     // pub(super) - visible in parent module
+                     return None; // Allow for now
+                 }
+                 Visibility::PublicInPath(_path) => {
+                     // pub(in path) - visible in specific path
+                     return None; // Allow for now
+                 }
+                 Visibility::Public => {
+                     // Always accessible
+                     return None;
+                 }
+             }
+         }
+         
+         // Fall back to old boolean check
+         if let Some(&is_public) = self.struct_visibility.get(struct_name) {
+             if !is_public {
+                 return Some(format!("Private struct `{}` is not accessible from another module", struct_name));
+             }
+         }
+         None
+     }
+     
+     /// Check visibility of an impl method - returns error message if not accessible
+     fn check_impl_method_visibility(&self, struct_name: &str, method_name: &str) -> Option<String> {
+         if !struct_name.contains("::") && method_name.is_empty() {
+             // Same module - always accessible
+             return None;
+         }
+         
+         // Check visibility
+         if let Some(&is_public) = self.impl_method_visibility.get(&(struct_name.to_string(), method_name.to_string())) {
+             if !is_public {
+                 return Some(format!("Private method `{}::{}` is not accessible from another module", struct_name, method_name));
+             }
+         }
+         None
+     }
 
     /// Look up a function signature
     fn lookup_function(&self, name: &str) -> Option<(Vec<HirType>, HirType)> {
@@ -187,10 +399,46 @@ impl TypeContext {
     fn get_generic_bounds(&self, param_name: &str) -> Vec<String> {
         self.generic_bounds.get(param_name).cloned().unwrap_or_default()
     }
+    
+    /// Register generic parameters for a function
+    fn register_generic_params(&mut self, func_name: String, params: Vec<GenericParam>) {
+        self.generic_params.insert(func_name, params);
+    }
+    
+    /// Get generic parameters for a function
+    fn get_generic_params(&self, func_name: &str) -> Vec<GenericParam> {
+        self.generic_params.get(func_name).cloned().unwrap_or_default()
+    }
+    
+    /// Register associated type constraints for a generic parameter and trait
+    /// Example: T: Iterator<Item = i32> → register_associated_type_constraint("T", "Iterator", "Item", "i32")
+    fn register_associated_type_constraint(&mut self, param_name: String, trait_name: String, assoc_type: String, expected_type: String) {
+        let key = (param_name, trait_name);
+        self.associated_type_constraints
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push((assoc_type, expected_type));
+    }
+    
+    /// Get associated type constraints for a parameter and trait
+    fn get_associated_type_constraints(&self, param_name: &str, trait_name: &str) -> Vec<(String, String)> {
+        self.associated_type_constraints
+            .get(&(param_name.to_string(), trait_name.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
 
     /// Register an impl block method
     fn register_impl_method(&mut self, struct_name: String, method_name: String, params: Vec<HirType>, ret: HirType) {
-        self.impl_methods.insert((struct_name, method_name), (params, ret));
+        self.impl_methods.insert((struct_name.clone(), method_name.clone()), (params, ret));
+        // Default to public if not explicitly set elsewhere
+        self.impl_method_visibility.entry((struct_name, method_name)).or_insert(true);
+    }
+    
+    /// Register an impl block method with explicit visibility
+    fn register_impl_method_with_visibility(&mut self, struct_name: String, method_name: String, params: Vec<HirType>, ret: HirType, is_public: bool) {
+        self.impl_methods.insert((struct_name.clone(), method_name.clone()), (params, ret));
+        self.impl_method_visibility.insert((struct_name, method_name), is_public);
     }
 
     /// Look up an impl block method
@@ -262,6 +510,18 @@ impl TypeChecker {
         self.context.register_function("__builtin_println".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_eprintln".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
         self.context.register_function("__builtin_printf".to_string(), vec![HirType::Reference(Box::new(HirType::String))], HirType::Tuple(vec![]));
+        // printf is variadic - register with format string + up to 10 args
+        for i in 0..=10 {
+            let mut args = vec![HirType::Reference(Box::new(HirType::String))];
+            for _ in 0..i {
+                args.push(HirType::Unknown); // Variadic args can be any type
+            }
+            self.context.register_function(format!("printf_{}", i), args, HirType::Int32);
+        }
+        // Also register plain printf for backwards compatibility (with 1 arg minimum)
+        self.context.register_function("printf".to_string(), 
+            vec![HirType::Reference(Box::new(HirType::String)), HirType::Unknown, HirType::Unknown], 
+            HirType::Int32);
         
         // Enum/pattern matching helper - extracts value from Some/Ok/Err
         // This is a polymorphic function that returns the inner type
@@ -273,6 +533,7 @@ impl TypeChecker {
         self.context.register_function("gaia_print_i64".to_string(), vec![HirType::Int64], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_bool".to_string(), vec![HirType::Bool], HirType::Tuple(vec![]));
         self.context.register_function("gaia_print_f64".to_string(), vec![HirType::Float64], HirType::Tuple(vec![]));
+        self.context.register_function("gaia_print_str".to_string(), vec![HirType::String], HirType::Tuple(vec![]));
 
         // Type conversions
         self.context.register_function("as_i32".to_string(), vec![HirType::Float64], HirType::Int32);
@@ -374,6 +635,13 @@ impl TypeChecker {
          self.context.register_function("HashSet::is_empty".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Bool);
          self.context.register_function("HashSet::len".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Int32);
          self.context.register_function("HashSet::clear".to_string(), vec![HirType::Named("HashSet".to_string())], HirType::Tuple(vec![]));
+         // Phase 6.1c: Set operations
+         self.context.register_function("HashSet::union".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Named("HashSet".to_string())], HirType::Named("HashSet".to_string()));
+         self.context.register_function("HashSet::intersection".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Named("HashSet".to_string())], HirType::Named("HashSet".to_string()));
+         self.context.register_function("HashSet::difference".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Named("HashSet".to_string())], HirType::Named("HashSet".to_string()));
+         self.context.register_function("HashSet::is_subset".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Named("HashSet".to_string())], HirType::Bool);
+         self.context.register_function("HashSet::is_superset".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Named("HashSet".to_string())], HirType::Bool);
+         self.context.register_function("HashSet::is_disjoint".to_string(), vec![HirType::Named("HashSet".to_string()), HirType::Named("HashSet".to_string())], HirType::Bool);
          
          // LinkedList methods
          self.context.register_function("LinkedList::push_front".to_string(), vec![HirType::Named("LinkedList".to_string()), HirType::Unknown], HirType::Tuple(vec![]));
@@ -411,6 +679,25 @@ impl TypeChecker {
          self.context.register_function("String::repeat".to_string(), vec![HirType::String, HirType::Int64], HirType::String);
          self.context.register_function("String::chars".to_string(), vec![HirType::String], HirType::Named("Iterator".to_string()));
          self.context.register_function("String::split".to_string(), vec![HirType::String, HirType::String], HirType::Named("Iterator".to_string()));
+         
+         // Phase 6.3: Additional String methods
+         self.context.register_function("String::trim_start".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::trim_end".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::find".to_string(), vec![HirType::String, HirType::String], HirType::Named("Option".to_string())); // Option<i32>
+         self.context.register_function("String::rfind".to_string(), vec![HirType::String, HirType::String], HirType::Named("Option".to_string())); // Option<i32>
+         self.context.register_function("String::get".to_string(), vec![HirType::String, HirType::Int32], HirType::Named("Option".to_string())); // Option<char>
+         self.context.register_function("String::slice".to_string(), vec![HirType::String, HirType::Int32, HirType::Int32], HirType::String);
+         self.context.register_function("String::parse".to_string(), vec![HirType::String], HirType::Unknown); // Generic - returns T
+         self.context.register_function("String::matches".to_string(), vec![HirType::String, HirType::String], HirType::Bool);
+         self.context.register_function("String::reverse".to_string(), vec![HirType::String], HirType::String);
+         self.context.register_function("String::is_ascii".to_string(), vec![HirType::String], HirType::Bool);
+         self.context.register_function("String::is_numeric".to_string(), vec![HirType::String], HirType::Bool);
+         self.context.register_function("String::is_alphabetic".to_string(), vec![HirType::String], HirType::Bool);
+         self.context.register_function("String::split_once".to_string(), vec![HirType::String, HirType::String], HirType::Named("Option".to_string())); // Option<(String, String)>
+         self.context.register_function("String::rsplit_once".to_string(), vec![HirType::String, HirType::String], HirType::Named("Option".to_string())); // Option<(String, String)>
+         self.context.register_function("String::pad_start".to_string(), vec![HirType::String, HirType::Int32, HirType::Char], HirType::String);
+         self.context.register_function("String::pad_end".to_string(), vec![HirType::String, HirType::Int32, HirType::Char], HirType::String);
+         self.context.register_function("String::truncate".to_string(), vec![HirType::String, HirType::Int32], HirType::String);
          
          // Option<T> methods
          self.context.register_function("Option::unwrap".to_string(), vec![HirType::Named("Option".to_string())], HirType::Unknown);
@@ -535,6 +822,67 @@ impl TypeChecker {
         self.context.register_function("Iterator::partition".to_string(),
             vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
             HirType::Tuple(vec![HirType::Named("Vec".to_string()), HirType::Named("Vec".to_string())])); // (Vec<T>, Vec<T>)
+        
+        // Phase 6.2: Additional iterator adapters
+        // zip(other: Iterator) -> Iterator<(T, U)>
+        self.context.register_function("Iterator::zip".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, Iterator
+            HirType::Named("Iterator".to_string())); // Iterator<(T, U)>
+        
+        // cycle() -> Iterator<T> (infinite)
+        self.context.register_function("Iterator::cycle".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // skip_while(closure: Fn(T) -> bool) -> Iterator<T>
+        self.context.register_function("Iterator::skip_while".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // take_while(closure: Fn(T) -> bool) -> Iterator<T>
+        self.context.register_function("Iterator::take_while".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // flat_map(closure: Fn(T) -> Iterator<U>) -> Iterator<U>
+        self.context.register_function("Iterator::flat_map".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Iterator".to_string())); // Iterator<U>
+        
+        // flatten() -> Iterator<U> (for Iterator<Iterator<U>>)
+        self.context.register_function("Iterator::flatten".to_string(),
+            vec![HirType::Unknown], // Iterator<Iterator<T>>
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // inspect(closure: Fn(&T)) -> Iterator<T>
+        self.context.register_function("Iterator::inspect".to_string(),
+            vec![HirType::Unknown, HirType::Unknown], // Iterator, closure
+            HirType::Named("Iterator".to_string())); // Iterator<T>
+        
+        // next() -> Option<T> (used in manual iteration)
+        self.context.register_function("Iterator::next".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Option".to_string())); // Option<T>
+        
+        // nth(n: i64) -> Option<T>
+        self.context.register_function("Iterator::nth".to_string(),
+            vec![HirType::Unknown, HirType::Int64], // Iterator, index
+            HirType::Named("Option".to_string())); // Option<T>
+        
+        // last() -> Option<T>
+        self.context.register_function("Iterator::last".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Option".to_string())); // Option<T>
+        
+        // min() -> Option<T>
+        self.context.register_function("Iterator::min".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Option".to_string())); // Option<T>
+        
+        // max() -> Option<T>
+        self.context.register_function("Iterator::max".to_string(),
+            vec![HirType::Unknown], // Iterator
+            HirType::Named("Option".to_string())); // Option<T>
         
         // vec! macro expansion builtins (Fix #3)
         // __builtin_vec_from([a, b, c]) -> Vec<T>
@@ -672,10 +1020,25 @@ impl TypeChecker {
         self.collect_definitions_recursive(items, "".to_string())?;
         // Second pass: process use statements
         self.process_use_statements(items, "".to_string())?;
+        
+        // DEBUG: Print all registered functions to file
+        use std::io::Write;
+        let _ = std::fs::File::create("/tmp/gaiarusted_functions.log")
+            .and_then(|mut f| {
+                writeln!(f, "[DEBUG] Registered functions ({}):", self.context.functions.len())?;
+                for (name, _) in &self.context.functions {
+                    writeln!(f, "  - {}", name)?;
+                }
+                Ok(())
+            });
+        
         Ok(())
     }
 
     fn collect_definitions_recursive(&mut self, items: &[HirItem], module_prefix: String) -> TypeCheckResult<()> {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+            .and_then(|mut f| writeln!(f, "[DEBUG] collect_definitions_recursive: module_prefix='{}', items={}", module_prefix, items.len()));
         for item in items {
             match item {
                 HirItem::Function {
@@ -683,9 +1046,11 @@ impl TypeChecker {
                     params,
                     return_type,
                     generics,
-                    ..
+                    is_public,
+                    where_clause,
+                    .. // Allow other fields we don't use here
                 } => {
-                    // Register generic parameter bounds
+                    // Register generic parameter bounds from generic parameters
                     for generic in generics {
                         if let GenericParam::Type { name: param_name, bounds, .. } = generic {
                             if !bounds.is_empty() {
@@ -693,6 +1058,37 @@ impl TypeChecker {
                             }
                         }
                     }
+                    
+                    // Register where clause constraints as additional bounds
+                    for constraint in where_clause {
+                        let mut combined_bounds = self.context.get_generic_bounds(&constraint.param_name);
+                        combined_bounds.extend(constraint.bounds.clone());
+                        self.context.register_generic_bounds(constraint.param_name.clone(), combined_bounds);
+                        
+                        // Phase 3.2c: Register associated type constraints
+                        for trait_bound in &constraint.trait_bounds {
+                            for (assoc_type_name, expected_type) in &trait_bound.associated_types {
+                                self.context.register_associated_type_constraint(
+                                    constraint.param_name.clone(),
+                                    trait_bound.trait_name.clone(),
+                                    assoc_type_name.clone(),
+                                    expected_type.clone(),
+                                );
+                            }
+                        }
+                    }
+                    
+                    // Compute the full function name for generic params registration
+                    let full_name_for_generics = if name.contains("::") {
+                        name.clone()
+                    } else if module_prefix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module_prefix, name)
+                    };
+                    
+                    // Register generic parameters for this function (for call-site validation)
+                    self.context.register_generic_params(full_name_for_generics.clone(), generics.clone());
                     
                     let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
                     let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
@@ -703,12 +1099,21 @@ impl TypeChecker {
                     } else {
                         format!("{}::{}", module_prefix, name)
                     };
+                    let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+                        .and_then(|mut f| writeln!(f, "[DEBUG] Registering function: {} (is_public: {})", full_name, is_public));
                     self.context
-                        .register_function(full_name, param_types, ret_type);
+                        .register_function_with_visibility(full_name.clone(), param_types.clone(), ret_type.clone(), *is_public);
+                    
+                    // Also register without "crate::" prefix for easier resolution
+                    // (e.g., "crate::utils::helper" also registered as "utils::helper")
+                    if full_name.starts_with("crate::") {
+                        let short_name = full_name.trim_start_matches("crate::").to_string();
+                        self.context.register_function_with_visibility(short_name, param_types, ret_type, *is_public);
+                    }
                 }
-                HirItem::Struct { name, fields, derives } => {
-                    self.context
-                        .register_struct(name.clone(), fields.clone());
+                HirItem::Struct { name, fields, derives, is_public } => {
+                     self.context
+                         .register_struct_with_visibility(name.clone(), fields.clone(), *is_public);
                     
                     // Apply derives to register impl methods
                     if !derives.is_empty() {
@@ -791,8 +1196,10 @@ impl TypeChecker {
                     }
                 }
                 HirItem::Module { name, items: module_items, .. } => {
+                    // Build the new prefix for nested items
                     let new_prefix = if module_prefix.is_empty() {
-                        name.clone()
+                        // Top-level module gets "crate::" prefix
+                        format!("crate::{}", name)
                     } else {
                         format!("{}::{}", module_prefix, name)
                     };
@@ -828,18 +1235,18 @@ impl TypeChecker {
                     }
 
                     for method in methods {
-                        if let HirItem::Function { name, params, return_type, .. } = method {
-                            let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
-                            let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
-                            
-                            // Register both as impl method and as a qualified function
-                            self.context.register_impl_method(struct_name.clone(), name.clone(), param_types.clone(), ret_type.clone());
-                            
-                            // Also register as a qualified function so it can be called as Type::method()
-                            let qualified_name = format!("{}::{}", struct_name, name);
-                            self.context.register_function(qualified_name, param_types, ret_type);
-                        }
-                    }
+                         if let HirItem::Function { name, params, return_type, is_public, .. } = method {
+                             let param_types: Vec<_> = params.iter().map(|(_, ty)| ty.clone()).collect();
+                             let ret_type = return_type.clone().unwrap_or(HirType::Unknown);
+                             
+                             // Register both as impl method and as a qualified function
+                             self.context.register_impl_method_with_visibility(struct_name.clone(), name.clone(), param_types.clone(), ret_type.clone(), *is_public);
+                             
+                             // Also register as a qualified function so it can be called as Type::method()
+                             let qualified_name = format!("{}::{}", struct_name, name);
+                             self.context.register_function_with_visibility(qualified_name, param_types, ret_type, *is_public);
+                         }
+                     }
                     self.collect_definitions_recursive(methods, module_prefix.clone())?;
                 }
                 HirItem::Enum { .. } => {
@@ -866,18 +1273,57 @@ impl TypeChecker {
                 HirItem::Use { path, is_glob, .. } => {
                     // Process use statements to bring items into scope
                     if !path.is_empty() {
+                        // Handle special path prefixes: crate:: or super::
+                        let (is_super, normalized_path): (bool, Vec<String>) = if !path.is_empty() && path[0] == "crate" {
+                            (false, path[1..].to_vec())
+                        } else if !path.is_empty() && path[0] == "super" {
+                            (true, path[1..].to_vec())
+                        } else {
+                            (false, path.clone())
+                        };
+                        
+                        if normalized_path.is_empty() && !is_super {
+                            continue;
+                        }
+                        
                         if *is_glob {
                             // use module::* - import all items from module
                             // Remove the "*" from the end of the path
-                            let module_path = path.iter()
+                            let module_path = normalized_path.iter()
                                 .filter(|p| *p != "*")
                                 .cloned()
                                 .collect::<Vec<_>>()
                                 .join("::");
                             
-                            // Import all functions that start with the module path
+                            // When resolving glob imports, we need to handle:
+                            // 1. Direct module path: "math::add"
+                            // 2. Crate-qualified path: "crate::math::add"
+                            // 3. Current module path: "crate::current::math::add"
+                            // 4. Super module path: "super::math::add" (relative parent)
+                            
+                            let mut patterns = vec![
+                                format!("{}::", module_path), // math::
+                                format!("crate::{}::", module_path), // crate::math::
+                                format!("{}::{}", module_prefix, module_path), // current::math::
+                                format!("crate::{}::{}", module_prefix, module_path), // crate::current::math::
+                            ];
+                            
+                            // For super:: paths, try to resolve relative to parent module
+                            if is_super && !module_prefix.is_empty() {
+                                // Remove last segment from module_prefix to get parent
+                                let parts: Vec<&str> = module_prefix.split("::").collect();
+                                if parts.len() > 1 {
+                                    let parent = parts[..parts.len()-1].join("::");
+                                    patterns.push(format!("{}::{}", parent, module_path));
+                                    patterns.push(format!("crate::{}::{}", parent, module_path));
+                                }
+                            }
+                            
+                            // Import all functions matching any pattern
                             let functions_to_import: Vec<(String, Vec<HirType>, HirType)> = self.context.functions.iter()
-                                .filter(|(fname, _)| fname.starts_with(&format!("{}::", module_path)))
+                                .filter(|(fname, _)| {
+                                    patterns.iter().any(|p| fname.starts_with(p))
+                                })
                                 .map(|(fname, (params, ret))| {
                                     // Extract the short name (after the last ::)
                                     let short_name = fname.split("::").last().unwrap_or(fname).to_string();
@@ -890,9 +1336,11 @@ impl TypeChecker {
                                 self.context.register_function(short_name, params, ret);
                             }
                             
-                            // Import all structs that start with the module path
+                            // Import all structs matching any pattern
                             let structs_to_import: Vec<(String, Vec<(String, HirType)>)> = self.context.structs.iter()
-                                .filter(|(sname, _)| sname.starts_with(&format!("{}::", module_path)))
+                                .filter(|(sname, _)| {
+                                    patterns.iter().any(|p| sname.starts_with(p))
+                                })
                                 .map(|(sname, fields)| {
                                     // Extract the short name (after the last ::)
                                     let short_name = sname.split("::").last().unwrap_or(sname).to_string();
@@ -904,16 +1352,38 @@ impl TypeChecker {
                             for (short_name, fields) in structs_to_import {
                                 self.context.register_struct(short_name, fields);
                             }
-                        } else if path.len() > 1 {
+                        } else if normalized_path.len() > 1 {
                             // use module::item - import specific item
-                            let item_name = &path[path.len() - 1];
-                            let module_path = path[..path.len() - 1].join("::");
-                            let full_path = format!("{}::{}", module_path, item_name);
+                            let item_name = &normalized_path[normalized_path.len() - 1];
+                            let module_path = normalized_path[..normalized_path.len() - 1].join("::");
                             
-                            // Create an alias so the item can be accessed by its short name
-                            if let Some((param_types, ret_type)) = self.context.lookup_function(&full_path) {
+                            // For super:: paths, resolve relative to parent module
+                            let full_path = if is_super {
+                                // Remove last segment from module_prefix to get parent
+                                let parts: Vec<&str> = module_prefix.split("::").collect();
+                                let parent = if parts.len() > 1 {
+                                    parts[..parts.len()-1].join("::")
+                                } else {
+                                    "crate".to_string()
+                                };
+                                format!("{}::{}", parent, module_path)
+                            } else {
+                                format!("{}::{}", module_path, item_name)
+                            };
+                            
+                            let final_lookup_path = if is_super {
+                                format!("{}::{}", full_path, item_name)
+                            } else {
+                                full_path.clone()
+                            };
+                            
+                            // Register alias mapping short name to full qualified name
+                            self.context.use_aliases.insert(item_name.clone(), final_lookup_path.clone());
+                            
+                            // Also create an alias so the item can be accessed by its short name
+                            if let Some((param_types, ret_type)) = self.context.lookup_function(&final_lookup_path) {
                                 self.context.register_function(item_name.clone(), param_types, ret_type);
-                            } else if let Some(fields) = self.context.lookup_struct(&full_path) {
+                            } else if let Some(fields) = self.context.lookup_struct(&final_lookup_path) {
                                 self.context.register_struct(item_name.clone(), fields);
                             }
                         }
@@ -1670,44 +2140,113 @@ impl TypeChecker {
                             };
                             
                             let qualified_name = format!("{}::{}", receiver_type_name, name);
-                            if let Some((param_types, ret_type)) = self.context.lookup_function(&qualified_name) {
-                                // Found as a method! Check arguments
-                                let is_variadic = qualified_name.starts_with("__builtin_print");
-                                if !is_variadic && args.len() != param_types.len() {
-                                    return Err(TypeCheckError {
-                                        message: format!(
-                                            "Method {} expects {} arguments, got {}",
-                                            name,
-                                            param_types.len(),
-                                            args.len()
-                                        ),
-                                    });
-                                }
-                                
-                                // Check argument types
-                                let mut substitutions = std::collections::HashMap::new();
-                                for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
-                                    let arg_ty = self.infer_type(arg)?;
-                                    
-                                    if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
-                                        substitutions.insert(gen_name, concrete_ty);
-                                    } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
-                                        return Err(TypeCheckError {
-                                            message: format!(
-                                                "Argument {} has type {}, expected {}",
-                                                i, arg_ty, param_ty
-                                            ),
-                                        });
-                                    }
-                                }
-                                
-                                let final_ret_type = self.apply_substitutions(&ret_type, &substitutions);
-                                return Ok(final_ret_type);
-                            }
+                             if let Some((param_types, ret_type)) = self.context.lookup_function(&qualified_name) {
+                                 // Check visibility before proceeding
+                                 if let Some(vis_error) = self.context.check_function_visibility(&qualified_name) {
+                                     return Err(TypeCheckError {
+                                         message: vis_error,
+                                     });
+                                 }
+                                 
+                                 // Found as a method! Check arguments
+                                 let is_variadic = qualified_name.starts_with("__builtin_print");
+                                 if !is_variadic && args.len() != param_types.len() {
+                                     return Err(TypeCheckError {
+                                         message: format!(
+                                             "Method {} expects {} arguments, got {}",
+                                             name,
+                                             param_types.len(),
+                                             args.len()
+                                         ),
+                                     });
+                                 }
+                                 
+                                 // Check argument types
+                                 let mut substitutions = std::collections::HashMap::new();
+                                 for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                                     let arg_ty = self.infer_type(arg)?;
+                                     
+                                     if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
+                                         substitutions.insert(gen_name, concrete_ty);
+                                     } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                         return Err(TypeCheckError {
+                                             message: format!(
+                                                 "Argument {} has type {}, expected {}",
+                                                 i, arg_ty, param_ty
+                                             ),
+                                         });
+                                     }
+                                 }
+                                 
+                                 let final_ret_type = self.apply_substitutions(&ret_type, &substitutions);
+                                 return Ok(final_ret_type);
+                             }
                         }
                         
                         // Try to look it up as a function
-                         if let Some((param_types, ret_type)) = self.context.lookup_function(name) {
+                          let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+                              .and_then(|mut f| writeln!(f, "[DEBUG] Looking up function: '{}' (args: {})", name, args.len()));
+                          
+                          // Try multiple lookup strategies for path resolution
+                          let mut lookup_names = vec![name.clone()];
+                          
+                          // For crate:: paths, also try variants
+                          if name.starts_with("crate::") {
+                              lookup_names.push(name.trim_start_matches("crate::").to_string());
+                              
+                              // Extract module path from crate::module::item
+                              // crate::math::multiply -> try with file contexts: crate_path_test::math::multiply
+                              let without_crate = name.trim_start_matches("crate::");
+                              
+                              // Try to find matching functions by looking for those with same tail
+                              // e.g., crate::math::multiply should match crate::crate_path_test::math::multiply
+                              for (fname, _) in self.context.functions.iter() {
+                                  if fname.ends_with(&format!("::{}", without_crate)) || fname.ends_with(without_crate) {
+                                      lookup_names.push(fname.clone());
+                                  }
+                              }
+                          }
+                          
+                          // If it looks like a path (has ::), try with crate:: prefix
+                          if name.contains("::") && !name.starts_with("crate::") {
+                              lookup_names.push(format!("crate::{}", name));
+                          }
+                          
+                          let mut found_func = None;
+                          for lookup_name in &lookup_names {
+                              if let Some(sig) = self.context.lookup_function(lookup_name) {
+                                  found_func = Some(sig);
+                                  let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+                                      .and_then(|mut f| writeln!(f, "[DEBUG] Found function via: '{}'", lookup_name));
+                                  break;
+                              }
+                          }
+                          
+                          // If still not found, log all available functions starting with module name
+                          if found_func.is_none() && name.contains("::") {
+                              let module_prefix = name.split("::").next().unwrap_or("");
+                              let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+                                  .and_then(|mut f| {
+                                      writeln!(f, "[DEBUG] Function '{}' not found. Available functions with prefix '{}::':", name, module_prefix)?;
+                                      for (fname, _) in self.context.functions.iter() {
+                                          if fname.contains(module_prefix) {
+                                              writeln!(f, "[DEBUG]   {}", fname)?;
+                                          }
+                                      }
+                                      Ok(())
+                                  });
+                          }
+                          
+                          if let Some((param_types, ret_type)) = found_func {
+                              let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+                                  .and_then(|mut f| writeln!(f, "[DEBUG] Found function: {}", name));
+                              // Check visibility for qualified names
+                              if let Some(vis_error) = self.context.check_function_visibility(name) {
+                                  return Err(TypeCheckError {
+                                      message: vis_error,
+                                  });
+                              }
+                             
                              // Special handling for Box::new - return Box<T> based on argument type
                              if name == "Box::new" {
                                  if args.len() != 1 {
@@ -1736,9 +2275,14 @@ impl TypeChecker {
                                  return Ok(HirType::Named(format!("Rc<{}>", arg_ty)));
                              }
                             
-                            // Check argument count (allow variadic for builtin print functions)
+                            // Check argument count (allow variadic for builtin print functions and macros)
                             let is_variadic = name.starts_with("__builtin_print") || name.starts_with("__builtin_eprintln") 
-                                || name == "println" || name == "print" || name == "eprintln" || name == "__builtin_printf";
+                                || name == "println" || name == "print" || name == "eprintln" 
+                                || name == "__builtin_printf" || name == "printf"
+                                // PHASE 5.2: Builtin macros are variadic
+                                || name == "format" || name == "vec" || name == "assert" || name == "assert_eq" 
+                                || name == "assert_ne" || name == "panic" || name == "dbg" || name == "todo" 
+                                || name == "unimplemented";
                             if !is_variadic && args.len() != param_types.len() {
                                 return Err(TypeCheckError {
                                     message: format!(
@@ -1753,54 +2297,125 @@ impl TypeChecker {
                             // Check argument types and collect generic substitutions
                             let mut substitutions = std::collections::HashMap::new();
                             
-                            // Skip type checking for variadic/polymorphic functions like println
+                            // Skip type checking for variadic/polymorphic functions like println and printf
                             let is_polymorphic = name == "println" || name == "print" || name == "eprintln" 
                                 || name == "__builtin_println" || name == "__builtin_print" || name == "__builtin_eprintln"
-                                || name == "__builtin_printf";
+                                || name == "__builtin_printf" || name == "printf"
+                                // PHASE 5.2: Builtin macros are polymorphic
+                                || name == "format" || name == "vec" || name == "assert" || name == "assert_eq" 
+                                || name == "assert_ne" || name == "panic" || name == "dbg" || name == "todo" 
+                                || name == "unimplemented";
                             
                             if !is_polymorphic {
-                                for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
-                                    let arg_ty = self.infer_type(arg)?;
-                                    
-                                    // Try to unify generic types
-                                    if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
-                                        substitutions.insert(gen_name, concrete_ty);
-                                    } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
-                                        let msg = if arg_ty == HirType::Int64 || arg_ty == HirType::Int32 {
-                                            if param_ty.to_string().chars().all(|c| c.is_alphanumeric() || c == '_') {
-                                                format!(
-                                                    "Argument {} has type {}, expected {}\n\
-                                                    hint: enum variants are currently converted to integers; \
-                                                    this is a known compiler limitation",
-                                                    i, arg_ty, param_ty
-                                                )
-                                            } else {
-                                                format!(
-                                                    "Argument {} has type {}, expected {}",
-                                                    i, arg_ty, param_ty
-                                                )
-                                            }
-                                        } else {
-                                            format!(
-                                                "Argument {} has type {}, expected {}",
-                                                i, arg_ty, param_ty
-                                            )
-                                        };
-                                        return Err(TypeCheckError {
-                                            message: msg,
-                                        });
-                                    }
-                                }
-                            } else {
-                                // For polymorphic functions, just infer types without checking compatibility
-                                for arg in args {
-                                    let _ = self.infer_type(arg)?;  // Just make sure args are valid
-                                }
-                            }
+                                 for (i, (arg, param_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                                     let arg_ty = self.infer_type(arg)?;
+                                     
+                                     // Try to unify generic types
+                                     if let Some((gen_name, concrete_ty)) = self.try_unify_type(param_ty, &arg_ty) {
+                                         substitutions.insert(gen_name, concrete_ty);
+                                     } else if !self.types_compatible(&arg_ty, param_ty) && *param_ty != HirType::Unknown {
+                                         let msg = if arg_ty == HirType::Int64 || arg_ty == HirType::Int32 {
+                                             if param_ty.to_string().chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                                 format!(
+                                                     "Argument {} has type {}, expected {}\n\
+                                                     hint: enum variants are currently converted to integers; \
+                                                     this is a known compiler limitation",
+                                                     i, arg_ty, param_ty
+                                                 )
+                                             } else {
+                                                 format!(
+                                                     "Argument {} has type {}, expected {}",
+                                                     i, arg_ty, param_ty
+                                                 )
+                                             }
+                                         } else {
+                                             format!(
+                                                 "Argument {} has type {}, expected {}",
+                                                 i, arg_ty, param_ty
+                                             )
+                                         };
+                                         return Err(TypeCheckError {
+                                             message: msg,
+                                         });
+                                     }
+                                 }
+                             } else {
+                                 // For polymorphic functions, just infer types without checking compatibility
+                                 for arg in args {
+                                     let _ = self.infer_type(arg)?;  // Just make sure args are valid
+                                 }
+                             }
 
-                            // Apply substitutions to return type
-                            let final_ret_type = self.apply_substitutions(&ret_type, &substitutions);
-                            Ok(final_ret_type)
+                             // ============ PHASE 3.2b: WHERE CLAUSE VALIDATION ============
+                             // Validate that concrete types satisfy where clause bounds
+                             let generic_params = self.context.get_generic_params(name);
+                             for param in &generic_params {
+                                 if let GenericParam::Type { name: param_name, .. } = param {
+                                     // Get the bounds for this parameter
+                                     let bounds = self.context.get_generic_bounds(param_name);
+                                     
+                                     // If we have a substitution for this parameter, validate it
+                                     if let Some(concrete_ty) = substitutions.get(param_name) {
+                                         // Validate all bounds for this type
+                                         for bound_trait in &bounds {
+                                             if !self.validate_trait_bounds(param_name, concrete_ty) {
+                                                 // Generate a more helpful error message
+                                                 let error_msg = match bound_trait.as_str() {
+                                                     "Clone" => format!(
+                                                         "Type `{}` does not implement `Clone` trait \
+                                                         required for generic parameter `{}` in function `{}`\n\
+                                                         Note: Only simple types and types with explicit Clone implementations can be cloned",
+                                                         concrete_ty, param_name, name
+                                                     ),
+                                                     "Copy" => format!(
+                                                         "Type `{}` does not implement `Copy` trait \
+                                                         required for generic parameter `{}` in function `{}`\n\
+                                                         Note: Only primitive types and small copyable types implement Copy",
+                                                         concrete_ty, param_name, name
+                                                     ),
+                                                     _ => format!(
+                                                         "Type `{}` does not implement `{}` trait \
+                                                         required for generic parameter `{}` in function `{}`",
+                                                         concrete_ty, bound_trait, param_name, name
+                                                     ),
+                                                 };
+                                                 return Err(TypeCheckError {
+                                                     message: error_msg,
+                                                 });
+                                             }
+                                         }
+                                         }
+                                         }
+                                         }
+                                         // ============ END WHERE CLAUSE VALIDATION ============
+                                         
+                                         // ============ PHASE 3.2c: ASSOCIATED TYPE CONSTRAINT VALIDATION ============
+                                         // Validate associated type constraints (e.g., T: Iterator<Item = i32>)
+                                         for param in &generic_params {
+                                         if let GenericParam::Type { name: param_name, .. } = param {
+                                         if let Some(_concrete_ty) = substitutions.get(param_name) {
+                                         // Get bounds for this parameter to find associated types
+                                         let bounds = self.context.get_generic_bounds(param_name);
+                                         for bound_trait in &bounds {
+                                             // Check if there are associated type constraints for this trait
+                                             let assoc_constraints = self.context.get_associated_type_constraints(param_name, bound_trait);
+                                             for (assoc_type_name, expected_type) in assoc_constraints {
+                                                 // TODO: Add validation logic for associated type constraints
+                                                 // For now, we just register them; actual validation comes in future phases
+                                                 let _msg = format!(
+                                                     "Associated type constraint: {}::{} should be {}",
+                                                     bound_trait, assoc_type_name, expected_type
+                                                 );
+                                             }
+                                         }
+                                         }
+                                         }
+                                         }
+                                         // ============ END ASSOCIATED TYPE VALIDATION ============
+
+                                         // Apply substitutions to return type
+                                         let final_ret_type = self.apply_substitutions(&ret_type, &substitutions);
+                                         Ok(final_ret_type)
                         } else if let Some(var_ty) = self.context.env.lookup(name) {
                             // Check if it's a closure type
                             if let HirType::Closure { params, return_type, .. } = var_ty {
@@ -2786,6 +3401,8 @@ impl TypeChecker {
 
     /// Type check all items
     pub fn check_items(&mut self, items: &[HirItem]) -> TypeCheckResult<()> {
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/gaiarusted_debug.log")
+            .and_then(|mut f| writeln!(f, "[DEBUG] check_items called with {} items", items.len()));
         // First pass: collect all definitions
         self.collect_definitions(items)?;
 
@@ -3050,8 +3667,12 @@ impl TypeChecker {
 
 /// Perform type checking on lowered HIR
 pub fn check_types(items: &[HirItem]) -> Result<(), CompileError> {
-    let mut checker = TypeChecker::new();
-    checker.check_items(items).map_err(|e| {
+     use std::io::Write;
+     let _ = std::fs::File::create("/tmp/check_types_called.txt")
+         .and_then(|mut f| writeln!(f, "check_types called with {} items", items.len()));
+     
+     let mut checker = TypeChecker::new();
+     checker.check_items(items).map_err(|e| {
         let message = e.message.clone();
         let kind = if message.contains("not yet supported") || 
                       message.contains("not supported") ||
@@ -3078,7 +3699,7 @@ mod tests {
         let mut checker = TypeChecker::new();
         match checker.infer_type(&expr) {
             Ok(ty) => assert_eq!(ty, HirType::Int32),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => assert!(false, "Unexpected error: {}", e),
         }
     }
 
@@ -3088,7 +3709,7 @@ mod tests {
         let mut checker = TypeChecker::new();
         match checker.infer_type(&expr) {
             Ok(ty) => assert_eq!(ty, HirType::Float64),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => assert!(false, "Unexpected error: {}", e),
         }
     }
 
@@ -3098,7 +3719,7 @@ mod tests {
         let mut checker = TypeChecker::new();
         match checker.infer_type(&expr) {
             Ok(ty) => assert_eq!(ty, HirType::Bool),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => assert!(false, "Unexpected error: {}", e),
         }
     }
 
@@ -3132,34 +3753,34 @@ mod tests {
                         assert_eq!(params[0], HirType::Int32);
                         assert_eq!(*return_type, HirType::Int32);
                     }
-                    _ => panic!("Expected closure type"),
-                }
-            }
-            Err(e) => panic!("Unexpected error: {}", e),
-        }
-    }
+                    _ => assert!(false, "Expected closure type"),
+                    }
+                    }
+                    Err(e) => assert!(false, "Unexpected error: {}", e),
+                    }
+                    }
 
-    #[test]
-    fn test_closure_call_with_matching_args() {
-        let closure_expr = HirExpression::Closure {
-            params: vec![("x".to_string(), HirType::Int32), ("y".to_string(), HirType::Bool)],
-            body: vec![HirStatement::Expression(HirExpression::Integer(42))],
-            return_type: Box::new(HirType::Int32),
-            is_move: false,
-            captures: Vec::new(),
-        };
+                    #[test]
+                    fn test_closure_call_with_matching_args() {
+                    let closure_expr = HirExpression::Closure {
+                    params: vec![("x".to_string(), HirType::Int32), ("y".to_string(), HirType::Bool)],
+                    body: vec![HirStatement::Expression(HirExpression::Integer(42))],
+                    return_type: Box::new(HirType::Int32),
+                    is_move: false,
+                    captures: Vec::new(),
+                    };
 
-        let call_expr = HirExpression::Call {
-            func: Box::new(closure_expr),
-            args: vec![HirExpression::Integer(5), HirExpression::Bool(true)],
-        };
+                    let call_expr = HirExpression::Call {
+                    func: Box::new(closure_expr),
+                    args: vec![HirExpression::Integer(5), HirExpression::Bool(true)],
+                    };
 
-        let mut checker = TypeChecker::new();
-        match checker.infer_type(&call_expr) {
-            Ok(ty) => assert_eq!(ty, HirType::Int32),
-            Err(e) => panic!("Unexpected error: {}", e),
-        }
-    }
+                    let mut checker = TypeChecker::new();
+                    match checker.infer_type(&call_expr) {
+                    Ok(ty) => assert_eq!(ty, HirType::Int32),
+                    Err(e) => assert!(false, "Unexpected error: {}", e),
+                    }
+                    }
 
     #[test]
     fn test_closure_call_with_mismatched_arg_count() {
@@ -3217,12 +3838,12 @@ mod tests {
         let mut checker = TypeChecker::new();
         match checker.infer_type(&call_expr) {
             Ok(ty) => assert_eq!(ty, HirType::Int32),
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => assert!(false, "Unexpected error: {}", e),
         }
-    }
+        }
 
-    #[test]
-    fn test_closure_fnmut_detection() {
+        #[test]
+        fn test_closure_fnmut_detection() {
         let closure_expr = HirExpression::Closure {
             params: vec![],
             body: vec![
@@ -3251,12 +3872,12 @@ mod tests {
                     HirType::Closure { trait_kind, .. } => {
                         assert_eq!(trait_kind, ClosureTrait::Fn);
                     }
-                    _ => panic!("Expected closure type"),
+                    _ => assert!(false, "Expected closure type"),
                 }
             }
-            Err(e) => panic!("Unexpected error: {}", e),
+            Err(e) => assert!(false, "Unexpected error: {}", e),
         }
-    }
+        }
 
     #[test]
     fn test_closure_fn_detection() {
@@ -3283,15 +3904,15 @@ mod tests {
                     HirType::Closure { trait_kind, .. } => {
                         assert_eq!(trait_kind, ClosureTrait::Fn);
                     }
-                    _ => panic!("Expected closure type"),
+                    _ => assert!(false, "Expected closure type"),
                 }
             }
-            Err(e) => panic!("Unexpected error: {}", e),
-        }
-    }
+            Err(e) => assert!(false, "Unexpected error: {}", e),
+            }
+            }
 
-    #[test]
-    fn test_closure_fnonce_detection() {
+            #[test]
+            fn test_closure_fnonce_detection() {
         let closure_expr = HirExpression::Closure {
             params: vec![],
             body: vec![HirStatement::Expression(HirExpression::Integer(42))],

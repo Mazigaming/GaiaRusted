@@ -50,25 +50,31 @@ impl std::fmt::Display for OutputFormat {
 /// Configuration for compilation
 #[derive(Debug, Clone)]
 pub struct CompilationConfig {
-    /// Source files to compile
-    pub source_files: Vec<PathBuf>,
-    /// Library paths for linking
-    pub lib_paths: Vec<PathBuf>,
-    /// Dependencies/external libraries
-    pub libraries: Vec<String>,
-    /// Output file path (without extension)
-    pub output_path: PathBuf,
-    /// Output format
-    pub output_format: OutputFormat,
-    /// Optimization level (0-3)
-    pub opt_level: u32,
-    /// Enable verbose output
-    pub verbose: bool,
-    /// Enable debug info
-    pub debug: bool,
-    /// Metadata about discovered modules
-    pub module_map: HashMap<String, PathBuf>,
-}
+     /// Source files to compile
+     pub source_files: Vec<PathBuf>,
+     /// Library paths for linking
+     pub lib_paths: Vec<PathBuf>,
+     /// Dependencies/external libraries
+     pub libraries: Vec<String>,
+     /// Output file path (without extension)
+     pub output_path: PathBuf,
+     /// Output format
+     pub output_format: OutputFormat,
+     /// Optimization level (0-3)
+     pub opt_level: u32,
+     /// Enable verbose output
+     pub verbose: bool,
+     /// Enable debug info
+     pub debug: bool,
+     /// Metadata about discovered modules
+     pub module_map: HashMap<String, PathBuf>,
+     /// Crate name (from Gaia.toml or Cargo.toml)
+     pub crate_name: String,
+     /// Crate version (from manifest)
+     pub crate_version: String,
+     /// Is this a library crate (lib.rs exists) or binary (main.rs exists)
+     pub is_library: bool,
+ }
 
 impl CompilationConfig {
     /// Create a new default configuration
@@ -83,6 +89,9 @@ impl CompilationConfig {
             verbose: false,
             debug: false,
             module_map: HashMap::new(),
+            crate_name: "unknown".to_string(),
+            crate_version: "0.0.0".to_string(),
+            is_library: false,
         }
     }
 
@@ -235,10 +244,13 @@ impl CompilationConfig {
                             "name" => {
                                 // Extract string value (remove quotes)
                                 let name = value.trim_matches(|c| c == '"' || c == '\'');
+                                config.crate_name = name.to_string();
                                 config.output_path = PathBuf::from(name);
                             }
                             "version" => {
-                                // Could store version in config if needed
+                                // Extract version string (remove quotes)
+                                let version = value.trim_matches(|c| c == '"' || c == '\'');
+                                config.crate_version = version.to_string();
                             }
                             _ => {}
                         }
@@ -285,6 +297,27 @@ impl CompilationConfig {
         }
 
         Ok(config)
+    }
+    
+    /// Detect crate type (library vs binary) from source files
+    pub fn detect_crate_type(mut self) -> Self {
+        // Check if lib.rs exists
+        let has_lib = self.source_files.iter()
+            .any(|f| f.file_name().and_then(|n| n.to_str()) == Some("lib.rs"));
+        
+        // Check if main.rs exists
+        let has_main = self.source_files.iter()
+            .any(|f| f.file_name().and_then(|n| n.to_str()) == Some("main.rs"));
+        
+        // Library has priority if both exist
+        self.is_library = has_lib;
+        
+        // Set output format based on crate type
+        if !self.is_library {
+            self.output_format = OutputFormat::Executable;
+        }
+        
+        self
     }
 
     /// Validate configuration

@@ -221,6 +221,8 @@ impl AsyncTransformer {
                     params: hir_params,
                     return_type: Some(output_type),
                     body: hir_body,
+                    is_public: true,
+                    where_clause: vec![],
                 })
             }
             parser_ast::Item::Function {

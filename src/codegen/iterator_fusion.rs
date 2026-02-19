@@ -1240,14 +1240,13 @@ impl FusionMirGenerator {
         // Workaround: For single-iteration loops (unroll_factor=1), we use index 0 as
         // a placeholder and rely on lowering-level optimization to handle dynamic indexing.
         // For proper dynamic iteration, the MIR Index variant must be redesigned:
-        //   Current:  Rvalue::Index(Place, usize)
-        //   Needed:   Rvalue::Index(Place, Operand) // to support loop counters
+        //   Fixed: Now supports Rvalue::Index(Place, Operand) for dynamic indices
         let elem_var = "elem".to_string();
         self.builder.add_statement(
             Place::Local(elem_var.clone()),
             Rvalue::Index(
                 Place::Local(self.collection_name.clone()),
-                0, // LIMITATION: Static index - dynamic indices blocked by MIR design
+                Operand::Constant(Constant::Integer(0)), // Can now use dynamic operands
             ),
         );
 

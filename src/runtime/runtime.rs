@@ -15,6 +15,13 @@ pub fn generate_runtime_assembly() -> String {
     format_str_f64: .string "%f\n"
     print_string_fmt: .string "%s"
     print_str_newline: .string "%s\n"
+    panic_msg: .string "assertion failed\n"
+    assert_fail_msg: .string "assertion failed\n"
+    format_fail_msg: .string "format!\n"
+    todo_msg: .string "todo!(): not yet implemented\n"
+    unimplemented_msg: .string "unimplemented!(): feature not implemented\n"
+    panic_custom_fmt: .string "panicked at: %s\n"
+    dbg_msg: .string "[DEBUG] value: %ld\n"
 
 .section .text
 .globl gaia_print_i32
@@ -46,6 +53,12 @@ pub fn generate_runtime_assembly() -> String {
 .globl gaia_hashset_remove
 .globl gaia_hashset_len
 .globl gaia_hashset_clear
+.globl gaia_hashset_union
+.globl gaia_hashset_intersection
+.globl gaia_hashset_difference
+.globl gaia_hashset_is_subset
+.globl gaia_hashset_is_superset
+.globl gaia_hashset_is_disjoint
 .globl gaia_string_len
 .globl gaia_string_is_empty
 .globl gaia_string_starts_with
@@ -100,7 +113,34 @@ pub fn generate_runtime_assembly() -> String {
 .globl String_impl_cos
 .globl String_impl_floor
 .globl String_impl_ceil
+.globl String_impl_to_uppercase
+.globl String_impl_to_lowercase
+.globl String_impl_trim_start
+.globl String_impl_trim_end
+.globl String_impl_find
+.globl String_impl_rfind
+.globl String_impl_get
+.globl String_impl_slice
+.globl String_impl_parse
+.globl String_impl_matches
+.globl String_impl_reverse
+.globl String_impl_is_ascii
+.globl String_impl_is_numeric
+.globl String_impl_is_alphabetic
+.globl String_impl_split_once
+.globl String_impl_rsplit_once
+.globl String_impl_pad_start
+.globl String_impl_pad_end
+.globl String_impl_truncate
 .globl __extract_enum_value
+.globl assert
+.globl assert_eq
+.globl assert_ne
+.globl panic
+.globl format
+.globl dbg
+.globl todo
+.globl unimplemented
 
 gaia_print_i32:
     push rbp
@@ -167,8 +207,9 @@ gaia_print_str:
     push rbp
     mov rbp, rsp
     sub rsp, 8          # Align stack to 16-byte boundary for printf
-    mov rsi, rdi
-    lea rdi, [rip + print_string_fmt]
+    mov rsi, rdi        # RSI = string pointer (second argument)
+    lea rdi, [rip + print_string_fmt]  # RDI = format string "%s" (first argument)
+    xor rax, rax        # RAX = 0 (no XMM registers used)
     call printf
     mov rsp, rbp
     pop rbp
@@ -178,8 +219,9 @@ __builtin_println:
     push rbp
     mov rbp, rsp
     sub rsp, 8          # Align stack to 16-byte boundary for printf
-    mov rsi, rdi
-    lea rdi, [rip + print_str_newline]
+    mov rsi, rdi        # RSI = string pointer (second argument)
+    lea rdi, [rip + print_str_newline]  # RDI = format string "%s\n" (first argument)
+    xor rax, rax        # RAX = 0 (no XMM registers used)
     call printf
     mov rsp, rbp
     pop rbp
@@ -189,6 +231,7 @@ __builtin_printf:
     push rbp
     mov rbp, rsp
     sub rsp, 8          # Align stack to 16-byte boundary for printf
+    xor rax, rax        # RAX = 0 (no XMM registers used for integer-only calls)
     call printf
     mov rsp, rbp
     pop rbp
@@ -666,6 +709,107 @@ gaia_hashset_clear:
     mov rbp, rsp
     
     call gaia_hashmap_clear
+    
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_hashset_union:
+    # Phase 6.1c: HashSet::union - combine two sets
+    # rdi = set1, rsi = set2
+    # Returns: new set with all elements from both sets
+    push rbp
+    mov rbp, rsp
+    sub rsp, 32        # Allocate space for return value
+    
+    # Clone set1 as the result
+    # For a proper implementation, we'd need to:
+    # 1. Allocate new HashSet struct on heap
+    # 2. Copy all elements from set1
+    # 3. Iterate through set2 and add elements not in set1
+    # For now, just return a reference to set1 (conservative but safe)
+    # Note: In real Rust this would properly clone and merge
+    
+    mov rax, rdi         # Return set1 (simplified - assumes caller handles cloning)
+    
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_hashset_intersection:
+    # Phase 6.1c: HashSet::intersection - common elements of two sets
+    # rdi = set1, rsi = set2
+    # Returns: new set with elements in both sets
+    push rbp
+    mov rbp, rsp
+    
+    # For now, return empty set
+    # TODO: Implement intersection logic - iterate set1, keep only elements in set2
+    xor rax, rax         # Return 0 (empty set stub)
+    
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_hashset_difference:
+    # Phase 6.1c: HashSet::difference - elements in set1 but not set2
+    # rdi = set1, rsi = set2
+    # Returns: new set with set1 - set2
+    push rbp
+    mov rbp, rsp
+    
+    # For now, return a clone of set1 (simplified stub)
+    # TODO: Implement difference - iterate set1, remove elements that are in set2
+    mov rax, rdi         # Return set1 (should clone and remove set2 elements)
+    
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_hashset_is_subset:
+    # Phase 6.1c: HashSet::is_subset - check if set1 is subset of set2
+    # rdi = set1, rsi = set2
+    # Returns: 1 if subset, 0 otherwise
+    push rbp
+    mov rbp, rsp
+    
+    # Check if all elements of set1 are in set2
+    # For now, return 1 (stub)
+    # TODO: Implement by iterating set1 and checking each element is in set2
+    mov rax, 1          # Return 1 (stub - always true)
+    
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_hashset_is_superset:
+    # Phase 6.1c: HashSet::is_superset - check if set1 is superset of set2
+    # rdi = set1, rsi = set2
+    # Returns: 1 if superset, 0 otherwise
+    push rbp
+    mov rbp, rsp
+    
+    # Check if all elements of set2 are in set1
+    # Equivalent to: is_subset(set2, set1)
+    # For now, return 1 (stub)
+    # TODO: Implement by iterating set2 and checking each element is in set1
+    mov rax, 1          # Return 1 (stub - always true)
+    
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_hashset_is_disjoint:
+    # Phase 6.1c: HashSet::is_disjoint - check if no common elements
+    # rdi = set1, rsi = set2
+    # Returns: 1 if disjoint, 0 if have common elements
+    push rbp
+    mov rbp, rsp
+    
+    # Check if any element of set1 is in set2
+    # For now, return 1 (stub - always disjoint)
+    # TODO: Implement by iterating set1 and checking if any element is in set2
+    mov rax, 1          # Return 1 (stub - always disjoint)
     
     mov rsp, rbp
     pop rbp
@@ -2436,6 +2580,220 @@ String_impl_ceil:
       roundsd xmm0, xmm0, 2  # Round up
       ret
 
+# Phase 6.3: String method implementations
+# All string methods are stubs that return empty strings or false for now
+# rdi = string pointer, rsi = optional parameter
+# Returns: rax = result (string pointer, bool as 0/1, or Option)
+
+String_impl_to_uppercase:
+      # Phase 6.3: Convert string to uppercase
+      # rdi = string pointer
+      # Returns: rax = uppercase string (stub - returns same string)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi          # Return input string (stub implementation)
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_to_lowercase:
+      # Phase 6.3: Convert string to lowercase
+      # rdi = string pointer
+      # Returns: rax = lowercase string (stub - returns same string)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi          # Return input string (stub implementation)
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_trim_start:
+      # Phase 6.3: Trim whitespace from start
+      # rdi = string pointer
+      # Returns: rax = trimmed string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_trim_end:
+      # Phase 6.3: Trim whitespace from end
+      # rdi = string pointer
+      # Returns: rax = trimmed string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_find:
+      # Phase 6.3: Find substring position
+      # rdi = string pointer, rsi = substring pointer
+      # Returns: rax = Option<i32> (stub - returns None)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax          # Return 0 (None)
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_rfind:
+      # Phase 6.3: Find substring from right
+      # rdi = string pointer, rsi = substring pointer
+      # Returns: rax = Option<i32> (stub - returns None)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_get:
+      # Phase 6.3: Get character at index
+      # rdi = string pointer, rsi = index
+      # Returns: rax = Option<char> (stub - returns None)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_slice:
+      # Phase 6.3: Slice string [start..end]
+      # rdi = string pointer, rsi = start, rdx = end
+      # Returns: rax = sliced string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi          # Return input (stub)
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_parse:
+      # Phase 6.3: Parse string to type T
+      # rdi = string pointer
+      # Returns: rax = parsed value (stub - returns 0)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_matches:
+      # Phase 6.3: Check if string matches pattern
+      # rdi = string pointer, rsi = pattern
+      # Returns: rax = bool (stub - returns 0)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_reverse:
+      # Phase 6.3: Reverse string
+      # rdi = string pointer
+      # Returns: rax = reversed string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_is_ascii:
+      # Phase 6.3: Check if string is ASCII
+      # rdi = string pointer
+      # Returns: rax = bool (stub - returns 1)
+      push rbp
+      mov rbp, rsp
+      mov rax, 1            # Assume ASCII (stub)
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_is_numeric:
+      # Phase 6.3: Check if string is numeric
+      # rdi = string pointer
+      # Returns: rax = bool (stub - returns 0)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_is_alphabetic:
+      # Phase 6.3: Check if string is alphabetic
+      # rdi = string pointer
+      # Returns: rax = bool (stub - returns 0)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_split_once:
+      # Phase 6.3: Split string on first occurrence
+      # rdi = string pointer, rsi = delimiter
+      # Returns: rax = Option<(String, String)> (stub - returns None)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_rsplit_once:
+      # Phase 6.3: Split string on last occurrence
+      # rdi = string pointer, rsi = delimiter
+      # Returns: rax = Option<(String, String)> (stub - returns None)
+      push rbp
+      mov rbp, rsp
+      xor rax, rax
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_pad_start:
+      # Phase 6.3: Pad string at start
+      # rdi = string pointer, rsi = width, rdx = fill char
+      # Returns: rax = padded string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_pad_end:
+      # Phase 6.3: Pad string at end
+      # rdi = string pointer, rsi = width, rdx = fill char
+      # Returns: rax = padded string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi
+      mov rsp, rbp
+      pop rbp
+      ret
+
+String_impl_truncate:
+      # Phase 6.3: Truncate string to length
+      # rdi = string pointer, rsi = length
+      # Returns: rax = truncated string (stub - returns same)
+      push rbp
+      mov rbp, rsp
+      mov rax, rdi
+      mov rsp, rbp
+      pop rbp
+      ret
+
 # __extract_enum_value: Extract the inner value from Option<T> or Result<T, E>
 # Memory layout: [tag:i64][value:i64]
 # rdi = pointer to the Option/Result (or the value itself if stored in register)
@@ -2448,6 +2806,139 @@ __extract_enum_value:
       mov rax, [rdi + 8]  # Extract the value at offset 8
       mov rsp, rbp
       pop rbp
+      ret
+
+# PHASE 5.2: Runtime support for builtin macros
+
+# assert!(condition) - takes bool in rdi, exits if false
+assert:
+      push rbp
+      mov rbp, rsp
+      cmp rdi, 0           # Check if rdi (condition) is true
+      jne .assert_ok       # If true, continue
+      # If false, print error and exit
+      lea rdi, [rip + assert_fail_msg]
+      sub rsp, 8
+      call printf
+      add rsp, 8
+      mov rax, 1           # Exit code 1
+      call exit
+.assert_ok:
+      mov rsp, rbp
+      pop rbp
+      ret
+
+# assert_eq!(a, b) - takes two i64 in rdi, rsi, exits if not equal
+assert_eq:
+      push rbp
+      mov rbp, rsp
+      cmp rdi, rsi         # Compare rdi and rsi
+      je .assert_eq_ok     # If equal, continue
+      # If not equal, print error and exit
+      lea rdi, [rip + assert_fail_msg]
+      sub rsp, 8
+      call printf
+      add rsp, 8
+      mov rax, 1           # Exit code 1
+      call exit
+.assert_eq_ok:
+      mov rsp, rbp
+      pop rbp
+      ret
+
+# assert_ne!(a, b) - takes two i64 in rdi, rsi, exits if equal
+assert_ne:
+      push rbp
+      mov rbp, rsp
+      cmp rdi, rsi         # Compare rdi and rsi
+      jne .assert_ne_ok    # If not equal, continue
+      # If equal, print error and exit
+      lea rdi, [rip + assert_fail_msg]
+      sub rsp, 8
+      call printf
+      add rsp, 8
+      mov rax, 1           # Exit code 1
+      call exit
+.assert_ne_ok:
+      mov rsp, rbp
+      pop rbp
+      ret
+
+# panic!(msg) - takes string pointer in rdi, prints and exits
+panic:
+      push rbp
+      mov rbp, rsp
+      sub rsp, 8
+      # Check if rdi is empty/null - if so use default message
+      test rdi, rdi
+      jnz .panic_custom
+      lea rdi, [rip + panic_msg]  # Use default panic message
+      xor rax, rax
+      call printf
+      jmp .panic_exit
+.panic_custom:
+      mov rsi, rdi         # RSI = custom message
+      lea rdi, [rip + panic_custom_fmt]  # RDI = format string "panicked at: %s\n"
+      xor rax, rax
+      call printf
+.panic_exit:
+      mov rsp, rbp
+      pop rbp
+      mov rax, 101         # Exit code 101
+      call exit
+      ret
+
+# format!(fmt, ...) - takes format string in rdi, returns string (stub implementation)
+format:
+      push rbp
+      mov rbp, rsp
+      # For now, just return the format string as-is
+      # A proper implementation would do actual formatting
+      mov rax, rdi         # Return format string pointer
+      mov rsp, rbp
+      pop rbp
+      ret
+
+# dbg!(expr) - takes value in rdi, prints it, returns it
+dbg:
+      push rbp
+      mov rbp, rsp
+      mov rsi, rdi         # Save the value in rsi for printf
+      lea rdi, [rip + dbg_msg]  # Format string in rdi
+      sub rsp, 8
+      call printf          # Print "[DEBUG] value: <value>\n"
+      add rsp, 8
+      mov rax, rsi         # Return the original value
+      mov rsp, rbp
+      pop rbp
+      ret
+
+# todo!() - prints message and exits
+todo:
+      push rbp
+      mov rbp, rsp
+      lea rdi, [rip + todo_msg]  # Print "todo!(): not yet implemented\n"
+      sub rsp, 8
+      call printf
+      add rsp, 8
+      mov rsp, rbp
+      pop rbp
+      mov rax, 101         # Exit code 101 (convention for unimplemented)
+      call exit
+      ret
+
+# unimplemented!() - prints message and exits
+unimplemented:
+      push rbp
+      mov rbp, rsp
+      lea rdi, [rip + unimplemented_msg]  # Print "unimplemented!(): feature not implemented\n"
+      sub rsp, 8
+      call printf
+      add rsp, 8
+      mov rsp, rbp
+      pop rbp
+      mov rax, 101         # Exit code 101 (convention for unimplemented)
+      call exit
       ret
 "#
     .to_string()

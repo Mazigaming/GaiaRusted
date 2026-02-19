@@ -8,6 +8,21 @@ use std::fmt;
 /// A complete Rust program is a list of items (functions, structs, etc.)
 pub type Program = Vec<Item>;
 
+/// Visibility modifiers for items
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Visibility {
+    /// Private (default)
+    Private,
+    /// Public everywhere
+    Public,
+    /// Visible only within the crate
+    PublicCrate,
+    /// Visible in parent module
+    PublicSuper,
+    /// Visible in specific path: pub(in path)
+    PublicInPath(String),
+}
+
 /// Top-level items in a Rust program
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
@@ -124,11 +139,26 @@ pub enum Item {
     },
 }
 
-/// Where clause constraint: `T: Trait1 + Trait2`
+/// A trait bound that may include associated types
+/// Examples:
+/// - Simple: T: Clone
+/// - Associated: T: Iterator<Item = i32>
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitBound {
+    /// Trait name: "Clone", "Iterator", etc.
+    pub trait_name: String,
+    /// Associated type constraints: vec![("Item", "i32")]
+    pub associated_types: Vec<(String, String)>,
+}
+
+/// Where clause constraint: `T: Trait1 + Trait2` or `T: Iterator<Item = i32>`
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhereConstraint {
     pub param_name: String,
+    /// Simple bounds for backward compatibility (e.g., ["Clone", "Copy"])
     pub bounds: Vec<String>,
+    /// Enhanced trait bounds with associated types
+    pub trait_bounds: Vec<TraitBound>,
 }
 
 /// Generic parameter: `T`, `T: Bound`, `'a`, `const N: usize`
@@ -152,8 +182,10 @@ pub enum GenericParam {
 /// Macro rule for macro_rules!
 #[derive(Debug, Clone, PartialEq)]
 pub struct MacroRule {
-    pub pattern: String,  // Macro pattern
+    pub pattern: String,  // Macro pattern (simplified)
     pub body: String,     // Macro body (simplified)
+    // PHASE 5.2: Store actual macro rules for expansion if available
+    pub actual_rule: Option<Box<crate::macros::MacroRule>>,
 }
 
 /// Function parameter: `name: Type` or `mut name: Type`

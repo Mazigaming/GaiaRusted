@@ -217,6 +217,33 @@ impl<T: std::hash::Hash + Eq + Clone> HashSet<T> {
         }
         result
     }
+
+    /// Check if self is a subset of other
+    /// All elements in self must be in other
+    pub fn is_subset(&self, other: &HashSet<T>) -> bool {
+        for item in &self.data {
+            if !other.contains(item) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Check if self is a superset of other
+    /// All elements in other must be in self
+    pub fn is_superset(&self, other: &HashSet<T>) -> bool {
+        other.is_subset(self)
+    }
+
+    /// Check if self and other have no elements in common
+    pub fn is_disjoint(&self, other: &HashSet<T>) -> bool {
+        for item in &self.data {
+            if other.contains(item) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[cfg(test)]

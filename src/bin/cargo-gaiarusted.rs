@@ -283,7 +283,7 @@ fn handle_rustc_wrapper(args: &[String]) {
                 .add_source_file(&input)
                 .unwrap_or_default()
                 .set_output(output_file.unwrap_or_else(|| "output".to_string()))
-                .set_output_format(gaiarusted::OutputFormat::Object)
+                .set_output_format(gaiarusted::OutputFormat::Executable)
         ) {
             Ok(result) => {
                 if result.success {

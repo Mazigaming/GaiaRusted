@@ -47,6 +47,7 @@ pub mod formatter;
 pub mod error_suggestions;
 pub mod source_display;
 pub mod borrow_error_display;
+pub mod error_codes;
 
 // Developer Tools
 pub mod repl;
@@ -80,6 +81,9 @@ pub mod cargo_api;
 // Standard Library
 pub mod stdlib;
 pub mod iterators;
+
+// Module System
+pub mod module_loader;
 
 // Ecosystem (Package Manager, Registry, Workspace)
 pub mod ecosystem;

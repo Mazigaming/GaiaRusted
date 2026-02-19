@@ -7,7 +7,12 @@ use crate::macros::{
 impl Parser {
     pub fn parse_macro_rules(&mut self) -> ParseResult<(String, Vec<MacroRule>)> {
         self.expect_keyword(Keyword::MacroRules)?;
-        self.consume("!")?;
+        
+        // Check for Bang token explicitly instead of using consume
+        if !self.check(&Token::Bang) {
+            return Err(ParseError::InvalidSyntax("Expected ! after macro_rules".to_string()));
+        }
+        self.advance();
 
         let name = self.expect_identifier()?;
 

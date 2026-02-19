@@ -121,8 +121,8 @@ pub enum Rvalue {
     Deref(Place),
     /// Field access
     Field(Place, String),
-    /// Index access
-    Index(Place, usize),
+    /// Index access (supports both constant and dynamic indices)
+    Index(Place, Operand),
     /// Closure creation: captures fn_ptr and captured variables
     Closure {
         fn_ptr: String,           // Closure function pointer (unique name)
@@ -535,13 +535,14 @@ impl MirLowerer {
                         format!("{}::{}", module_prefix, name)
                     };
 
+                    let basic_blocks = mir_builder.finish();
                     let func = MirFunction {
-                        name: full_name,
-                        params: params.clone(),
-                        return_type: return_type.clone().unwrap_or(HirType::Unknown),
-                        basic_blocks: mir_builder.finish(),
-                    };
-                    functions.push(func);
+                         name: full_name,
+                         params: params.clone(),
+                         return_type: return_type.clone().unwrap_or(HirType::Unknown),
+                         basic_blocks,
+                     };
+                     functions.push(func);
                 }
                 HirItem::Struct { .. } => {
                 }
@@ -667,10 +668,15 @@ impl MirLowerer {
                 let temp = builder.gen_temp();
                 let place = Place::Local(temp);
                 self.lower_expression_to_place(builder, expr, place.clone())?;
-                builder.set_terminator(Terminator::Return(Some(Operand::Copy(place))));
+                // Set terminator on the current block after expression evaluation
+                // (the current block might have changed if the expression created new blocks)
+                let return_block = builder.current_block;
+                builder.blocks[return_block].terminator = Terminator::Return(Some(Operand::Copy(place)));
             }
             HirStatement::Return(None) => {
-                builder.set_terminator(Terminator::Return(None));
+                // Set terminator on the current block
+                let return_block = builder.current_block;
+                builder.blocks[return_block].terminator = Terminator::Return(None);
             }
             HirStatement::Break | HirStatement::Continue => {
                 // Simplified: treat as unreachable for now
@@ -901,6 +907,15 @@ impl MirLowerer {
                 //   goto merge_block
                 // merge_block:
                 
+                // Check if then and else branches have explicit returns
+                let then_has_final_return = then_body.last()
+                    .map(|stmt| matches!(stmt, HirStatement::Return(_)))
+                    .unwrap_or(false);
+                let else_has_final_return = else_body.as_ref()
+                    .and_then(|stmts| stmts.last())
+                    .map(|stmt| matches!(stmt, HirStatement::Return(_)))
+                    .unwrap_or(false);
+                
                 // Condition check
                 let cond_temp = builder.gen_temp();
                 self.lower_expression_to_place(builder, condition, Place::Local(cond_temp.clone()))?;
@@ -908,7 +923,12 @@ impl MirLowerer {
                 let if_block = builder.current_block;
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
-                let merge_block = builder.create_block();
+                let merge_block = if then_has_final_return && else_has_final_return {
+                    // Both branches return explicitly, no merge block needed
+                    usize::MAX  // Sentinel value indicating no merge block
+                } else {
+                    builder.create_block()
+                };
                 
                 builder.blocks[if_block].terminator = Terminator::If(
                     Operand::Copy(Place::Local(cond_temp)),
@@ -921,7 +941,10 @@ impl MirLowerer {
                 for stmt in then_body {
                     self.lower_statement_in_builder(builder, stmt)?;
                 }
-                builder.set_terminator(Terminator::Goto(merge_block));
+                // Only set Goto if branch doesn't end with explicit return
+                if !then_has_final_return {
+                    builder.set_terminator(Terminator::Goto(merge_block));
+                }
                 
                 // Else branch
                 builder.current_block = else_block;
@@ -929,11 +952,20 @@ impl MirLowerer {
                     for stmt in else_stmts {
                         self.lower_statement_in_builder(builder, stmt)?;
                     }
+                } else {
+                    // If there's no else branch, we can't have the else branch return
+                    // So if then_has_final_return, the else branch must go to merge
                 }
-                builder.set_terminator(Terminator::Goto(merge_block));
+                if !else_has_final_return {
+                    if merge_block != usize::MAX {
+                        builder.set_terminator(Terminator::Goto(merge_block));
+                    }
+                }
                 
-                // Continue after if
-                builder.current_block = merge_block;
+                // Continue after if (only if we have a merge block)
+                if merge_block != usize::MAX {
+                    builder.current_block = merge_block;
+                }
             }
 
             HirStatement::UnsafeBlock(stmts) => {
@@ -1317,7 +1349,7 @@ impl MirLowerer {
                         builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
                     }
                     _ => {
-                        return Err(MirError { message: "Complex assignment targets not yet supported".to_string() });
+                        return Err(MirError { message: "E086: Complex assignment targets not yet supported - use simpler patterns".to_string() });
                     }
                 }
             }
@@ -1356,17 +1388,17 @@ impl MirLowerer {
                 // Lower then body
                 builder.current_block = then_block;
                 let then_len = then_body.len();
+                let mut then_has_return = false;
                 for (idx, stmt) in then_body.iter().enumerate() {
                     if idx == then_len - 1 {
                         match stmt {
                             HirStatement::Expression(expr) => {
                                 self.lower_expression_to_place(builder, expr, target_place.clone())?;
                             }
-                            HirStatement::Return(Some(expr)) => {
-                                self.lower_expression_to_place(builder, expr, target_place.clone())?;
-                            }
-                            HirStatement::Return(None) => {
-                                builder.add_statement(target_place.clone(), Rvalue::Use(Operand::Constant(Constant::Unit)));
+                            HirStatement::Return(_) => {
+                                // Process Return statement normally - it will set the terminator
+                                self.lower_statement_in_builder(builder, stmt)?;
+                                then_has_return = true;
                             }
                             HirStatement::If { condition, then_body: if_then_body, else_body: if_else_body } => {
                                 // Statement-level if that returns a value (implicitly the last expression)
@@ -1387,10 +1419,15 @@ impl MirLowerer {
                 }
                 // Set terminator on the actual current block (could be different if nested expressions created blocks)
                 let then_end_block = builder.current_block;
-                builder.blocks[then_end_block].terminator = Terminator::Goto(merge_block);
+                if !then_has_return {
+                    // Only set Goto if the branch doesn't already have a Return terminator
+                    builder.blocks[then_end_block].terminator = Terminator::Goto(merge_block);
+                }
+                // If then_has_return, keep the existing Return terminator set by the return statement
                 
                 // Lower else body
                 builder.current_block = else_block;
+                let mut else_has_return = false;
                 if let Some(else_stmts) = else_body {
                     let else_len = else_stmts.len();
                     for (idx, stmt) in else_stmts.iter().enumerate() {
@@ -1399,11 +1436,10 @@ impl MirLowerer {
                                 HirStatement::Expression(expr) => {
                                     self.lower_expression_to_place(builder, expr, target_place.clone())?;
                                 }
-                                HirStatement::Return(Some(expr)) => {
-                                    self.lower_expression_to_place(builder, expr, target_place.clone())?;
-                                }
-                                HirStatement::Return(None) => {
-                                    builder.add_statement(target_place.clone(), Rvalue::Use(Operand::Constant(Constant::Unit)));
+                                HirStatement::Return(_) => {
+                                    // Process Return statement normally - it will set the terminator
+                                    self.lower_statement_in_builder(builder, stmt)?;
+                                    else_has_return = true;
                                 }
                                 HirStatement::If { condition, then_body: if_then_body, else_body: if_else_body } => {
                                     // Statement-level if that returns a value (implicitly the last expression)
@@ -1427,10 +1463,18 @@ impl MirLowerer {
                 }
                 // Set terminator on the actual current block (could be different if nested expressions created blocks)
                 let else_end_block = builder.current_block;
-                builder.blocks[else_end_block].terminator = Terminator::Goto(merge_block);
+                if !else_has_return {
+                    // Only set Goto if the branch doesn't already have a Return terminator
+                    builder.blocks[else_end_block].terminator = Terminator::Goto(merge_block);
+                }
+                // If else_has_return, keep the existing Return terminator set by the return statement
                 
-                // Continue at merge block
-                builder.current_block = merge_block;
+                // Continue at merge block (only if we have one)
+                if then_has_return && else_has_return {
+                    // Both branches return, no merge block needed
+                } else {
+                    builder.current_block = merge_block;
+                }
             }
             HirExpression::While { condition, body } => {
                 let loop_cond = builder.create_block();
@@ -1530,26 +1574,31 @@ impl MirLowerer {
                 let arr_temp = builder.gen_temp();
                 self.lower_expression_to_place(builder, array, Place::Local(arr_temp.clone()))?;
                 
-                // Extract the index value - it should be a constant or variable
+                // Evaluate the index expression
                 match index.as_ref() {
                     HirExpression::Integer(idx_val) => {
-                        // Direct integer index - create Rvalue::Index
-                        builder.add_statement(place, Rvalue::Index(Place::Local(arr_temp), *idx_val as usize));
+                        // Direct integer index - use as constant operand
+                        builder.add_statement(place, Rvalue::Index(
+                            Place::Local(arr_temp),
+                            Operand::Constant(Constant::Integer(*idx_val as i64))
+                        ));
                     }
                     HirExpression::Variable(var_name) => {
-                        // Index from variable - we need to handle this differently
-                        // For now, create a temporary and use it
-                        let idx_temp = builder.gen_temp();
-                        self.lower_expression_to_place(builder, index, Place::Local(idx_temp.clone()))?;
-                        // Can't use variable index directly with Rvalue::Index, so treat as unit for now
-                        builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+                        // Index from variable - use the variable as operand
+                        builder.add_statement(place, Rvalue::Index(
+                            Place::Local(arr_temp),
+                            Operand::Copy(Place::Local(var_name.clone()))
+                        ));
                     }
                     _ => {
-                        // Complex index expression - evaluate it first
+                        // Complex index expression - evaluate it to a temporary first
                         let idx_temp = builder.gen_temp();
                         self.lower_expression_to_place(builder, index, Place::Local(idx_temp.clone()))?;
-                        // Treat as unit for complex expressions
-                        builder.add_statement(place, Rvalue::Use(Operand::Constant(Constant::Unit)));
+                        // Use the temporary as the index operand
+                        builder.add_statement(place, Rvalue::Index(
+                            Place::Local(arr_temp),
+                            Operand::Copy(Place::Local(idx_temp))
+                        ));
                     }
                 }
             }
@@ -2111,8 +2160,13 @@ impl MirOptimizer {
                     Self::collect_places_from_operand(operand, places);
                 }
             }
-            Rvalue::Ref(place) | Rvalue::Deref(place) | Rvalue::Field(place, _) | Rvalue::Index(place, _) => {
+            Rvalue::Ref(place) | Rvalue::Deref(place) | Rvalue::Field(place, _) => {
                 places.insert(place.clone());
+            }
+            Rvalue::Index(place, idx_operand) => {
+                // Collect both the base place and the index operand
+                places.insert(place.clone());
+                Self::collect_places_from_operand(idx_operand, places);
             }
             Rvalue::Closure { fn_ptr: _, captures } => {
                 // Collect places from captured operands

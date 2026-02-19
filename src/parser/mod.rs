@@ -35,8 +35,28 @@ pub mod ast;
 
 use crate::lexer::token::{Token, Keyword};
 use std::fmt;
+use std::cell::RefCell;
+use std::io::Write;
 
 pub use ast::*;
+
+// Thread-local storage for current visibility modifier being parsed
+thread_local! {
+    static CURRENT_VISIBILITY: RefCell<ast::Visibility> = RefCell::new(ast::Visibility::Private);
+}
+
+/// Get the current visibility modifier that was parsed
+pub fn get_current_visibility() -> ast::Visibility {
+    CURRENT_VISIBILITY.with(|v| {
+        v.borrow().clone()
+    })
+}
+
+/// Register the current visibility with the lowering module immediately
+pub fn register_current_visibility_to_lowering(name: &str) {
+    let visibility = get_current_visibility();
+    crate::lowering::register_visibility(name.to_string(), visibility.clone());
+}
 
 /// Parse result type
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -412,12 +432,63 @@ impl Parser {
             }
         }
 
-        // Handle visibility modifiers (pub, etc.)
-        let is_pub = if self.check(&Token::Keyword(Keyword::Pub)) {
+        // Handle visibility modifiers (pub, pub(crate), pub(super), pub(in path), etc.)
+        let visibility = if self.check(&Token::Keyword(Keyword::Pub)) {
             self.advance();
-            true
+            
+            // Check for visibility modifier: pub(...)
+            if self.check(&Token::LeftParen) {
+                self.advance(); // consume (
+                
+                // Parse the visibility level
+                if let Token::Keyword(Keyword::Crate) = self.current() {
+                    self.advance();
+                    self.consume(")")?;
+                    ast::Visibility::PublicCrate
+                } else if let Token::Keyword(Keyword::Super) = self.current() {
+                    self.advance();
+                    self.consume(")")?;
+                    ast::Visibility::PublicSuper
+                } else if let Token::Keyword(Keyword::Self_) = self.current() {
+                    self.advance();
+                    self.consume(")")?;
+                    // pub(self) is equivalent to private in the current module
+                    ast::Visibility::PublicInPath("self".to_string())
+                } else if let Token::Keyword(Keyword::In) = self.current() {
+                    self.advance();
+                    // Parse the path (e.g., crate::utils or super::module)
+                    let mut path = String::new();
+                    while !self.check(&Token::RightParen) && self.current() != &Token::Eof {
+                        if let Token::Keyword(Keyword::Crate) = self.current() {
+                            path.push_str("crate");
+                            self.advance();
+                        } else if let Token::Keyword(Keyword::Super) = self.current() {
+                            path.push_str("super");
+                            self.advance();
+                        } else if let Token::Identifier(name) = self.current() {
+                            path.push_str(name);
+                            self.advance();
+                        } else if self.check(&Token::DoubleColon) {
+                            path.push_str("::");
+                            self.advance();
+                        } else {
+                            // Unexpected token in path
+                            break;
+                        }
+                    }
+                    self.consume(")")?;
+                    ast::Visibility::PublicInPath(path)
+                } else {
+                    // Unknown visibility modifier, treat as pub
+                    self.consume(")")?;
+                    ast::Visibility::Public
+                }
+            } else {
+                // Just pub with no modifier
+                ast::Visibility::Public
+            }
         } else {
-            false
+            ast::Visibility::Private
         };
 
         // Handle extern functions (skip the ABI string)
@@ -429,25 +500,65 @@ impl Parser {
             }
         }
 
+        // Convert advanced visibility to bool for now
+        // Full visibility info stored in thread-local for lowering phase
+        let is_pub = !matches!(visibility, ast::Visibility::Private);
+        
+        // Store the full visibility info for the lowering phase to use
+        CURRENT_VISIBILITY.with(|v| {
+            *v.borrow_mut() = visibility.clone();
+        });
+        
+        // DEBUG: Log what visibility was parsed
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/visibility_debug.log")
+            .and_then(|mut f| writeln!(f, "[PARSE] Parsed visibility: {:?}", visibility));
+
+        // Check for unsafe keyword at item level (unsafe fn, unsafe impl, unsafe extern)
+        let is_item_unsafe = if self.check(&Token::Keyword(Keyword::Unsafe)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
         match self.current() {
-            Token::Keyword(Keyword::Fn) => self.parse_function(),
-            Token::Keyword(Keyword::Struct) => self.parse_struct_with_attributes(attributes),
-            Token::Keyword(Keyword::Enum) => self.parse_enum(),
+            Token::Keyword(Keyword::Fn) => {
+                // PHASE 4.1: Handle unsafe fn
+                let mut func_item = self.parse_function(is_pub)?;
+                if is_item_unsafe {
+                    if let Item::Function { ref mut is_unsafe, .. } = func_item {
+                        *is_unsafe = true;
+                    }
+                }
+                Ok(func_item)
+            }
+            Token::Keyword(Keyword::Struct) => self.parse_struct_with_attributes(attributes, is_pub),
+            Token::Keyword(Keyword::Enum) => self.parse_enum(is_pub),
             Token::Keyword(Keyword::Trait) => self.parse_trait(),
-            Token::Keyword(Keyword::Impl) => self.parse_impl(),
-            Token::Keyword(Keyword::Mod) => self.parse_module(),
+            Token::Keyword(Keyword::Impl) => {
+                // PHASE 4.1: Handle unsafe impl
+                let mut impl_item = self.parse_impl()?;
+                if is_item_unsafe {
+                    if let Item::Impl { ref mut is_unsafe, .. } = impl_item {
+                        *is_unsafe = true;
+                    }
+                }
+                Ok(impl_item)
+            }
+            Token::Keyword(Keyword::Mod) => self.parse_module(is_pub),
             Token::Keyword(Keyword::Use) => self.parse_use(is_pub),
             Token::Keyword(Keyword::Const) => self.parse_const_item(is_pub),
             Token::Keyword(Keyword::Static) => self.parse_static_item(is_pub),
+            Token::Keyword(Keyword::Type) => self.parse_type_alias(is_pub),
             Token::Keyword(Keyword::MacroRules) => self.parse_macro_rules_item(),
             _ => Err(ParseError::InvalidSyntax(
-                "Expected function, struct, enum, trait, impl, mod, use, const, static, or macro_rules definition".to_string(),
+                "Expected function, struct, enum, trait, impl, mod, use, const, static, type alias, or macro_rules definition".to_string(),
             )),
         }
     }
 
     /// Parse a function definition
-    fn parse_function(&mut self) -> ParseResult<Item> {
+    fn parse_function(&mut self, is_pub: bool) -> ParseResult<Item> {
         let abi = if self.check(&Token::Keyword(Keyword::Extern)) {
             self.advance();
             let abi_str = if let Token::String(s) = self.current() {
@@ -496,7 +607,20 @@ impl Parser {
             None
         };
 
+        // Skip where clause if present (consume but ignore for now)
+        if self.check(&Token::Keyword(Keyword::Where)) {
+            self.advance();
+            
+            // Skip until we find {
+            while !self.check(&Token::LeftBrace) && !self.check(&Token::Eof) {
+                self.advance();
+            }
+        }
+
         let body = self.parse_block()?;
+        
+        // Register visibility immediately while we still have it
+        register_current_visibility_to_lowering(&name);
 
         Ok(Item::Function {
             name,
@@ -506,7 +630,7 @@ impl Parser {
             body,
             is_unsafe,
             is_async,
-            is_pub: false,
+            is_pub,
             attributes: Vec::new(),
             where_clause,
             abi,
@@ -628,7 +752,7 @@ impl Parser {
         Ok(generics)
     }
 
-    /// Parse a where clause: `where T: Trait1, U: Trait2`
+    /// Parse a where clause: `where T: Trait1, U: Trait2` (simplified for now)
     fn parse_where_clause(&mut self) -> ParseResult<Vec<WhereConstraint>> {
         let mut constraints = Vec::new();
 
@@ -639,35 +763,50 @@ impl Parser {
         self.advance();
 
         loop {
-            let param_name = self.expect_identifier()?;
-            self.consume(":")?;
-            
-            let mut bounds = Vec::new();
-            
-            loop {
-                if let Token::Identifier(bound) = self.current() {
-                    bounds.push(bound.clone());
-                    self.advance();
-                } else {
-                    return Err(ParseError::UnexpectedToken {
-                        expected: "trait bound".to_string(),
-                        found: format!("{:?}", self.current()),
-                    });
-                }
+            match self.current() {
+                Token::Identifier(_) => {
+                    let param_name = self.expect_identifier()?;
+                    
+                    // Consume : if present
+                    if !self.consume(":").is_ok() {
+                        // If we can't consume :, maybe we're done with where clause
+                        break;
+                    }
+                    
+                    let mut bounds = Vec::new();
+                    let trait_bounds = Vec::new();  // TODO: Populate with associated type bounds later
+                    
+                    loop {
+                        if let Token::Identifier(bound) = self.current() {
+                            bounds.push(bound.clone());
+                            self.advance();
+                        } else {
+                            break;
+                        }
 
-                if self.check(&Token::Plus) {
-                    self.advance();
-                } else {
+                        if self.check(&Token::Plus) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    constraints.push(WhereConstraint { 
+                        param_name, 
+                        bounds,
+                        trait_bounds,
+                    });
+
+                    if self.check(&Token::Comma) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                _ => {
+                    // Unknown token, stop parsing where clause
                     break;
                 }
-            }
-
-            constraints.push(WhereConstraint { param_name, bounds });
-
-            if self.check(&Token::Comma) {
-                self.advance();
-            } else {
-                break;
             }
         }
 
@@ -839,7 +978,7 @@ impl Parser {
     }
 
     /// Parse a struct definition
-    fn parse_struct_with_attributes(&mut self, attributes: Vec<ast::Attribute>) -> ParseResult<Item> {
+    fn parse_struct_with_attributes(&mut self, attributes: Vec<ast::Attribute>, is_pub: bool) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Struct)?;
         let name = self.expect_identifier()?;
 
@@ -874,19 +1013,22 @@ impl Parser {
 
             self.consume("}")?;
         }
+        
+        // Register visibility immediately
+        register_current_visibility_to_lowering(&name);
 
         Ok(Item::Struct { 
             name, 
             generics,
             fields,
-            is_pub: false,
+            is_pub,
             attributes,
             where_clause,
         })
     }
     
     fn parse_struct(&mut self) -> ParseResult<Item> {
-        self.parse_struct_with_attributes(Vec::new())
+        self.parse_struct_with_attributes(Vec::new(), false)
     }
 
     /// Parse a block: { statements; expression? }
@@ -1377,7 +1519,25 @@ impl Parser {
         // eprintln!("[DEBUG] parse_range: START, current token={:?}, restriction={:?}", self.current(), self.restrictions);
         
         // Check for range starting with .. (e.g., ..5, ..=10)
-        if self.check(&Token::DotDot) {
+        if self.check(&Token::DotDotEqual) {
+            // ..= with optional end
+            self.advance();
+            if !self.is_expression_terminator() {
+                let end = Box::new(self.parse_range_end()?);
+                return Ok(Expression::Range {
+                    start: None,
+                    end: Some(end),
+                    inclusive: true,
+                });
+            } else {
+                // Just ..= with no end
+                return Ok(Expression::Range {
+                    start: None,
+                    end: None,
+                    inclusive: true,
+                });
+            }
+        } else if self.check(&Token::DotDot) {
             self.advance();
             if self.check(&Token::Equal) {
                 self.advance();
@@ -1408,7 +1568,24 @@ impl Parser {
         // eprintln!("[DEBUG] parse_range: After postfix, current token={:?}, expr type parsed", self.current());
 
         // Check for range operators
-        if self.check(&Token::DotDot) {
+        if self.check(&Token::DotDotEqual) {
+            // expr..= with optional end
+            self.advance();
+            if !self.is_expression_terminator() {
+                let end = Box::new(self.parse_range_end()?);
+                expr = Expression::Range {
+                    start: Some(Box::new(expr)),
+                    end: Some(end),
+                    inclusive: true,
+                };
+            } else {
+                expr = Expression::Range {
+                    start: Some(Box::new(expr)),
+                    end: None,
+                    inclusive: true,
+                };
+            }
+        } else if self.check(&Token::DotDot) {
             // eprintln!("[DEBUG] parse_range: Found DotDot, advancing...");
             self.advance();
             if self.check(&Token::Equal) {
@@ -1774,6 +1951,35 @@ impl Parser {
             Token::Keyword(Keyword::Self_) => {
                 self.advance();
                 Ok(Expression::Variable("self".to_string()))
+            }
+            Token::Keyword(Keyword::Crate) => {
+                // Handle crate:: paths like crate::math::add
+                let mut path = vec!["crate".to_string()];
+                self.advance();
+                
+                // Expect :: after crate
+                if !self.check(&Token::DoubleColon) {
+                    // Just "crate" by itself is not valid in expression context
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected '::' after 'crate' keyword".to_string(),
+                    ));
+                }
+                self.advance();
+                
+                // Parse the rest of the path
+                loop {
+                   path.push(self.expect_identifier()?);
+                   if !self.check(&Token::DoubleColon) {
+                       break;
+                   }
+                   self.advance();
+               }
+               
+               // Return a path that will be handled by postfix parser for calls
+               Ok(Expression::Path {
+                   segments: path,
+                   is_absolute: true,
+               })
             }
             Token::Pipe | Token::OrOr => self.parse_closure(),
             Token::LeftBracket => self.parse_array(),
@@ -2158,7 +2364,7 @@ impl Parser {
     }
 
     /// Parse enum definition: `enum Name { Variant1, Variant2(Type), ... }`
-    fn parse_enum(&mut self) -> ParseResult<Item> {
+    fn parse_enum(&mut self, is_pub: bool) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Enum)?;
         let name = self.expect_identifier()?;
         let generics = self.parse_generics()?;
@@ -2208,11 +2414,15 @@ impl Parser {
         }
         
         self.consume("}")?;
+        
+        // Register visibility immediately
+        register_current_visibility_to_lowering(&name);
+        
         Ok(Item::Enum { 
             name, 
             generics,
             variants,
-            is_pub: false,
+            is_pub,
             attributes: Vec::new(),
             where_clause,
         })
@@ -2341,11 +2551,11 @@ impl Parser {
         
         while !self.check(&Token::RightBrace) {
             if self.check(&Token::Keyword(Keyword::Fn)) {
-                methods.push(self.parse_function()?);
+                methods.push(self.parse_function(false)?);
             } else if self.check(&Token::Keyword(Keyword::Pub)) {
                 self.advance();
                 if self.check(&Token::Keyword(Keyword::Fn)) {
-                    methods.push(self.parse_function()?);
+                    methods.push(self.parse_function(true)?);
                 }
             } else {
                 self.advance(); // Skip unknown items
@@ -2365,9 +2575,12 @@ impl Parser {
     }
 
     /// Parse module definition: `mod name { ... }`
-    fn parse_module(&mut self) -> ParseResult<Item> {
+    fn parse_module(&mut self, is_pub: bool) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Mod)?;
         let name = self.expect_identifier()?;
+        
+        // Register module visibility immediately
+        register_current_visibility_to_lowering(&name);
         
         if self.check(&Token::LeftBrace) {
             self.advance();
@@ -2382,17 +2595,17 @@ impl Parser {
                 name, 
                 items,
                 is_inline: true,
-                is_pub: false,
+                is_pub,
                 attributes: Vec::new(),
             })
         } else {
-            // Inline module: `mod name;`
+            // File-based module: `mod name;`
             self.consume(";")?;
             Ok(Item::Module { 
                 name, 
                 items: Vec::new(),
                 is_inline: false,
-                is_pub: false,
+                is_pub,
                 attributes: Vec::new(),
             })
         }
@@ -2400,13 +2613,23 @@ impl Parser {
 
     /// Parse use statement: `use path::to::item;` or `pub use path::to::item;`
     fn parse_use(&mut self, is_public: bool) -> ParseResult<Item> {
-        self.expect_keyword(Keyword::Use)?;
-        let first = self.expect_identifier()?;
-        
-        let mut path = vec![first];
-        while self.check(&Token::DoubleColon) {
-            self.advance();
-            if self.check(&Token::LeftBrace) {
+         self.expect_keyword(Keyword::Use)?;
+         
+         // Support crate::, super::, and regular paths
+         let first = if self.check(&Token::Keyword(Keyword::Crate)) {
+             self.advance();
+             "crate".to_string()
+         } else if self.check(&Token::Keyword(Keyword::Super)) {
+             self.advance();
+             "super".to_string()
+         } else {
+             self.expect_identifier()?
+         };
+         
+         let mut path = vec![first];
+         while self.check(&Token::DoubleColon) {
+             self.advance();
+             if self.check(&Token::LeftBrace) {
                 let mut brace_depth = 1;
                 self.advance();
                 while brace_depth > 0 && self.current() != &Token::Eof {
@@ -2488,20 +2711,112 @@ impl Parser {
         })
     }
 
-    /// Parse macro_rules! definition
-    pub fn parse_macro_rules_item(&mut self) -> ParseResult<Item> {
-        let (name, rules) = self.parse_macro_rules()?;
-        let ast_rules = rules.iter().map(|rule| {
-            ast::MacroRule {
-                pattern: format!("{:?}", rule.pattern),
-                body: format!("{:?}", rule.body),
-            }
-        }).collect();
-        Ok(Item::MacroDefinition {
+    /// Parse a type alias: type Name = Type; or type Name<T> = Type;
+    fn parse_type_alias(&mut self, is_public: bool) -> ParseResult<Item> {
+        self.expect_keyword(Keyword::Type)?;
+        let name = self.expect_identifier()?;
+        
+        // Parse generic parameters if present
+        let generics = if self.check(&Token::Less) {
+            self.parse_generics()?
+        } else {
+            Vec::new()
+        };
+        
+        self.consume("=")?;
+        let ty = self.parse_type()?;
+        self.consume(";")?;
+        
+        Ok(Item::TypeAlias {
             name,
-            rules: ast_rules,
+            generics,
+            ty,
+            is_pub: is_public,
             attributes: Vec::new(),
         })
+    }
+
+
+    
+    /// PHASE 5: Parse macro_rules! definition (simplified - just collect tokens)
+    /// Parse macro_rules! definition (PHASE 5.1b - Using real parser)
+    pub fn parse_macro_rules_item(&mut self) -> ParseResult<Item> {
+        // PHASE 5.1b-INTEGRATE: Use the real macro parser from macros/parsing.rs
+        // The parser expects to be at MacroRules keyword (which we are)
+        
+        match self.parse_macro_rules() {
+            Ok((name, rules)) => {
+                // Convert macros::MacroRule to ast::MacroRule
+                let ast_rules = rules.into_iter().map(|rule| {
+                    ast::MacroRule {
+                        pattern: format!("{:?}", rule.pattern),
+                        body: format!("{:?}", rule.body),
+                        actual_rule: Some(Box::new(rule)),
+                    }
+                }).collect();
+                
+                Ok(Item::MacroDefinition {
+                    name,
+                    rules: ast_rules,
+                    attributes: Vec::new(),
+                })
+            }
+            Err(e) => {
+                // If real parser fails, fall back to simplified version
+                // Re-sync: we're still at MacroRules keyword (parser position was restored on error)
+                
+                if let Token::Keyword(Keyword::MacroRules) = self.current() {
+                    self.advance();
+                } else {
+                    return Err(ParseError::InvalidSyntax("Expected macro_rules keyword".to_string()));
+                }
+                
+                if !self.check(&Token::Bang) {
+                    return Err(ParseError::InvalidSyntax("Expected ! after macro_rules".to_string()));
+                }
+                self.advance();
+                
+                let name = match self.current() {
+                    Token::Identifier(n) => {
+                        let name = n.clone();
+                        self.advance();
+                        name
+                    }
+                    _ => {
+                        return Err(ParseError::InvalidSyntax("Expected macro name after macro_rules!".to_string()));
+                    }
+                };
+                
+                self.consume("{")?;
+                
+                let mut brace_depth = 1;
+                while brace_depth > 0 && self.current() != &Token::Eof {
+                    match self.current() {
+                        Token::LeftBrace => {
+                            brace_depth += 1;
+                            self.advance();
+                        }
+                        Token::RightBrace => {
+                            brace_depth -= 1;
+                            self.advance();
+                        }
+                        _ => {
+                            self.advance();
+                        }
+                    }
+                }
+                
+                Ok(Item::MacroDefinition {
+                    name,
+                    rules: vec![ast::MacroRule {
+                        pattern: "simplified".to_string(),
+                        body: "not yet expanded".to_string(),
+                        actual_rule: None,
+                    }],
+                    attributes: Vec::new(),
+                })
+            }
+        }
     }
 }
 
@@ -2564,8 +2879,25 @@ pub fn resolve_file_modules(
     Ok(program)
 }
 
-/// The public parsing function
+/// The public parsing function (without file-based module resolution)
 pub fn parse(tokens: Vec<Token>) -> Result<Program, String> {
     let mut parser = Parser::new(tokens);
     parser.parse_program().map_err(|e| e.to_string())
+}
+
+/// Parse with file-based module resolution
+/// Resolves `mod name;` statements to load from name.rs files
+pub fn parse_with_modules(tokens: Vec<Token>, source_file: Option<&str>) -> Result<Program, String> {
+    let mut parser = Parser::new(tokens);
+    let ast = parser.parse_program().map_err(|e| e.to_string())?;
+    
+    // Get the directory of the source file
+    let base_dir = source_file.and_then(|f| {
+        Path::new(f)
+            .parent()
+            .and_then(|p| p.to_str())
+    });
+    
+    // Resolve file-based modules
+    resolve_file_modules(ast, base_dir)
 }

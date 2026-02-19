@@ -299,6 +299,10 @@ fn print_detailed_error(error: &gaiarusted::CompileError, error_num: usize, tota
         (0, 0)
     };
     
+    // Map error message to error code
+    let error_code = gaiarusted::error_codes::get_error_code_for_message(&error.message)
+        .and_then(|code| gaiarusted::error_codes::get_error_code(&code).map(|_| code));
+    
     // Parse error message for type mismatch info
     let message = &error.message;
     let is_type_mismatch = message.to_lowercase().contains("type mismatch");
@@ -394,14 +398,34 @@ fn print_detailed_error(error: &gaiarusted::CompileError, error_num: usize, tota
     };
     
     let message_lines: Vec<&str> = error.message.split('\n').collect();
-    eprintln!("{}: {}: {}{}", 
-        severity,
-        file_location,
-        message_lines[0],
-        kind_suffix);
+    
+    // Display error with code if available
+    let error_display = if let Some(code) = &error_code {
+        format!("{}: {}[{}]: {}{}", 
+            severity,
+            file_location,
+            code,
+            message_lines[0],
+            kind_suffix)
+    } else {
+        format!("{}: {}: {}{}", 
+            severity,
+            file_location,
+            message_lines[0],
+            kind_suffix)
+    };
+    
+    eprintln!("{}", error_display);
     
     for line in &message_lines[1..] {
         eprintln!("  {}", line);
+    }
+    
+    // Display suggestion if error code is available
+    if let Some(code) = error_code {
+        if let Some(error_detail) = gaiarusted::error_codes::get_error_code(&code) {
+            eprintln!("  suggestion: {}", error_detail.suggestion);
+        }
     }
     
     if let Some(file) = &error.file {
