@@ -4,7 +4,7 @@ A complete Rust compiler implementation built from scratch in pure Rust with zer
 
 > **Note:** Previous repo got nuked lmao 💀 Fresh start ig
 
-**v1.0.0 (PRODUCTION RELEASE)** ✅ | **v1.0.1 (PRODUCTION RELEASE)** ✅ | **v1.0.2 (PRODUCTION RELEASE)** ✅ | **v1.1.0 (PRODUCTION RELEASE)** ✅ - Dynamic Array Indexing Complete - 1850 tests ✓ 0 regressions | [Setup Guide](#building-from-source) | [Contributing](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md) | [Architecture](#architecture) | [Features](#key-features) | [Standard Library](#standard-library) | [Roadmap](#roadmap)
+**v1.1.0 (PRODUCTION RELEASE)** ✅ - Dynamic Array Indexing Complete | [README](#gaiarusted-) | [Codebase Guide](./CODEBASE_EXPLANATION.md) | [Contributing](./CONTRIBUTING.md) | [Architecture](#architecture) | [Setup Guide](#building-from-source) | [Roadmap](#roadmap)
 
 * * *
 
@@ -1993,14 +1993,17 @@ Quick Links
 
 **Documentation**
 
-*   📖 [Contributing Guide](https://github.com/Mazigaming/GaiaRusted/blob/main/CONTRIBUTING.md)
-*   📚 [Full Architecture](docs/ARCHITECTURE.md)
+*   📖 [Contributing Guide](./CONTRIBUTING.md)
+*   📚 [Codebase Tutorial & Walkthrough](./CODEBASE_EXPLANATION.md) - **Start here for detailed code explanations**
+*   🏗️ [Full Architecture](#architecture)
 
 **Resources**
 
 *   🔧 [Build Instructions](#building-from-source)
 *   🧪 [Test Guide](#testing)
-*   💡 [Examples](#examples)
+*   💡 [Examples](#examples-v07)
+*   📋 [Code of Conduct](./CODE_OF_CONDUCT.md)
+*   ⚖️ [License](./LICENSE)
 
 * * *
 
