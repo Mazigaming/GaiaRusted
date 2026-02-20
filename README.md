@@ -1,10 +1,13 @@
 **GaiaRusted** 🦀
-------------
+================
+
 A complete Rust compiler implementation built from scratch in pure Rust with zero external dependencies. Converts Rust source code to multiple output formats including Assembly, Object files, Executables, and Libraries.
 
 > **Note:** Previous repo got nuked lmao 💀 Fresh start ig
 
-**v1.1.0 (PRODUCTION RELEASE)** ✅ - Dynamic Array Indexing Complete | [README](#gaiarusted-) | [Codebase Guide](./CODEBASE_EXPLANATION.md) | [Contributing](./CONTRIBUTING.md) | [Architecture](#architecture) | [Setup Guide](#building-from-source) | [Roadmap](#roadmap)
+**v1.1.0 (PRODUCTION RELEASE)** ✅ - Dynamic Array Indexing Complete
+
+[README](#gaiarusted-) | [Architecture](./ARCHITECTURE.md) | [Code of Conduct](./CODE_OF_CONDUCT.md) | [Contributing](./CONTRIBUTING.md) | [MIT License](./LICENSE)
 
 * * *
 

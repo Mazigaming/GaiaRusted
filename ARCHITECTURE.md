@@ -545,6 +545,476 @@ See `CONTRIBUTING.md` for detailed contribution guidelines
 
 ---
 
+## Complete File Reference
+
+### Root Level Files
+
+| File | Purpose | Key Content |
+|------|---------|------------|
+| `Cargo.toml` | Rust project manifest | Package metadata, version, dependencies |
+| `Cargo.lock` | Dependency lock file | Exact versions used in build |
+| `LICENSE` | MIT License | Legal permission to use code |
+| `README.md` | Main documentation | Features, quick start, architecture overview |
+| `CONTRIBUTING.md` | Contribution guidelines | How to contribute, code style, testing |
+| `CODE_OF_CONDUCT.md` | Community standards | Rust Code of Conduct reference |
+| `ARCHITECTURE.md` | This file | Complete architecture and file documentation |
+
+### Source Files - Core Compiler
+
+#### **src/main.rs**
+- **Purpose:** Command-line entry point for the compiler
+- **Size:** ~100 LOC
+- **Key Functions:**
+  - `main()` - Parse arguments, call compiler
+  - Handles `-o` flag for output path
+  - Handles `--format` flag for output format
+- **Exports:** None (binary crate entry)
+
+#### **src/lib.rs**
+- **Purpose:** Library interface for using compiler as a library
+- **Size:** ~150 LOC
+- **Key Functions:**
+  - `compile_files()` - Main public API
+  - `compile_string()` - Compile from string
+  - Module re-exports
+- **Exports:** All public modules and compilation functions
+
+#### **src/compiler.rs**
+- **Purpose:** Main orchestrator that runs all compilation stages
+- **Size:** ~800 LOC
+- **Key Functions:**
+  - `compile_file()` - Main compilation pipeline
+  - `compile_with_config()` - Configurable compilation
+  - `run_compilation_phases()` - Execute all stages
+- **Inputs:** Source file path, output format
+- **Outputs:** Compiled binary/assembly
+
+#### **src/config.rs**
+- **Purpose:** Configuration and output format handling
+- **Size:** ~400 LOC
+- **Key Structs:**
+  - `CompilationConfig` - Compilation settings
+  - `OutputFormat` - Assembly, Object, Executable, Library, Bash
+- **Features:** Verbose mode, optimization level, target triple
+
+#### **src/error_codes.rs**
+- **Purpose:** Error code definitions and messages
+- **Size:** ~500 LOC
+- **Content:**
+  - E0001 - Type mismatch errors
+  - E0002 - Borrow checker violations
+  - E0003 - Lifetime errors
+  - Detailed error explanations
+
+#### **src/error_suggestions.rs**
+- **Purpose:** Generate helpful suggestions for common errors
+- **Size:** ~600 LOC
+- **Features:**
+  - Typo corrections
+  - Missing imports suggestions
+  - Type conversion hints
+
+#### **src/formatter.rs**
+- **Purpose:** Format and colorize error messages
+- **Size:** ~300 LOC
+- **Features:**
+  - ANSI color codes
+  - Source context display
+  - Error location highlighting
+
+#### **src/source_display.rs**
+- **Purpose:** Display source code with error context
+- **Size:** ~250 LOC
+- **Features:**
+  - Line number display
+  - Highlight error location
+  - Show surrounding context
+
+#### **src/module_loader.rs**
+- **Purpose:** Load and manage modules
+- **Size:** ~400 LOC
+- **Features:**
+  - Module caching
+  - Visibility tracking
+  - Use statement resolution
+
+#### **src/cargo_api.rs**
+- **Purpose:** Cargo integration and project handling
+- **Size:** ~800 LOC
+- **Features:**
+  - Cargo.toml parsing
+  - Dependency resolution
+  - Build profile management
+  - Workspace support
+
+#### **src/compiler_integration.rs**
+- **Purpose:** Integration points for compilation pipeline
+- **Size:** ~500 LOC
+- **Features:**
+  - Phase callbacks
+  - Performance metrics
+  - Debug output hooks
+
+#### **src/compiler_incremental.rs**
+- **Purpose:** Incremental compilation support
+- **Size:** ~600 LOC
+- **Features:**
+  - Cache intermediate representations
+  - Dependency tracking
+  - File change detection
+
+### Lexer Module - Stage 1
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/lexer/mod.rs` | ~800 | Main lexer implementation |
+| `src/lexer/token.rs` | ~200 | Token type definitions |
+
+**src/lexer/mod.rs - Tokenization**
+- Converts raw Rust source to token stream
+- Handles: keywords, identifiers, literals, operators, comments
+- Features:
+  - Multi-character operator recognition (==, !=, <=, etc.)
+  - String escape sequences
+  - Raw strings (r"...", r#"..."#)
+  - Byte literals (b"...", b'...')
+  - Numeric suffixes (i32, u64, f64, isize, usize)
+
+**src/lexer/token.rs**
+- Defines Token enum with all token types
+- Keywords: let, fn, if, else, while, for, match, etc.
+- Literals: Integer, Float, String, Byte
+- Operators: All arithmetic, bitwise, comparison, logical
+
+### Parser Module - Stage 2
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/parser/mod.rs` | ~3000 | Main parser implementation |
+| `src/parser/ast.rs` | ~1500 | AST node definitions |
+
+**src/parser/mod.rs - Recursive Descent Parser**
+- Converts token stream to Abstract Syntax Tree
+- Implements:
+  - Recursive descent parsing
+  - Operator precedence climbing
+  - Error recovery
+  - Function definitions
+  - Struct definitions
+  - Module definitions
+  - Impl blocks
+  - Trait definitions
+  - Pattern matching
+  - Lifetime annotations
+
+**src/parser/ast.rs**
+- Defines all AST node types
+- Key Enums:
+  - Item - top-level declarations
+  - Statement - statements in functions
+  - Expression - expressions (leaf nodes)
+  - Pattern - match patterns
+  - Type - type annotations
+
+### Lowering Module - Stage 3
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/lowering/mod.rs` | ~2500 | AST to HIR conversion |
+| `src/lowering/for_loop_desugar.rs` | ~400 | For loop desugaring |
+| `src/lowering/items.rs` | ~600 | Item lowering |
+
+**src/lowering/mod.rs - Desugaring**
+- Removes syntactic sugar from AST
+- Transforms:
+  - For loops → while loops with iterator
+  - Match expressions → if/else chains (exhaustiveness checked)
+  - Implicit returns → explicit returns
+  - Method calls → static calls
+  - Destructuring patterns → sequential bindings
+  - Range expressions → Range structs
+
+**src/lowering/for_loop_desugar.rs**
+- Specializes in converting for loops
+- Handles:
+  - Range iteration (0..10, 0..=10)
+  - Iterator protocol
+  - Break/continue statements
+
+**src/lowering/items.rs**
+- Lowers top-level items
+- Converts:
+  - Functions
+  - Structs
+  - Modules
+  - Impl blocks
+  - Trait definitions
+
+### Type Checker Module - Stage 4
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/typechecker/mod.rs` | ~3500 | Main type checking |
+| `src/typechecker/stdlib_integration.rs` | ~1000 | Standard library type info |
+
+**src/typechecker/mod.rs - Type Inference**
+- Implements Hindley-Milner type inference
+- Features:
+  - Type constraint generation
+  - Unification algorithm
+  - Generic type substitution
+  - Trait bound checking
+  - Where clause validation
+  - Guard type enforcement (bool)
+  - Associated type resolution
+
+**src/typechecker/stdlib_integration.rs**
+- Provides type information for standard library
+- Contains:
+  - Vec<T> type system
+  - Option<T> and Result<T, E> types
+  - Iterator trait information
+  - Built-in function signatures
+
+### Type System Module
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/typesystem/mod.rs` | ~1500 | Main type definitions |
+| `src/typesystem/types.rs` | ~1000 | Type representation |
+| `src/typesystem/constraints.rs` | ~800 | Constraint solving |
+| `src/typesystem/substitution.rs` | ~600 | Type substitution |
+| `src/typesystem/expression_typing.rs` | ~1200 | Expression type rules |
+
+**src/typesystem/types.rs**
+- Core type representation
+- Types:
+  - Primitive: i32, i64, f64, bool, str, usize, isize
+  - Complex: Array, Tuple, Reference
+  - Generic: Generic, Named
+  - Special: Unknown, Never
+
+**src/typesystem/constraints.rs**
+- Constraint generation and solving
+- Implements:
+  - Unification algorithm
+  - Substitution application
+  - Constraint propagation
+  - Error reporting
+
+**src/typesystem/expression_typing.rs**
+- Type rules for expressions
+- Handles:
+  - Literal types
+  - Variable lookup
+  - Binary operations
+  - Function calls
+  - Field access
+  - Array indexing
+
+### Borrow Checker Module - Stage 5
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/borrowchecker/mod.rs` | ~3000 | Main borrow checking |
+| `src/borrowchecker/lifetimes.rs` | ~1500 | Lifetime inference |
+| `src/borrowchecker/lifetime_validation.rs` | ~1200 | Lifetime validation |
+| `src/borrowchecker/lifetime_solver.rs` | ~1000 | Lifetime constraint solving |
+| `src/borrowchecker/scopes.rs` | ~800 | Scope tracking |
+| `src/borrowchecker/nll.rs` | ~1200 | Non-Lexical Lifetimes |
+| `src/borrowchecker/nll_binding_tracker.rs` | ~900 | NLL binding tracking |
+| `src/borrowchecker/safe_pointers.rs` | ~1000 | Smart pointer analysis |
+| `src/borrowchecker/unsafe_checking.rs` | ~1500 | Unsafe block validation |
+| `src/borrowchecker/unsafe_checking_enhanced.rs` | ~1200 | Enhanced unsafe checks |
+| `src/borrowchecker/struct_lifetimes.rs` | ~1100 | Struct lifetime handling |
+| `src/borrowchecker/function_lifetimes.rs` | ~1000 | Function lifetime inference |
+| `src/borrowchecker/impl_lifetimes.rs` | ~900 | Impl block lifetimes |
+| `src/borrowchecker/self_lifetimes.rs` | ~700 | Self lifetime binding |
+| `src/borrowchecker/trait_bounds_tests.rs` | ~500 | Trait bound validation |
+| `src/borrowchecker/reference_cycles.rs` | ~700 | Reference cycle detection |
+| `src/borrowchecker/interior_mutability.rs` | ~600 | Cell/RefCell handling |
+| `src/borrowchecker/iterator_analysis.rs` | ~800 | Iterator borrow rules |
+| `src/borrowchecker/loop_ownership.rs` | ~700 | Loop variable ownership |
+| `src/borrowchecker/type_system_bridge.rs` | ~500 | Integration with type system |
+
+**src/borrowchecker/mod.rs - Core Borrow Checking**
+- Tracks variable ownership and borrowing
+- Prevents:
+  - Use-after-move
+  - Double borrow
+  - Mutable aliasing
+  - Lifetime violations
+- Implements:
+  - Ownership tracking per binding
+  - Move/copy semantics
+  - Borrow validation
+
+**src/borrowchecker/lifetimes.rs**
+- Lifetime inference and validation
+- Handles:
+  - Implicit lifetime elision rules
+  - Lifetime parameter unification
+  - Variance (covariance/contravariance)
+  - Bounded lifetime variables
+
+**src/borrowchecker/nll.rs**
+- Non-Lexical Lifetimes support
+- Extends lifetimes based on:
+  - Actual usage locations
+  - Control flow paths
+  - Borrow reborrowing
+
+### MIR Module - Stage 6-7
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/mir/mod.rs` | ~5000 | MIR building and optimization |
+
+**src/mir/mod.rs - Control Flow Graph**
+- Builds Mid-Level IR (control flow graph)
+- Creates:
+  - Basic blocks (sequences of statements)
+  - Terminators (jumps, returns, branches)
+  - SSA-like form
+- Optimization passes:
+  1. **Constant folding** - Evaluate constants at compile time
+  2. **Dead code elimination** - v1.1.0: Fixed for dynamic indexing
+  3. **Copy propagation** - Eliminate unnecessary moves
+  4. **Control flow simplification** - Merge redundant jumps
+  5. **Branch merging** - Combine similar branches
+
+**v1.1.0 Fix:**
+```rust
+// Updated to collect both place and index from array indexing
+Rvalue::Index(place, idx_operand) => {
+    places.insert(place.clone());
+    Self::collect_places_from_operand(idx_operand, places);
+}
+```
+
+### Code Generation Module - Stages 8-10
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/codegen/mod.rs` | ~5000 | Main x86-64 code generation |
+| `src/codegen/object.rs` | ~2500 | ELF object file creation |
+| `src/codegen/mir_lowering.rs` | ~1500 | MIR to instructions |
+| `src/codegen/monomorphization.rs` | ~1800 | Generic instantiation |
+| `src/codegen/monomorphization_v2.rs` | ~1200 | Improved monomorphization |
+| `src/codegen/monomorphization_consolidated.rs` | ~1000 | Consolidated approach |
+| `src/codegen/smart_pointer_codegen.rs` | ~1200 | Box/Rc/Arc code generation |
+| `src/codegen/stdlib_codegen.rs` | ~1500 | Standard library builtin codegen |
+| `src/codegen/simd.rs` | ~1200 | SIMD instruction generation |
+| `src/codegen/simd_emitter.rs` | ~1000 | SIMD emission logic |
+| `src/codegen/inlining.rs` | ~1000 | Function inlining pass |
+| `src/codegen/iterator_fusion.rs` | ~1500 | Iterator fusion optimization |
+| `src/codegen/loop_tiling.rs` | ~800 | Loop tiling optimization |
+| `src/codegen/tail_loop.rs` | ~600 | Tail call optimization |
+| `src/codegen/memory_optimization.rs` | ~1000 | Memory layout optimization |
+| `src/codegen/register_pressure.rs` | ~800 | Register pressure analysis |
+| `src/codegen/interprocedural_escape.rs` | ~700 | Escape analysis |
+| `src/codegen/dynamic_dispatch.rs` | ~900 | Trait object dispatch |
+| `src/codegen/vtable_generation.rs` | ~800 | Virtual table generation |
+| `src/codegen/trait_monomorphization.rs` | ~900 | Trait method monomorphization |
+| `src/codegen/full_compiler.rs` | ~1200 | Full pipeline implementation |
+| `src/codegen/cpu_detection.rs` | ~400 | CPU feature detection |
+| `src/codegen/profiling_diagnostics.rs` | ~600 | Compilation diagnostics |
+| `src/codegen/refcount_scheduler.rs` | ~800 | Reference counting scheduling |
+
+**src/codegen/mod.rs - Instruction Generation**
+- Converts MIR to x86-64 assembly
+- Features:
+  - Instruction selection
+  - Register allocation
+  - Stack frame management
+  - Function prologue/epilogue
+  - System V AMD64 ABI compliance
+  - **v1.1.0: Dynamic array indexing** with index variable calculation
+
+**Instruction Set:**
+- Arithmetic: add, sub, mul, div, mod
+- Bitwise: and, or, xor, shl, shr
+- Comparison: cmp, sete, setne, setl, setle, setg, setge
+- Control: jmp, je, jne, jl, jle, jg, jge, ret
+- Memory: mov, lea, push, pop, movzx, xor
+- Function: call, ret
+
+**src/codegen/object.rs - ELF Object Files**
+- Creates executable files in ELF format
+- Handles:
+  - ELF header generation
+  - Section creation (.text, .data, .rodata, .bss, .symtab, .strtab, .rela.text)
+  - Symbol table construction
+  - Relocation entries
+  - Final executable generation
+
+**Sections:**
+- `.text` - Executable machine code
+- `.data` - Initialized global variables
+- `.rodata` - Read-only data (string constants)
+- `.bss` - Uninitialized global variables
+- `.symtab` - Symbol table (functions, globals)
+- `.strtab` - String table (symbol names)
+- `.rela.text` - Relocation entries
+
+### Standard Library Module
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/stdlib/mod.rs` | ~600 | Module exports |
+| `src/stdlib/stdlib.rs` | ~2000 | Core stdlib functions |
+| `src/stdlib/stdlib_expanded.rs` | ~1500 | Expanded functions |
+| `src/stdlib/math_functions.rs` | ~1200 | Math library (abs, min, max, pow, sqrt, trig) |
+| `src/stdlib/random.rs` | ~400 | Random number generation |
+| `src/stdlib/strings.rs` | ~1500 | String operations (13+ methods) |
+| `src/stdlib/io_operations.rs` | ~1000 | I/O functions (read, write, file ops) |
+| `src/stdlib/collections.rs` | ~2000 | Vec, HashMap operations |
+| `src/stdlib/collections_traits.rs` | ~1000 | Collection trait implementations |
+| `src/stdlib/advanced_collections.rs` | ~1200 | HashSet, BTreeMap, etc. |
+| `src/stdlib/iterators.rs` | ~1500 | Iterator combinators (map, filter, fold, take, skip, find) |
+| `src/stdlib/option_result.rs` | ~1200 | Option<T> and Result<T, E> |
+| `src/stdlib/options_results.rs` | ~1000 | Additional option/result methods |
+| `src/stdlib/smart_pointers.rs` | ~1200 | Box, Rc, Arc implementation |
+| `src/stdlib/vec.rs` | ~1500 | Vec<T> dynamic array |
+| `src/stdlib/formatting.rs` | ~800 | String formatting |
+| `src/stdlib/paths.rs` | ~600 | Path handling |
+| `src/stdlib/networking.rs` | ~800 | Socket operations |
+| `src/stdlib/json.rs` | ~1000 | JSON parsing |
+| `src/stdlib/method_resolution.rs` | ~1200 | Method lookup system |
+| `src/stdlib/advanced_file_io.rs` | ~900 | Advanced file operations |
+| `src/stdlib/advanced_error_handling.rs` | ~1000 | Error handling utilities |
+| `src/stdlib/integration_tests.rs` | ~1500 | Integration tests |
+
+**77+ Built-in Functions:**
+- Math: abs, min, max, pow, sqrt, floor, ceil, round, sin, cos, tan, log, ln, exp, modulo, gcd
+- Random: rand, randrange
+- String: len, concat, contains, starts_with, ends_with, repeat, reverse, chars, index_of, substr, to_upper, to_lower, split
+- File I/O: open_read, open_write, read_file, write_file, read_line, file_exists
+- Type conversion: as_i32, as_i64, as_f64, to_string, parse_int, parse_float, is_digit, is_alpha, is_whitespace
+- Collections: push, pop, get, flatten, count, sum, max_val, min_val, is_empty, clear
+
+### Utilities
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/borrow_error_display.rs` | ~400 | Error message formatting |
+| `src/error_codes.rs` | ~500 | Error code definitions |
+| `src/error_suggestions.rs` | ~600 | Error suggestions |
+| `src/formatter.rs` | ~300 | Output formatting |
+| `src/source_display.rs` | ~250 | Source code display |
+
+### Binaries
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/bin/gaiarusted.rs` | ~200 | Main CLI binary |
+| `src/bin/cargo-gaiarusted.rs` | ~500 | Cargo subcommand integration |
+| `src/bin/repl.rs` | ~800 | Interactive REPL |
+| `src/bin/test_error_codes.rs` | ~300 | Error code testing |
+| `src/bin/verify_error_codes.rs` | ~300 | Error code verification |
+
+---
+
 ## Resources
 
 - **Rust Book:** https://doc.rust-lang.org/book/
