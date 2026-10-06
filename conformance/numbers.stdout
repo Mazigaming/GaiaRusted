@@ -1,0 +1,56 @@
+Some(255) None None
+None Some(25) None
+None None Some(1)
+4 251 88
+255 0 -32768
+2147483647 -2147483648
+(4, true) (-2147483648, true)
+None Some(9223372036854775808) 2147483647
+1024 1 -9223372036854775808
+26 3 32
+8 64 16
+8 192 -3
+0x78563412 0b10000000
+9 4 28
+false true 128
+5 -1 0 128
+10 240
+1 2 2 -3
+-4 0.5
+10 -3 9
+-128 127 65535 -9223372036854775808
+18446744073709551615 64
+Ok(255) Ok(5) Ok(-1295)
+"42" -> 42
+"-42" -> -42
+"+7" -> 7
+"" -> cannot parse integer from empty string / ParseIntError { kind: Empty }
+"-" -> invalid digit found in string / ParseIntError { kind: InvalidDigit }
+"4x2" -> invalid digit found in string / ParseIntError { kind: InvalidDigit }
+"300" -> number too large to fit in target type / ParseIntError { kind: PosOverflow }
+"-129" -> number too small to fit in target type / ParseIntError { kind: NegOverflow }
+Err(ParseIntError { kind: InvalidDigit }) Ok(18446744073709551615)
+Ok(2.5) Ok(1000.0) true
+200 -5 3.5
+65 b 1
+Err(TryFromIntError(())) Ok(30)
+Err(TryFromIntError(())) Err(TryFromIntError(())) Err(TryFromIntError(()))
+true Ok(7000)
+out of range integral type conversion attempted
+1.4142135623730951 1024 1.4142135623730951 1.2599210498948732
+0.841471 0.540302 1.557408
+0.523599 1.047198 0.463648
+2.718282 2.302585 3.000000 3.000000
+2 3 3 -3
+-2 0.75 0
+5 7 0.25
+3.1416 90.0000
+3.14159 2.71828 1.41421
+true true false
+-inf true true
+0.0000000000000002220446049250313 0.00000011920929
+1.5 2 1
+-1 false true
+true 3
+2.828 4.605
+9007199254740992

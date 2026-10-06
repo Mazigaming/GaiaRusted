@@ -8,9 +8,9 @@
 //! - Implicit trait object creation
 
 use super::advanced_types::{
-    TypeBound, TraitDefinition, TraitMethod, TypePredicate, AssociatedType,
+    AssociatedType, TraitDefinition, TraitMethod, TypeBound, TypePredicate,
 };
-use super::types::{Type, TraitId};
+use super::types::{TraitId, Type};
 use std::collections::HashMap;
 
 /// A resolved trait implementation
@@ -79,13 +79,13 @@ impl TraitResolver {
     }
 
     /// Resolve a type against a trait bound
-    /// 
+    ///
     /// This now properly handles generic trait arguments.
     /// For example: T: Iterator<Item=i32> will properly resolve the Item associated type.
     pub fn resolve_bound(&mut self, bound: &TypeBound) -> Result<TraitImpl, String> {
         // Build cache key including trait arguments for proper generic handling
         let cache_key = self.build_cache_key(bound);
-        
+
         if let Some(cached) = self.cache.get(&cache_key) {
             return if let Some(impl_) = cached.clone() {
                 Ok(impl_)
@@ -97,7 +97,7 @@ impl TraitResolver {
         // Try to find a matching implementation
         let mut best_match: Option<TraitImpl> = None;
         let mut last_error: Option<String> = None;
-        
+
         for impl_ in &self.impls {
             if impl_.trait_id == bound.trait_id && impl_.impl_type == bound.subject {
                 // Check if generic trait arguments match (if specified)
@@ -123,7 +123,7 @@ impl TraitResolver {
         }
 
         self.cache.insert(cache_key.clone(), None);
-        
+
         // Generate helpful error message
         let mut error_msg = if bound.trait_args.is_empty() {
             format!(
@@ -131,7 +131,8 @@ impl TraitResolver {
                 bound.trait_id.0, bound.subject
             )
         } else {
-            let args_str = bound.trait_args
+            let args_str = bound
+                .trait_args
                 .iter()
                 .map(|t| format!("{}", t))
                 .collect::<Vec<_>>()
@@ -141,22 +142,23 @@ impl TraitResolver {
                 bound.trait_id.0, bound.subject, args_str
             )
         };
-        
+
         // Include specific error if we found an incompatible impl
         if let Some(err) = last_error {
             error_msg.push_str(&format!("\n  Details: {}", err));
         }
-        
+
         Err(error_msg)
     }
-    
+
     /// Build a cache key that includes trait arguments
     fn build_cache_key(&self, bound: &TypeBound) -> (TraitId, String) {
         let key_str = if bound.trait_args.is_empty() {
             format!("{}", bound.subject)
         } else {
             // Include trait arguments in the key for proper generic handling
-            let args_str = bound.trait_args
+            let args_str = bound
+                .trait_args
                 .iter()
                 .map(|t| format!("{}", t))
                 .collect::<Vec<_>>()
@@ -165,29 +167,29 @@ impl TraitResolver {
         };
         (bound.trait_id, key_str)
     }
-    
+
     /// Check if a trait implementation's generic arguments are compatible with a bound's arguments
     fn trait_args_compatible(&self, impl_: &TraitImpl, bound: &TypeBound) -> bool {
         // If the bound specifies no arguments, it matches any impl
         if bound.trait_args.is_empty() {
             return true;
         }
-        
+
         // Get trait definition to know associated type names and order
         let trait_def = match self.trait_defs.get(&bound.trait_id) {
             Some(def) => def,
-            None => return false,  // Unknown trait
+            None => return false, // Unknown trait
         };
-        
+
         // Validate associated types match
         match self.validate_associated_types(impl_, bound, trait_def) {
             Ok(()) => true,
             Err(_) => false,
         }
     }
-    
+
     /// Validate that impl's associated types match the bound's specified types
-    /// 
+    ///
     /// Example: if bound is Iterator<Item=i32>, validates that impl's Item is i32
     fn validate_associated_types(
         &self,
@@ -197,7 +199,7 @@ impl TraitResolver {
     ) -> Result<(), String> {
         // Parse the bound's trait arguments into (name, type) pairs
         let bound_assoc_types = self.parse_associated_types(bound, trait_def)?;
-        
+
         // For each specified argument, validate it matches impl
         for (name, bound_type) in bound_assoc_types {
             if let Some(impl_type) = impl_.associated_types.get(&name) {
@@ -215,12 +217,12 @@ impl TraitResolver {
                 ));
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Parse trait arguments into associated type (name, type) pairs
-    /// 
+    ///
     /// Uses positional matching if no explicit names are provided.
     /// Example: Iterator<i32> matches with Item = i32 (first assoc type)
     fn parse_associated_types(
@@ -229,7 +231,7 @@ impl TraitResolver {
         trait_def: &TraitDefinition,
     ) -> Result<HashMap<String, Type>, String> {
         let mut result = HashMap::new();
-        
+
         // Match trait arguments positionally to associated types
         for (idx, arg) in bound.trait_args.iter().enumerate() {
             if let Some(name) = trait_def.associated_type_order.get(idx) {
@@ -242,22 +244,19 @@ impl TraitResolver {
                 ));
             }
         }
-        
+
         Ok(result)
     }
 
     /// Resolve an associated type
-    /// 
+    ///
     /// Now properly handles associated types specified in trait arguments.
     /// For example: <T as Iterator<Item=i32>>::Item will resolve to i32
-    pub fn resolve_associated_type(
-        &mut self,
-        assoc: &AssociatedType,
-    ) -> Result<Type, String> {
+    pub fn resolve_associated_type(&mut self, assoc: &AssociatedType) -> Result<Type, String> {
         // Build trait arguments from the associated type specification
         // The associated type itself provides context for the trait arguments
-        let trait_args = vec![];  // Will be filled in once we have full associated type support
-        
+        let trait_args = vec![]; // Will be filled in once we have full associated type support
+
         let impl_ = self.resolve_bound(&TypeBound::new(
             *assoc.self_type.clone(),
             assoc.trait_id,
@@ -330,7 +329,10 @@ impl TraitResolver {
                     // Check associated type projection equality: <T as Trait>::Assoc = U
                     // For now, we can't fully validate projections without trait information
                     // but we should at least log that we're handling this case
-                    eprintln!("[TraitResolver] Projection equality predicate: {} = {}", projection, ty);
+                    eprintln!(
+                        "[TraitResolver] Projection equality predicate: {} = {}",
+                        projection, ty
+                    );
                     // TODO: Implement proper projection equality checking
                     // Requires resolving the associated type and comparing with ty
                 }
@@ -462,21 +464,17 @@ mod tests {
         let impl_ = TraitImpl::new(TraitId(0), Type::I32);
         resolver.register_impl(impl_);
 
-        let bounds = vec![
-            TypeBound::new(Type::I32, TraitId(0), vec![]),
-        ];
+        let bounds = vec![TypeBound::new(Type::I32, TraitId(0), vec![])];
         assert!(resolver.check_bounds(&Type::I32, &bounds).is_ok());
     }
 
     #[test]
     fn test_trait_resolver_check_predicates() {
         let mut resolver = TraitResolver::new();
-        let predicates = vec![
-            TypePredicate::Equality {
-                left: Box::new(Type::I32),
-                right: Box::new(Type::I32),
-            },
-        ];
+        let predicates = vec![TypePredicate::Equality {
+            left: Box::new(Type::I32),
+            right: Box::new(Type::I32),
+        }];
         assert!(resolver.check_predicates(&predicates).is_ok());
     }
 
@@ -501,15 +499,15 @@ mod tests {
         // Create trait definition for Iterator with Item associated type
         let mut trait_def = TraitDefinition::new(TraitId(0), "Iterator".to_string());
         trait_def.add_associated_type("Item".to_string(), None);
-        
+
         // Create impl: Iterator for Str with Item = i32
         let mut impl_ = TraitImpl::new(TraitId(0), Type::Str);
         impl_.set_associated_type("Item".to_string(), Type::I32);
-        
+
         let mut resolver = TraitResolver::new();
         resolver.register_trait(trait_def);
         resolver.register_impl(impl_);
-        
+
         // Bound: T: Iterator<i32> (Item=i32)
         let bound = TypeBound::new(Type::Str, TraitId(0), vec![Type::I32]);
         let result = resolver.resolve_bound(&bound);
@@ -521,15 +519,15 @@ mod tests {
         // Create trait definition for Iterator
         let mut trait_def = TraitDefinition::new(TraitId(0), "Iterator".to_string());
         trait_def.add_associated_type("Item".to_string(), None);
-        
+
         // Create impl: Iterator for Str with Item = i32
         let mut impl_ = TraitImpl::new(TraitId(0), Type::Str);
         impl_.set_associated_type("Item".to_string(), Type::I32);
-        
+
         let mut resolver = TraitResolver::new();
         resolver.register_trait(trait_def);
         resolver.register_impl(impl_);
-        
+
         // Bound: T: Iterator<bool> (Item=bool, but impl has Item=i32)
         let bound = TypeBound::new(Type::Str, TraitId(0), vec![Type::Bool]);
         let result = resolver.resolve_bound(&bound);
@@ -543,16 +541,16 @@ mod tests {
         let mut trait_def = TraitDefinition::new(TraitId(1), "Pair".to_string());
         trait_def.add_associated_type("First".to_string(), None);
         trait_def.add_associated_type("Second".to_string(), None);
-        
+
         // Create impl with both types
         let mut impl_ = TraitImpl::new(TraitId(1), Type::Str);
         impl_.set_associated_type("First".to_string(), Type::I32);
         impl_.set_associated_type("Second".to_string(), Type::Bool);
-        
+
         let mut resolver = TraitResolver::new();
         resolver.register_trait(trait_def);
         resolver.register_impl(impl_);
-        
+
         // Bound: T: Pair<i32, bool> (First=i32, Second=bool)
         let bound = TypeBound::new(Type::Str, TraitId(1), vec![Type::I32, Type::Bool]);
         let result = resolver.resolve_bound(&bound);
@@ -565,16 +563,16 @@ mod tests {
         let mut trait_def = TraitDefinition::new(TraitId(1), "Pair".to_string());
         trait_def.add_associated_type("First".to_string(), None);
         trait_def.add_associated_type("Second".to_string(), None);
-        
+
         // Create impl with both types
         let mut impl_ = TraitImpl::new(TraitId(1), Type::Str);
         impl_.set_associated_type("First".to_string(), Type::I32);
         impl_.set_associated_type("Second".to_string(), Type::Bool);
-        
+
         let mut resolver = TraitResolver::new();
         resolver.register_trait(trait_def);
         resolver.register_impl(impl_);
-        
+
         // Bound: T: Pair<i32, Char> (First=i32 OK, Second=Char but impl has Bool)
         let bound = TypeBound::new(Type::Str, TraitId(1), vec![Type::I32, Type::Char]);
         let result = resolver.resolve_bound(&bound);
@@ -586,14 +584,14 @@ mod tests {
         // When no trait arguments are specified, any impl should match
         let mut trait_def = TraitDefinition::new(TraitId(0), "Iterator".to_string());
         trait_def.add_associated_type("Item".to_string(), None);
-        
+
         let mut impl_ = TraitImpl::new(TraitId(0), Type::Str);
         impl_.set_associated_type("Item".to_string(), Type::I32);
-        
+
         let mut resolver = TraitResolver::new();
         resolver.register_trait(trait_def);
         resolver.register_impl(impl_);
-        
+
         // Bound: T: Iterator (no args)
         let bound = TypeBound::new(Type::Str, TraitId(0), vec![]);
         let result = resolver.resolve_bound(&bound);
@@ -605,11 +603,11 @@ mod tests {
         // Verify that associated types are added to order list
         let mut trait_def = TraitDefinition::new(TraitId(0), "Trait".to_string());
         assert_eq!(trait_def.associated_type_order.len(), 0);
-        
+
         trait_def.add_associated_type("First".to_string(), None);
         assert_eq!(trait_def.associated_type_order.len(), 1);
         assert_eq!(trait_def.associated_type_order[0], "First");
-        
+
         trait_def.add_associated_type("Second".to_string(), None);
         assert_eq!(trait_def.associated_type_order.len(), 2);
         assert_eq!(trait_def.associated_type_order[1], "Second");
@@ -619,10 +617,10 @@ mod tests {
     fn test_associated_type_duplicate_names() {
         // Verify that duplicate names don't get added to order list
         let mut trait_def = TraitDefinition::new(TraitId(0), "Trait".to_string());
-        
+
         trait_def.add_associated_type("Item".to_string(), None);
         assert_eq!(trait_def.associated_type_order.len(), 1);
-        
+
         // Adding same name again
         trait_def.add_associated_type("Item".to_string(), None);
         assert_eq!(trait_def.associated_type_order.len(), 1);
@@ -634,10 +632,10 @@ mod tests {
         let mut resolver = TraitResolver::new();
         let bound1 = TypeBound::new(Type::I32, TraitId(0), vec![Type::Bool]);
         let bound2 = TypeBound::new(Type::I32, TraitId(0), vec![Type::Char]);
-        
+
         let key1 = resolver.build_cache_key(&bound1);
         let key2 = resolver.build_cache_key(&bound2);
-        
+
         // Keys should be different because trait args differ
         assert_ne!(key1, key2);
     }
@@ -647,20 +645,20 @@ mod tests {
         // Verify error messages include details about associated type mismatches
         let mut trait_def = TraitDefinition::new(TraitId(0), "Iterator".to_string());
         trait_def.add_associated_type("Item".to_string(), None);
-        
+
         let mut impl_ = TraitImpl::new(TraitId(0), Type::Str);
         impl_.set_associated_type("Item".to_string(), Type::I32);
-        
+
         let mut resolver = TraitResolver::new();
         resolver.register_trait(trait_def);
         resolver.register_impl(impl_);
-        
+
         let bound = TypeBound::new(Type::Str, TraitId(0), vec![Type::Bool]);
         let result = resolver.resolve_bound(&bound);
-        
+
         assert!(result.is_err());
         let error = result.unwrap_err();
         // Check that error mentions the type arguments
-        assert!(error.contains("["));  // Format includes brackets for args
+        assert!(error.contains("[")); // Format includes brackets for args
     }
 }

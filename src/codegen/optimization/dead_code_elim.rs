@@ -1,4 +1,3 @@
-
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -80,11 +79,9 @@ impl DeadCodeEliminator {
                 }
             }
 
-            self.extract_uses(line)
-                .iter()
-                .for_each(|v| {
-                    self.live_variables.insert(v.clone());
-                });
+            self.extract_uses(line).iter().for_each(|v| {
+                self.live_variables.insert(v.clone());
+            });
         }
     }
 
@@ -110,7 +107,7 @@ impl DeadCodeEliminator {
 
     fn extract_uses(&self, line: &str) -> Vec<String> {
         let mut uses = Vec::new();
-        
+
         for word in line.split_whitespace() {
             if word.starts_with("%") {
                 let clean_word = word.trim_end_matches(',').to_string();

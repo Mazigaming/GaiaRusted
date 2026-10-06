@@ -91,7 +91,8 @@ impl LifetimeContext {
 
     /// Add an outlives constraint: lhs outlives rhs
     pub fn add_constraint(&mut self, lhs: Lifetime, rhs: Lifetime, reason: String) {
-        self.constraints.push(LifetimeConstraint { lhs, rhs, reason });
+        self.constraints
+            .push(LifetimeConstraint { lhs, rhs, reason });
     }
 
     /// Get all constraints
@@ -144,7 +145,9 @@ impl LifetimeContext {
                             .map(|s| s.contains(&next))
                             .unwrap_or(false)
                         {
-                            reachability.entry(from.clone()).or_insert_with(HashSet::new);
+                            reachability
+                                .entry(from.clone())
+                                .or_insert_with(HashSet::new);
                             reachability.get_mut(&from).unwrap().insert(next);
                             worklist.push(from.clone());
                         }
@@ -175,8 +178,8 @@ impl LifetimeElision {
     /// Apply elision rules to function parameters
     /// Returns (inferred input lifetimes, inferred return lifetime)
     pub fn elide_function_lifetimes(
-        input_refs: Vec<bool>,      // which params are references
-        has_return_ref: bool,       // is return type a reference
+        input_refs: Vec<bool>, // which params are references
+        has_return_ref: bool,  // is return type a reference
         ctx: &mut LifetimeContext,
     ) -> (Vec<Option<Lifetime>>, Option<Lifetime>) {
         let ref_count = input_refs.iter().filter(|&&b| b).count();
@@ -267,8 +270,9 @@ mod tests {
     #[test]
     fn test_elision_single_input_reference() {
         let mut ctx = LifetimeContext::new();
-        let (inputs, output) = LifetimeElision::elide_function_lifetimes(vec![true], true, &mut ctx);
-        
+        let (inputs, output) =
+            LifetimeElision::elide_function_lifetimes(vec![true], true, &mut ctx);
+
         assert_eq!(inputs.len(), 1);
         assert!(inputs[0].is_some());
         assert!(output.is_some());
@@ -280,7 +284,7 @@ mod tests {
         let mut ctx = LifetimeContext::new();
         let (inputs, output) =
             LifetimeElision::elide_function_lifetimes(vec![true, true], true, &mut ctx);
-        
+
         // Multiple references: first param gets output lifetime
         assert_eq!(inputs.len(), 2);
         assert!(inputs[0].is_some());

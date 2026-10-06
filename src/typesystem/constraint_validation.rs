@@ -120,9 +120,24 @@ impl ConstraintValidator {
         // Simple validation: check if trait is known
         let is_valid = matches!(
             trait_name,
-            "Clone" | "Debug" | "Display" | "PartialEq" | "Eq" | "Hash" | "Default"
-                | "Iterator" | "IntoIterator" | "From" | "Into" | "AsRef" | "Borrow"
-                | "Drop" | "Sized" | "Send" | "Sync" | "Unpin"
+            "Clone"
+                | "Debug"
+                | "Display"
+                | "PartialEq"
+                | "Eq"
+                | "Hash"
+                | "Default"
+                | "Iterator"
+                | "IntoIterator"
+                | "From"
+                | "Into"
+                | "AsRef"
+                | "Borrow"
+                | "Drop"
+                | "Sized"
+                | "Send"
+                | "Sync"
+                | "Unpin"
         );
 
         if is_valid {
@@ -135,7 +150,11 @@ impl ConstraintValidator {
     }
 
     /// Validate a lifetime constraint
-    pub fn validate_lifetime_constraint(&mut self, lifetime1: &str, lifetime2: &str) -> Result<bool, String> {
+    pub fn validate_lifetime_constraint(
+        &mut self,
+        lifetime1: &str,
+        lifetime2: &str,
+    ) -> Result<bool, String> {
         let constraint = TypeConstraint::new(
             lifetime1.to_string(),
             ConstraintType::LifetimeOutlives,
@@ -386,9 +405,21 @@ mod tests {
         };
         let mut validator = ConstraintValidator::new(config);
 
-        let c1 = TypeConstraint::new("T".to_string(), ConstraintType::TraitBound, "Clone".to_string());
-        let c2 = TypeConstraint::new("U".to_string(), ConstraintType::TraitBound, "Debug".to_string());
-        let c3 = TypeConstraint::new("V".to_string(), ConstraintType::TraitBound, "Default".to_string());
+        let c1 = TypeConstraint::new(
+            "T".to_string(),
+            ConstraintType::TraitBound,
+            "Clone".to_string(),
+        );
+        let c2 = TypeConstraint::new(
+            "U".to_string(),
+            ConstraintType::TraitBound,
+            "Debug".to_string(),
+        );
+        let c3 = TypeConstraint::new(
+            "V".to_string(),
+            ConstraintType::TraitBound,
+            "Default".to_string(),
+        );
 
         assert!(validator.register_constraint(c1).is_ok());
         assert!(validator.register_constraint(c2).is_ok());

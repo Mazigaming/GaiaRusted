@@ -1,26 +1,28 @@
 //! # GaiaRusted Standard Library
 //!
 //! Core types and methods that enable practical Rust programs.
-//! Includes String, Vec<T>, iterators, and common utility methods.
+//! Includes String, Vec<T>, iterators, file I/O, and common utility methods.
 
+mod integration_tests;
+pub mod io_operations;
+pub mod iterators;
+pub mod method_resolution;
+pub mod options_results;
 pub mod strings;
 pub mod vec;
-pub mod iterators;
-pub mod options_results;
-pub mod method_resolution;
-mod integration_tests;
 
 // Re-export commonly used types and traits
+pub use io_operations::{BufferedReader, BufferedWriter, FileHandle, FileMode, FileSystem};
+pub use iterators::{IntoIterator, Iterator};
+pub use method_resolution::{MethodInfo, StdlibMethodResolver};
 pub use strings::StringType;
 pub use vec::VecType;
-pub use iterators::{Iterator, IntoIterator};
-pub use method_resolution::{StdlibMethodResolver, MethodInfo};
 
 /// Prelude - Types automatically available in all modules
 pub mod prelude {
+    pub use crate::stdlib::iterators::{IntoIterator, Iterator};
     pub use crate::stdlib::strings::StringType;
     pub use crate::stdlib::vec::VecType;
-    pub use crate::stdlib::iterators::{Iterator, IntoIterator};
 }
 
 /// Initialize standard library - Called at compiler startup

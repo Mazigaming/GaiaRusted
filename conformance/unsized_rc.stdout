@@ -1,0 +1,8 @@
+woof1 woof1 2
+woof2
+woof3,woof1
+shared str 10 2 are
+"owned" OWNED
+[1, 2, 3] 6 ["a", "bc"] 2
+[1, 2, 3] 3
+["x", "y", "x"] true

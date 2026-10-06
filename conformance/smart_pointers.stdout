@@ -1,0 +1,17 @@
+leaf parent = None
+leaf parent = Some(5)
+branch strong 1 weak 1
+leaf strong 2 weak 0
+leaf parent = None
+leaf strong 1
+one left: 1
+drop shared
+upgrade after: true
+unwrapped unique
+drop unique
+end of drops
+3 10 Cell { value: 10 }
+["a", "b"] true true
+RefCell { value: <borrowed> } true
+cowboy cow false
+23416728348467685 79

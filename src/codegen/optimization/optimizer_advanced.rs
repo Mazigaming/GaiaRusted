@@ -11,15 +11,44 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
-    Load { dst: String, src: String },
-    Store { dst: String, src: String },
-    Add { dst: String, left: String, right: String },
-    Sub { dst: String, left: String, right: String },
-    Mul { dst: String, left: String, right: String },
-    Div { dst: String, left: String, right: String },
-    Jump { target: usize },
-    CondJump { target: usize, cond: String },
-    Return { value: Option<String> },
+    Load {
+        dst: String,
+        src: String,
+    },
+    Store {
+        dst: String,
+        src: String,
+    },
+    Add {
+        dst: String,
+        left: String,
+        right: String,
+    },
+    Sub {
+        dst: String,
+        left: String,
+        right: String,
+    },
+    Mul {
+        dst: String,
+        left: String,
+        right: String,
+    },
+    Div {
+        dst: String,
+        left: String,
+        right: String,
+    },
+    Jump {
+        target: usize,
+    },
+    CondJump {
+        target: usize,
+        cond: String,
+    },
+    Return {
+        value: Option<String>,
+    },
 }
 
 /// Peephole optimizer - looks at small sequences of instructions
@@ -192,7 +221,10 @@ impl LoopOptimizer {
     pub fn can_unroll(&self, loop_start: usize, loop_end: usize) -> bool {
         let size = loop_end - loop_start;
         // Only unroll small loops
-        size < 50 && self.estimate_loop_iterations(loop_start, loop_end).is_some()
+        size < 50
+            && self
+                .estimate_loop_iterations(loop_start, loop_end)
+                .is_some()
     }
 }
 
@@ -248,7 +280,10 @@ impl InliningOptimizer {
             .collect();
 
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.into_iter().filter(|(_, score)| *score > 1.0).collect()
+        candidates
+            .into_iter()
+            .filter(|(_, score)| *score > 1.0)
+            .collect()
     }
 }
 

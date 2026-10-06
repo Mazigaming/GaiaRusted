@@ -7,7 +7,7 @@
 //! - How to fix it (borrow with &, clone, restructure)
 //!
 //! Example format:
-//! ```
+//! ```text
 //! error[E0382]: use of moved value: `x`
 //!   |
 //! 5 | let y = x;

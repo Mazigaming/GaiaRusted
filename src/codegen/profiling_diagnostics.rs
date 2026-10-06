@@ -2,7 +2,6 @@
 ///
 /// Implements performance profiling, code coverage reporting,
 /// regression detection, and enhanced diagnostics.
-
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -100,11 +99,7 @@ impl PerformanceProfiler {
     /// Get overall profiling report
     pub fn report(&self) -> ProfilingReport {
         let mut phase_reports = Vec::new();
-        let total_time: Duration = self
-            .phase_timings
-            .values()
-            .flat_map(|v| v.iter())
-            .sum();
+        let total_time: Duration = self.phase_timings.values().flat_map(|v| v.iter()).sum();
 
         for (phase, durations) in &self.phase_timings {
             if let Some(report) = self.get_phase_timing(phase) {
@@ -215,13 +210,10 @@ impl CoverageReporter {
         }
 
         let key = format!("{}::{}", function, branch_id);
-        let coverage = self
-            .branch_coverage
-            .entry(key)
-            .or_insert(BranchCoverage {
-                true_taken: 0,
-                false_taken: 0,
-            });
+        let coverage = self.branch_coverage.entry(key).or_insert(BranchCoverage {
+            true_taken: 0,
+            false_taken: 0,
+        });
 
         if taken_true {
             coverage.true_taken += 1;
@@ -243,7 +235,8 @@ impl CoverageReporter {
     /// Generate coverage report
     pub fn report(&self) -> CoverageReport {
         // Count total blocks reached across all functions
-        let block_coverage: usize = self.basic_blocks_reached
+        let block_coverage: usize = self
+            .basic_blocks_reached
             .values()
             .map(|blocks| blocks.len())
             .sum();
@@ -474,12 +467,14 @@ impl EnhancedDiagnostics {
     }
 
     /// Report a diagnostic with suggestions
-    pub fn report(&mut self, code: &str, level: DiagnosticLevel, message: &str, location: Option<Location>) {
-        let suggestions = self
-            .suggestions
-            .get(code)
-            .cloned()
-            .unwrap_or_default();
+    pub fn report(
+        &mut self,
+        code: &str,
+        level: DiagnosticLevel,
+        message: &str,
+        location: Option<Location>,
+    ) {
+        let suggestions = self.suggestions.get(code).cloned().unwrap_or_default();
 
         self.diagnostics.push(DiagnosticMessage {
             code: code.to_string(),
@@ -522,13 +517,16 @@ impl EnhancedDiagnostics {
         let mut output = String::new();
         let summary = self.summary();
 
-        output.push_str(&format!("Diagnostics: {} errors, {} warnings, {} notes\n", 
-            summary.errors, summary.warnings, summary.notes));
+        output.push_str(&format!(
+            "Diagnostics: {} errors, {} warnings, {} notes\n",
+            summary.errors, summary.warnings, summary.notes
+        ));
         output.push_str(&"─".repeat(60));
         output.push('\n');
 
         for diag in &self.diagnostics {
-            output.push_str(&format!("[{}] {}: {}\n", 
+            output.push_str(&format!(
+                "[{}] {}: {}\n",
                 match diag.level {
                     DiagnosticLevel::Error => "ERROR",
                     DiagnosticLevel::Warning => "WARN ",
@@ -620,12 +618,15 @@ mod tests {
     #[test]
     fn test_diagnostic_formatting() {
         let mut diag = EnhancedDiagnostics::new();
-        diag.report("E0308", DiagnosticLevel::Error, "Type mismatch", 
+        diag.report(
+            "E0308",
+            DiagnosticLevel::Error,
+            "Type mismatch",
             Some(Location {
                 file: "test.rs".to_string(),
                 line: 10,
                 column: 5,
-            })
+            }),
         );
 
         let formatted = diag.format_report();

@@ -15,8 +15,8 @@
 //! let y = add(1.0f64, 2.0f64);  // Monomorphizes to add_f64
 //! ```
 
+use crate::parser::ast::{GenericParam, Item, Type};
 use std::collections::{HashMap, HashSet};
-use crate::parser::ast::{GenericParam, Type, Item};
 
 /// A generic function instance
 #[derive(Debug, Clone)]
@@ -44,10 +44,10 @@ pub struct MonomorphicInstance {
 pub struct MonomorphizationRegistry {
     /// Maps generic function names to their definitions
     generic_functions: HashMap<String, GenericFunction>,
-    
+
     /// Maps (generic_name, type_arg_signature) to concrete instantiation
     instances: HashMap<String, MonomorphicInstance>,
-    
+
     /// Set of already-generated instantiations
     generated: HashSet<String>,
 }
@@ -64,10 +64,8 @@ impl MonomorphizationRegistry {
     /// Register a generic function and its parameters
     pub fn register_generic(&mut self, name: String, generics: Vec<GenericParam>) {
         if !generics.is_empty() {
-            self.generic_functions.insert(
-                name.clone(),
-                GenericFunction { name, generics },
-            );
+            self.generic_functions
+                .insert(name.clone(), GenericFunction { name, generics });
         }
     }
 
@@ -151,13 +149,15 @@ impl MonomorphizationRegistry {
                 format!("array_{}", self.type_to_mangled_name(element))
             }
             Type::Tuple(types) => {
-                let parts: Vec<String> = types
-                    .iter()
-                    .map(|t| self.type_to_mangled_name(t))
-                    .collect();
+                let parts: Vec<String> =
+                    types.iter().map(|t| self.type_to_mangled_name(t)).collect();
                 format!("tuple_{}", parts.join("_"))
             }
-            Type::Function { params, return_type, .. } => {
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
                 let param_parts: Vec<String> = params
                     .iter()
                     .map(|t| self.type_to_mangled_name(t))
@@ -221,7 +221,11 @@ pub fn collect_generics(items: &[Item]) -> HashMap<String, Vec<GenericParam>> {
                     generics_map.insert(name.clone(), generics.clone());
                 }
             }
-            Item::Impl { generics, struct_name, .. } => {
+            Item::Impl {
+                generics,
+                struct_name,
+                ..
+            } => {
                 if !generics.is_empty() {
                     generics_map.insert(struct_name.clone(), generics.clone());
                 }

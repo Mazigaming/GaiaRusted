@@ -6,7 +6,7 @@
 //! 3. Lifetime bounds are valid
 //! 4. Provides detailed error messages with context
 
-use crate::parser::ast::{Type, GenericParam, Parameter};
+use crate::parser::ast::{GenericParam, Parameter, Type};
 use std::collections::{HashMap, HashSet};
 
 /// Represents a lifetime reference in the code
@@ -82,7 +82,9 @@ impl LifetimeValidator {
 
     fn _collect_type_lifetimes_impl(&mut self, ty: &Type, location: LifetimeLocation) {
         match ty {
-            Type::Reference { lifetime, inner, .. } => {
+            Type::Reference {
+                lifetime, inner, ..
+            } => {
                 // Add explicit lifetime reference
                 if let Some(name) = lifetime {
                     self._add_lifetime_reference(name.clone(), location.clone());
@@ -96,14 +98,22 @@ impl LifetimeValidator {
             Type::Tuple(types) => {
                 for (_i, ty) in types.iter().enumerate() {
                     let loc = match &location {
-                        LifetimeLocation::StructField(name) => LifetimeLocation::StructField(name.clone()),
-                        LifetimeLocation::FunctionParam(idx) => LifetimeLocation::FunctionParam(*idx),
+                        LifetimeLocation::StructField(name) => {
+                            LifetimeLocation::StructField(name.clone())
+                        }
+                        LifetimeLocation::FunctionParam(idx) => {
+                            LifetimeLocation::FunctionParam(*idx)
+                        }
                         _ => location.clone(),
                     };
                     self._collect_type_lifetimes_impl(ty, loc);
                 }
             }
-            Type::Function { params, return_type, .. } => {
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
                 for param in params {
                     self._collect_type_lifetimes_impl(param, location.clone());
                 }
@@ -116,10 +126,7 @@ impl LifetimeValidator {
     /// Extract lifetimes from function parameters
     pub fn collect_param_lifetimes(&mut self, params: &[Parameter]) {
         for (idx, param) in params.iter().enumerate() {
-            self.collect_type_lifetimes(
-                &param.ty,
-                LifetimeLocation::FunctionParam(idx),
-            );
+            self.collect_type_lifetimes(&param.ty, LifetimeLocation::FunctionParam(idx));
         }
     }
 
@@ -207,10 +214,8 @@ impl StructLifetimeValidator {
 
     /// Add a struct field
     pub fn add_field(&mut self, name: String, ty: &Type) {
-        self.validator.collect_type_lifetimes(
-            ty,
-            LifetimeLocation::StructField(name),
-        );
+        self.validator
+            .collect_type_lifetimes(ty, LifetimeLocation::StructField(name));
     }
 
     /// Validate the struct
@@ -275,10 +280,7 @@ mod tests {
             mutable: false,
             inner: Box::new(Type::Named("i32".to_string())),
         };
-        validator.collect_type_lifetimes(
-            &ty,
-            LifetimeLocation::FunctionReturn,
-        );
+        validator.collect_type_lifetimes(&ty, LifetimeLocation::FunctionReturn);
 
         let result = validator.validate();
         assert!(result.is_err());

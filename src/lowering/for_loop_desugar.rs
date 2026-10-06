@@ -14,7 +14,7 @@
 //! }
 //! ```
 
-use crate::lowering::{HirStatement, HirExpression, HirType};
+use crate::lowering::{HirExpression, HirStatement, HirType};
 use std::fmt;
 
 /// Error during for-loop desugaring
@@ -139,19 +139,21 @@ mod tests {
     #[test]
     fn test_desugar_simple_for_loop() {
         reset_temp_counter();
-        
+
         let collection = HirExpression::Variable("v".to_string());
-        let body = vec![
-            HirStatement::Expression(
-                HirExpression::Variable("x".to_string())
-            ),
-        ];
+        let body = vec![HirStatement::Expression(HirExpression::Variable(
+            "x".to_string(),
+        ))];
 
         let result = desugar_for_loop("item".to_string(), collection, body);
         assert!(result.is_ok());
 
         let stmts = result.unwrap();
-        assert_eq!(stmts.len(), 2, "Should produce 2 statements: binding + match");
+        assert_eq!(
+            stmts.len(),
+            2,
+            "Should produce 2 statements: binding + match"
+        );
 
         // First statement should be a binding
         match &stmts[0] {
@@ -159,19 +161,20 @@ mod tests {
                 assert!(name.contains("__iter"), "Should create temp iterator");
                 assert!(*mutable, "Iterator should be mutable");
             }
-            _ => assert!(false, "First statement should be Let binding (got a different statement type)"),
+            _ => assert!(
+                false,
+                "First statement should be Let binding (got a different statement type)"
+            ),
         }
 
         // Second statement should be an expression (the match)
         match &stmts[1] {
-            HirStatement::Expression(expr) => {
-                match expr {
-                    HirExpression::Match { arms, .. } => {
-                        assert_eq!(arms.len(), 2, "Should have 2 match arms: Some and None");
-                    }
-                    _ => assert!(false, "Should be Match expression"),
+            HirStatement::Expression(expr) => match expr {
+                HirExpression::Match { arms, .. } => {
+                    assert_eq!(arms.len(), 2, "Should have 2 match arms: Some and None");
                 }
-            }
+                _ => assert!(false, "Should be Match expression"),
+            },
             _ => assert!(false, "Second statement should be Expression"),
         }
     }
@@ -179,7 +182,7 @@ mod tests {
     #[test]
     fn test_desugar_generates_match() {
         reset_temp_counter();
-        
+
         let collection = HirExpression::Variable("v".to_string());
         let body = vec![];
 
@@ -187,20 +190,18 @@ mod tests {
         assert!(result.is_ok());
 
         let stmts = result.unwrap();
-        
+
         // Check the match expression
         match &stmts[1] {
-            HirStatement::Expression(expr) => {
-                match expr {
-                    HirExpression::Match { arms, .. } => {
-                        assert_eq!(arms.len(), 2, "Should have 2 match arms: Some and None");
-                        
-                        assert_eq!(arms[0].pattern, "Some(x)");
-                        assert_eq!(arms[1].pattern, "None");
-                    }
-                    _ => panic!("Should be Match expression"),
+            HirStatement::Expression(expr) => match expr {
+                HirExpression::Match { arms, .. } => {
+                    assert_eq!(arms.len(), 2, "Should have 2 match arms: Some and None");
+
+                    assert_eq!(arms[0].pattern, "Some(x)");
+                    assert_eq!(arms[1].pattern, "None");
                 }
-            }
+                _ => panic!("Should be Match expression"),
+            },
             _ => panic!("Should be Expression"),
         }
     }
@@ -208,18 +209,16 @@ mod tests {
     #[test]
     fn test_desugar_preserves_body() {
         reset_temp_counter();
-        
+
         let collection = HirExpression::Variable("v".to_string());
         let body_expr = HirExpression::Integer(42);
-        let body = vec![
-            HirStatement::Expression(body_expr),
-        ];
+        let body = vec![HirStatement::Expression(body_expr)];
 
         let result = desugar_for_loop("x".to_string(), collection, body);
         assert!(result.is_ok());
 
         let stmts = result.unwrap();
-        
+
         // Check the match contains the body
         match &stmts[1] {
             HirStatement::Expression(expr) => {
@@ -238,11 +237,11 @@ mod tests {
     #[test]
     fn test_temp_var_generation() {
         reset_temp_counter();
-        
+
         let var1 = gen_temp_var();
         let var2 = gen_temp_var();
         let var3 = gen_temp_var();
-        
+
         assert_eq!(var1, "__iter_0");
         assert_eq!(var2, "__iter_1");
         assert_eq!(var3, "__iter_2");
@@ -251,54 +250,55 @@ mod tests {
     #[test]
     fn test_multiple_desugars_different_temps() {
         reset_temp_counter();
-        
+
         let collection1 = HirExpression::Variable("v1".to_string());
         let collection2 = HirExpression::Variable("v2".to_string());
-        
+
         let result1 = desugar_for_loop("x".to_string(), collection1, vec![]);
         let result2 = desugar_for_loop("y".to_string(), collection2, vec![]);
-        
+
         assert!(result1.is_ok());
         assert!(result2.is_ok());
-        
+
         let stmts1 = result1.unwrap();
         let stmts2 = result2.unwrap();
-        
+
         // Extract iter var names
         let iter1 = match &stmts1[0] {
             HirStatement::Let { name, .. } => name.clone(),
             _ => panic!("Expected Let binding for iter1"),
         };
-        
+
         let iter2 = match &stmts2[0] {
             HirStatement::Let { name, .. } => name.clone(),
             _ => panic!("Expected Let binding for iter2"),
         };
-        
+
         // Should be different
-        assert_ne!(iter1, iter2, "Different for-loops should have different iter vars");
+        assert_ne!(
+            iter1, iter2,
+            "Different for-loops should have different iter vars"
+        );
     }
 
     #[test]
     fn test_into_iter_method_call() {
         reset_temp_counter();
-        
+
         let collection = HirExpression::Variable("v".to_string());
         let result = desugar_for_loop("x".to_string(), collection, vec![]);
         assert!(result.is_ok());
 
         let stmts = result.unwrap();
-        
+
         // Check the binding has into_iter call
         match &stmts[0] {
-            HirStatement::Let { init: expr, .. } => {
-                match expr {
-                    HirExpression::MethodCall { method, .. } => {
-                        assert_eq!(method, "into_iter", "Should call into_iter method");
-                    }
-                    _ => assert!(false, "Init should be method call"),
+            HirStatement::Let { init: expr, .. } => match expr {
+                HirExpression::MethodCall { method, .. } => {
+                    assert_eq!(method, "into_iter", "Should call into_iter method");
                 }
-            }
+                _ => assert!(false, "Init should be method call"),
+            },
             _ => assert!(false, "Should be Let with init"),
         }
     }
@@ -306,28 +306,24 @@ mod tests {
     #[test]
     fn test_next_method_call() {
         reset_temp_counter();
-        
+
         let collection = HirExpression::Variable("v".to_string());
         let result = desugar_for_loop("x".to_string(), collection, vec![]);
         assert!(result.is_ok());
 
         let stmts = result.unwrap();
-        
+
         // Check the match scrutinee is next() call
         match &stmts[1] {
-            HirStatement::Expression(expr) => {
-                match expr {
-                    HirExpression::Match { scrutinee, .. } => {
-                        match scrutinee.as_ref() {
-                            HirExpression::MethodCall { method, .. } => {
-                                assert_eq!(method, "next", "Should call next method");
-                            }
-                            _ => panic!("Scrutinee should be method call"),
-                        }
+            HirStatement::Expression(expr) => match expr {
+                HirExpression::Match { scrutinee, .. } => match scrutinee.as_ref() {
+                    HirExpression::MethodCall { method, .. } => {
+                        assert_eq!(method, "next", "Should call next method");
                     }
-                    _ => panic!("Should be Match"),
-                }
-            }
+                    _ => panic!("Scrutinee should be method call"),
+                },
+                _ => panic!("Should be Match"),
+            },
             _ => panic!("Should be Expression"),
         }
     }

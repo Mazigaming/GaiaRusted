@@ -1,0 +1,33 @@
+fn main() {
+    let pi = 3.14159265; let n = 42; let name = "gaia";
+    println!("[{:5}] [{:<5}] [{:>5}] [{:^5}]", n, n, n, n);
+    println!("[{:05}] [{:+}] [{:+.2}]", n, n, pi);
+    println!("[{:.0}] [{:.3}] [{:8.2}] [{:<8.2}]", pi, pi, pi, pi);
+    println!("[{:x}] [{:X}] [{:o}] [{:b}] [{:#x}] [{:#b}] [{:08b}]", 255, 255, 8, 5, 255, 5, 5);
+    println!("[{:e}] [{:E}]", 1500.0, 0.00025);
+    println!("[{:*^9}] [{:-<6}] [{:>6}]", "mid", "ab", name);
+    let w = 7; let p = 2;
+    println!("[{:>w$}] [{:>1$}] [{:.*}] [{:w$.p$}]", n, n, 3, pi, pi, w = w, p = p);
+    println!("{0} {1} {0} {name}", "a", "b", name = "named");
+    println!("{n} {pi:.1} {name:?}");
+    println!("{{literal}} {}%", 50);
+    println!("{:?} {:?} {:?}", "str", 'c', 1.0);
+    println!("{:>8?}|{:<6?}|", Some(1), (1, 2));
+    println!("{:5}|{:<5}|{:^5}|", true, 'x', "é");
+    println!("{:#?}", vec![1, 2]);
+    println!("{:.3e}", 123456.0);
+    println!("{}", format_args!("{}+{}", 1, 2));
+    let s = format!("{:>width$}", "r", width = 4);
+    println!("{}|", s);
+    eprintln!("to stderr");
+    print!("no newline ");
+    println!("{}", -0.0f64);
+    println!("{} {} {}", 1.0f64, 1.5e300 * 10.0, 100000000000000000000.0f64);
+    println!("{} {}", f64::MIN_POSITIVE, 1e-7);
+    println!("{:?} {:?}", 0.1f64 + 0.2, 1e21f64);
+    println!("{:10.3}|{:<10.3}|", -1.23456, 9.87654);
+    println!("{:+05}", 7);
+    println!("{:#010x}", 255);
+    println!("{:?}", u64::MAX as f64);
+    println!("{}", i128::MAX);
+}

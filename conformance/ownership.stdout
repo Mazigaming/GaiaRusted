@@ -1,0 +1,13 @@
+[1, 2, 3] 6
+[4, 3, 2] len 3
+Some(4) Some(3)
+Some(Node { value: 2, next: None })
+20
+longer one
+hello
+["x", "y"]
+[[0, 0, 0], [0, 0, 9]]
+left 5
+3
+Some("inside!")
+3

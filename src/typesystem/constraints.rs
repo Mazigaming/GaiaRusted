@@ -9,8 +9,8 @@
 //! 3. Collect all constraints
 //! 4. Solve with unification engine
 
-use super::types::{Type, TypeVar, StructId, GenericId};
 use super::substitution::Substitution;
+use super::types::{GenericId, StructId, Type, TypeVar};
 use super::unification::UnificationEngine;
 use std::collections::HashMap;
 
@@ -109,7 +109,11 @@ impl ConstraintGenerator {
     pub fn register_struct(&mut self, id: StructId, fields: HashMap<String, Type>) {
         self.struct_defs.insert(
             format!("struct_{}", id.0),
-            StructDef { id, fields, generics: Vec::new() },
+            StructDef {
+                id,
+                fields,
+                generics: Vec::new(),
+            },
         );
     }
 
@@ -122,13 +126,24 @@ impl ConstraintGenerator {
     ) {
         self.struct_defs.insert(
             format!("struct_{}", id.0),
-            StructDef { id, fields, generics },
+            StructDef {
+                id,
+                fields,
+                generics,
+            },
         );
     }
 
     /// Register a function definition
     pub fn register_function(&mut self, name: String, param_types: Vec<Type>, return_type: Type) {
-        self.function_defs.insert(name, FunctionDef { param_types, return_type, generics: Vec::new() });
+        self.function_defs.insert(
+            name,
+            FunctionDef {
+                param_types,
+                return_type,
+                generics: Vec::new(),
+            },
+        );
     }
 
     /// Register a function definition with generics
@@ -139,7 +154,14 @@ impl ConstraintGenerator {
         return_type: Type,
         generics: Vec<GenericId>,
     ) {
-        self.function_defs.insert(name, FunctionDef { param_types, return_type, generics });
+        self.function_defs.insert(
+            name,
+            FunctionDef {
+                param_types,
+                return_type,
+                generics,
+            },
+        );
     }
 
     /// Solve all generated constraints
@@ -223,11 +245,7 @@ impl ConstraintGenerator {
     }
 
     /// Generate constraints for a unary operation
-    pub fn constrain_unary_op(
-        &mut self,
-        op: UnaryOp,
-        operand_ty: Type,
-    ) -> Result<Type, String> {
+    pub fn constrain_unary_op(&mut self, op: UnaryOp, operand_ty: Type) -> Result<Type, String> {
         match op {
             UnaryOp::Negate => {
                 // Negate works on numeric types
@@ -281,7 +299,7 @@ impl ConstraintGenerator {
     ) -> Result<Type, String> {
         // Clone function def to avoid borrow checker issues
         let func_def = self.function_defs.get(func_name).cloned();
-        
+
         if let Some(func_def) = func_def {
             // Check argument count
             if arg_types.len() != func_def.param_types.len() {
@@ -351,7 +369,7 @@ impl ConstraintGenerator {
     ) -> Result<Type, String> {
         // For now, method calls are treated like function calls with the receiver type constraint
         // In full implementation, we'd look up method signatures from trait impls
-        
+
         // Generate method call name as struct_method
         let full_method_name = match receiver_type {
             Type::Struct(struct_id) => format!("{}_method_{}", struct_id.0, method_name),
@@ -448,7 +466,10 @@ impl ConstraintGenerator {
                 .fields
                 .iter()
                 .map(|(name, field_ty)| {
-                    (name.clone(), self.substitute_generics(field_ty, &generic_map))
+                    (
+                        name.clone(),
+                        self.substitute_generics(field_ty, &generic_map),
+                    )
                 })
                 .collect();
 
@@ -461,24 +482,20 @@ impl ConstraintGenerator {
     /// Substitute generic type parameters with concrete types
     fn substitute_generics(&self, ty: &Type, generic_map: &HashMap<GenericId, Type>) -> Type {
         match ty {
-            Type::Generic(generic_id) => {
-                generic_map
-                    .get(generic_id)
-                    .cloned()
-                    .unwrap_or_else(|| ty.clone())
-            }
+            Type::Generic(generic_id) => generic_map
+                .get(generic_id)
+                .cloned()
+                .unwrap_or_else(|| ty.clone()),
             Type::Array { element, size } => Type::Array {
                 element: Box::new(self.substitute_generics(element, generic_map)),
                 size: *size,
             },
-            Type::Tuple(elements) => {
-                Type::Tuple(
-                    elements
-                        .iter()
-                        .map(|e| self.substitute_generics(e, generic_map))
-                        .collect(),
-                )
-            }
+            Type::Tuple(elements) => Type::Tuple(
+                elements
+                    .iter()
+                    .map(|e| self.substitute_generics(e, generic_map))
+                    .collect(),
+            ),
             Type::Reference {
                 lifetime,
                 mutable,
@@ -577,11 +594,13 @@ mod tests {
     #[test]
     fn test_binary_op_add() {
         let mut gen = ConstraintGenerator::new();
-        let result = gen.constrain_binary_op(BinaryOp::Add, Type::I32, Type::I32).unwrap();
-        
+        let result = gen
+            .constrain_binary_op(BinaryOp::Add, Type::I32, Type::I32)
+            .unwrap();
+
         // Result should be a type variable
         assert!(matches!(result, Type::Variable(_)));
-        
+
         // Should have constraints
         assert!(!gen.constraints.is_empty());
     }
@@ -589,8 +608,10 @@ mod tests {
     #[test]
     fn test_binary_op_comparison() {
         let mut gen = ConstraintGenerator::new();
-        let result = gen.constrain_binary_op(BinaryOp::Less, Type::I32, Type::I32).unwrap();
-        
+        let result = gen
+            .constrain_binary_op(BinaryOp::Less, Type::I32, Type::I32)
+            .unwrap();
+
         // Comparison returns bool
         assert_eq!(result, Type::Bool);
     }
@@ -598,36 +619,32 @@ mod tests {
     #[test]
     fn test_unary_op_reference() {
         let mut gen = ConstraintGenerator::new();
-        let result = gen.constrain_unary_op(UnaryOp::Reference, Type::I32).unwrap();
-        
+        let result = gen
+            .constrain_unary_op(UnaryOp::Reference, Type::I32)
+            .unwrap();
+
         assert!(matches!(result, Type::Reference { .. }));
     }
 
     #[test]
     fn test_function_call_constraint() {
         let mut gen = ConstraintGenerator::new();
-        
+
         // Register a function: fn add(i32, i32) -> i32
-        gen.register_function(
-            "add".to_string(),
-            vec![Type::I32, Type::I32],
-            Type::I32,
-        );
+        gen.register_function("add".to_string(), vec![Type::I32, Type::I32], Type::I32);
 
         // Call with matching types
-        let result = gen.constrain_function_call("add", vec![Type::I32, Type::I32]).unwrap();
+        let result = gen
+            .constrain_function_call("add", vec![Type::I32, Type::I32])
+            .unwrap();
         assert_eq!(result, Type::I32);
     }
 
     #[test]
     fn test_function_call_wrong_arity() {
         let mut gen = ConstraintGenerator::new();
-        
-        gen.register_function(
-            "add".to_string(),
-            vec![Type::I32, Type::I32],
-            Type::I32,
-        );
+
+        gen.register_function("add".to_string(), vec![Type::I32, Type::I32], Type::I32);
 
         // Call with wrong number of arguments
         let result = gen.constrain_function_call("add", vec![Type::I32]);
@@ -650,10 +667,10 @@ mod tests {
     #[test]
     fn test_solve_simple_constraints() {
         let mut gen = ConstraintGenerator::new();
-        
+
         // Create constraint: X = i32
         gen.add_constraint(Type::Variable(TypeVar(0)), Type::I32);
-        
+
         let subst = gen.solve().unwrap();
         assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::I32);
     }
@@ -661,11 +678,11 @@ mod tests {
     #[test]
     fn test_solve_contradictory_constraints() {
         let mut gen = ConstraintGenerator::new();
-        
+
         // Create contradictory constraints: X = i32, X = bool
         gen.add_constraint(Type::Variable(TypeVar(0)), Type::I32);
         gen.add_constraint(Type::Variable(TypeVar(0)), Type::Bool);
-        
+
         let result = gen.solve();
         assert!(result.is_err());
     }
@@ -673,19 +690,25 @@ mod tests {
     #[test]
     fn test_constrain_logical_and() {
         let mut gen = ConstraintGenerator::new();
-        let result = gen.constrain_binary_op(BinaryOp::And, Type::Bool, Type::Bool).unwrap();
-        
+        let result = gen
+            .constrain_binary_op(BinaryOp::And, Type::Bool, Type::Bool)
+            .unwrap();
+
         assert_eq!(result, Type::Bool);
     }
 
     #[test]
     fn test_constrain_bitwise_ops() {
         let mut gen = ConstraintGenerator::new();
-        
-        let result = gen.constrain_binary_op(BinaryOp::BitwiseAnd, Type::I32, Type::I32).unwrap();
+
+        let result = gen
+            .constrain_binary_op(BinaryOp::BitwiseAnd, Type::I32, Type::I32)
+            .unwrap();
         assert_eq!(result, Type::I32);
-        
-        let result = gen.constrain_binary_op(BinaryOp::BitwiseOr, Type::I64, Type::I64).unwrap();
+
+        let result = gen
+            .constrain_binary_op(BinaryOp::BitwiseOr, Type::I64, Type::I64)
+            .unwrap();
         assert_eq!(result, Type::I64);
     }
 }

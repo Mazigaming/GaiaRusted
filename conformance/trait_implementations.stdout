@@ -1,0 +1,14 @@
+$4.25 $8.50 $0.00
+a b c c Bag { items: ["a", "b", "c"] }
+[5, 4, 3] [3, 4, 5]
+Some(6) Some(1) [5, 4, 3, 2]
+4 Some(4) [4, 3, 2, 1] true
+Normal [Fast, Slow]
+[42] [hi] [$0.05]
+true false 144
+pair built
+drop first
+drop second
+10 10 1
+i32 5 string s unknown
+Some(8)

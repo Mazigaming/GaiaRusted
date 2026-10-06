@@ -1,5 +1,5 @@
 //! Output Formatter for v1.0.2
-//! 
+//!
 //! Replaces verbose, robotic output with human-feeling, modern, and unique compiler messages.
 //! Focus: Simple, clean, informative.
 
@@ -59,7 +59,11 @@ pub struct Phase {
 
 impl Phase {
     pub fn new(number: usize, name: &'static str, description: &'static str) -> Self {
-        Phase { number, name, description }
+        Phase {
+            number,
+            name,
+            description,
+        }
     }
 
     pub const LEXING: Phase = Phase {
@@ -118,8 +122,9 @@ impl Phase {
             Colors::RESET,
             self.name,
             Colors::DIM,
-        ) + self.description + Colors::RESET
-        }
+        ) + self.description
+            + Colors::RESET
+    }
 }
 
 /// Compiler message with severity
@@ -166,7 +171,11 @@ impl Message {
             Colors::RESET
         );
 
-        println!("{} {}", prefix, Colors::BOLD.to_string() + &self.title + Colors::RESET);
+        println!(
+            "{} {}",
+            prefix,
+            Colors::BOLD.to_string() + &self.title + Colors::RESET
+        );
 
         if let Some(details) = &self.details {
             println!("  {}", details);
@@ -177,12 +186,7 @@ impl Message {
         }
 
         if let Some(suggestion) = &self.suggestion {
-            println!(
-                "  {}hint:{} {}",
-                Colors::CYAN,
-                Colors::RESET,
-                suggestion
-            );
+            println!("  {}hint:{} {}", Colors::CYAN, Colors::RESET, suggestion);
         }
     }
 }
@@ -204,23 +208,14 @@ impl Stats {
             Colors::DIM,
             Colors::RESET
         );
-        println!(
-            "{}Compilation Summary{}",
-            Colors::BOLD,
-            Colors::RESET
-        );
+        println!("{}Compilation Summary{}", Colors::BOLD, Colors::RESET);
         println!(
             "{}─────────────────────────────────────────{}",
             Colors::DIM,
             Colors::RESET
         );
 
-        println!(
-            "  {} {}files{}",
-            Colors::CYAN,
-            self.files,
-            Colors::RESET
-        );
+        println!("  {} {}files{}", Colors::CYAN, self.files, Colors::RESET);
         println!(
             "  {} {}lines of code{}",
             Colors::CYAN,
@@ -244,7 +239,8 @@ impl Stats {
         println!();
         println!("{}Phase breakdown:{}", Colors::DIM, Colors::RESET);
         for (phase, duration) in &self.phases {
-            let percent = (duration.as_millis() as f64 / self.total_time.as_millis() as f64) * 100.0;
+            let percent =
+                (duration.as_millis() as f64 / self.total_time.as_millis() as f64) * 100.0;
             println!(
                 "  {} {}ms {:.1}% {}{}",
                 Colors::CYAN,
@@ -283,44 +279,22 @@ pub fn success(msg: &str) {
 
 /// Error banner
 pub fn error(msg: &str) {
-    eprintln!(
-        "{}{}✗ {}{}",
-        Colors::RED,
-        Colors::BOLD,
-        msg,
-        Colors::RESET
-    );
+    eprintln!("{}{}✗ {}{}", Colors::RED, Colors::BOLD, msg, Colors::RESET);
 }
 
 /// Info message
 pub fn info(msg: &str) {
-    println!(
-        "{}{}• {}{}",
-        Colors::CYAN,
-        Colors::BOLD,
-        msg,
-        Colors::RESET
-    );
+    println!("{}{}• {}{}", Colors::CYAN, Colors::BOLD, msg, Colors::RESET);
 }
 
 /// Start compilation display
 pub fn start_compilation(input_file: &str) {
     println!();
-    println!(
-        "{}Compiling {}{}",
-        Colors::BLUE,
-        input_file,
-        Colors::RESET
-    );
+    println!("{}Compiling {}{}", Colors::BLUE, input_file, Colors::RESET);
 }
 
 /// Type mismatch error with suggestions
-pub fn type_mismatch(
-    expected: &str,
-    found: &str,
-    context: &str,
-    suggestions: &[&str],
-) {
+pub fn type_mismatch(expected: &str, found: &str, context: &str, suggestions: &[&str]) {
     println!();
     eprintln!(
         "{}error{}[E0308]: {}",
@@ -328,12 +302,7 @@ pub fn type_mismatch(
         Colors::RESET,
         "type mismatch"
     );
-    eprintln!(
-        "{}  {}{}",
-        Colors::DIM,
-        context,
-        Colors::RESET
-    );
+    eprintln!("{}  {}{}", Colors::DIM, context, Colors::RESET);
     eprintln!(
         "{}  expected: {} found: {}{}",
         Colors::CYAN,
@@ -344,7 +313,7 @@ pub fn type_mismatch(
 
     if !suggestions.is_empty() {
         eprintln!();
-        eprintln!("{}possible solutions:{}",Colors::YELLOW, Colors::RESET);
+        eprintln!("{}possible solutions:{}", Colors::YELLOW, Colors::RESET);
         for (i, suggestion) in suggestions.iter().enumerate() {
             eprintln!("  {}. {}", i + 1, suggestion);
         }
@@ -353,12 +322,8 @@ pub fn type_mismatch(
 }
 
 /// Enhanced type mismatch with intelligent suggestions
-pub fn type_mismatch_with_suggestions(
-    expected: &str,
-    found: &str,
-    variable: Option<&str>,
-) {
-    use crate::error_suggestions::{TypeErrorSuggester, Confidence};
+pub fn type_mismatch_with_suggestions(expected: &str, found: &str, variable: Option<&str>) {
+    use crate::error_suggestions::TypeErrorSuggester;
 
     eprintln!();
     eprintln!(
@@ -366,26 +331,20 @@ pub fn type_mismatch_with_suggestions(
         Colors::RED,
         Colors::RESET
     );
-    eprintln!(
-        "{}  expected: {}{}",
-        Colors::CYAN,
-        expected,
-        Colors::RESET
-    );
-    eprintln!(
-        "{}  found:    {}{}",
-        Colors::YELLOW,
-        found,
-        Colors::RESET
-    );
+    eprintln!("{}  expected: {}{}", Colors::CYAN, expected, Colors::RESET);
+    eprintln!("{}  found:    {}{}", Colors::YELLOW, found, Colors::RESET);
 
     let mut suggestions = TypeErrorSuggester::suggest_type_mismatch(expected, found, variable);
     if !suggestions.is_empty() {
         // Sort by confidence (high first)
         suggestions.sort_by(|a, b| b.confidence.cmp(&a.confidence));
-        
+
         eprintln!();
-        eprintln!("{}help:{} Consider these options:", Colors::GREEN, Colors::RESET);
+        eprintln!(
+            "{}help:{} Consider these options:",
+            Colors::GREEN,
+            Colors::RESET
+        );
         for (i, suggestion) in suggestions.iter().take(3).enumerate() {
             eprintln!("  {}. {}", i + 1, suggestion.code);
         }
@@ -396,7 +355,7 @@ pub fn type_mismatch_with_suggestions(
 /// Categorize errors
 pub fn categorize_error(message: &str) -> &'static str {
     let lower = message.to_lowercase();
-    
+
     if lower.contains("async") || lower.contains("await") || lower.contains("not implemented") {
         "[compiler limitation]"
     } else if lower.contains("generic") || lower.contains("lifetime") {
@@ -407,11 +366,7 @@ pub fn categorize_error(message: &str) -> &'static str {
 }
 
 /// Borrow checker error with explanation
-pub fn borrow_error(
-    error_type: &str,
-    variable: &str,
-    reason: &str,
-) {
+pub fn borrow_error(error_type: &str, variable: &str, reason: &str) {
     eprintln!();
     eprintln!(
         "{}error{}[E0502]: {}",
@@ -430,11 +385,7 @@ pub fn borrow_error(
 }
 
 /// Lifetime error with visualization
-pub fn lifetime_error(
-    description: &str,
-    scope_a: &str,
-    scope_b: &str,
-) {
+pub fn lifetime_error(description: &str, scope_a: &str, scope_b: &str) {
     eprintln!();
     eprintln!(
         "{}error{}[E0623]: {}",
@@ -442,10 +393,20 @@ pub fn lifetime_error(
         Colors::RESET,
         "lifetime mismatch"
     );
-    eprintln!("{}  {}────────────────────{}",Colors::DIM, Colors::RESET, Colors::RESET);
-    eprintln!("{}  {} {}",Colors::CYAN, scope_a, Colors::RESET);
-    eprintln!("{}  │{}",Colors::DIM, Colors::RESET);
-    eprintln!("{}  └─→ conflicts with {}{}",Colors::DIM, scope_b, Colors::RESET);
+    eprintln!(
+        "{}  {}────────────────────{}",
+        Colors::DIM,
+        Colors::RESET,
+        Colors::RESET
+    );
+    eprintln!("{}  {} {}", Colors::CYAN, scope_a, Colors::RESET);
+    eprintln!("{}  │{}", Colors::DIM, Colors::RESET);
+    eprintln!(
+        "{}  └─→ conflicts with {}{}",
+        Colors::DIM,
+        scope_b,
+        Colors::RESET
+    );
     eprintln!();
 }
 

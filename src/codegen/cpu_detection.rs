@@ -33,10 +33,10 @@ impl CPUFeatures {
     /// Get default features (conservative, x86-64 baseline)
     fn default_features() -> Self {
         CPUFeatures {
-            sse2: true,    // x86-64 baseline
-            sse41: true,   // Common on modern CPUs
+            sse2: true,  // x86-64 baseline
+            sse41: true, // Common on modern CPUs
             sse42: true,
-            avx: false,    // Conservative default
+            avx: false, // Conservative default
             avx2: false,
             fma: false,
             bmi1: false,
@@ -103,7 +103,7 @@ impl CPUFeatures {
         } else if self.sse42 {
             SIMDLevel::SSE42
         } else {
-            SIMDLevel::SSE2  // Baseline
+            SIMDLevel::SSE2 // Baseline
         }
     }
 
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn test_default_cpu_features() {
         let features = CPUFeatures::default_features();
-        assert!(features.sse2);  // x86-64 baseline
+        assert!(features.sse2); // x86-64 baseline
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! - Rc<T> reference counting
 //! - Arc<T> atomic operations
 
-use crate::typesystem::{BoxType, RcType, ArcType, Type};
+use crate::typesystem::{ArcType, BoxType, RcType, Type};
 use std::fmt;
 
 /// Smart pointer code generation for x86-64
@@ -108,13 +108,13 @@ impl SmartPointerCodegen {
     pub fn generate_rc_drop() -> String {
         let mut code = String::new();
         code.push_str("// Rc drop (decrement refcount, free if 0)\n");
-        code.push_str("mov rax, [rsi]\n");           // Rc pointer
-        code.push_str("mov ecx, [rax]\n");           // refcount
-        code.push_str("dec ecx\n");                  // decrement
-        code.push_str("mov [rax], ecx\n");           // store back
-        code.push_str("test ecx, ecx\n");            // check if zero
-        code.push_str("jnz .rc_skip_free\n");        // if not zero, skip
-        code.push_str("mov rdi, rax\n");             // prepare to free
+        code.push_str("mov rax, [rsi]\n"); // Rc pointer
+        code.push_str("mov ecx, [rax]\n"); // refcount
+        code.push_str("dec ecx\n"); // decrement
+        code.push_str("mov [rax], ecx\n"); // store back
+        code.push_str("test ecx, ecx\n"); // check if zero
+        code.push_str("jnz .rc_skip_free\n"); // if not zero, skip
+        code.push_str("mov rdi, rax\n"); // prepare to free
         code.push_str("call free\n");
         code.push_str(".rc_skip_free:\n");
         code
@@ -136,7 +136,9 @@ impl SmartPointerCodegen {
         code.push_str(&format!("mov rdi, {}\n", total_size));
         code.push_str("call malloc\n");
         code.push_str("mov qword [rax], 1\n"); // atomic refcount = 1
-        code.push_str("; rax contains Arc pointer (atomic refcount at offset 0, data at offset 8)\n");
+        code.push_str(
+            "; rax contains Arc pointer (atomic refcount at offset 0, data at offset 8)\n",
+        );
         code
     }
 
@@ -152,7 +154,7 @@ impl SmartPointerCodegen {
         let mut code = String::new();
         code.push_str("// Arc clone (atomic increment)\n");
         code.push_str("mov rax, [rdi]\n");
-        code.push_str("lock add qword [rax], 1\n");  // atomic increment
+        code.push_str("lock add qword [rax], 1\n"); // atomic increment
         code
     }
 
@@ -171,9 +173,9 @@ impl SmartPointerCodegen {
         let mut code = String::new();
         code.push_str("// Arc drop (atomic decrement, free if 0)\n");
         code.push_str("mov rax, [rsi]\n");
-        code.push_str("lock sub qword [rax], 1\n");  // atomic decrement
-        code.push_str("jnz .arc_skip_free\n");       // if not zero, skip
-        code.push_str("mov rdi, rax\n");             // prepare for free
+        code.push_str("lock sub qword [rax], 1\n"); // atomic decrement
+        code.push_str("jnz .arc_skip_free\n"); // if not zero, skip
+        code.push_str("mov rdi, rax\n"); // prepare for free
         code.push_str("call free\n");
         code.push_str(".arc_skip_free:\n");
         code
@@ -189,15 +191,15 @@ impl SmartPointerCodegen {
             "Rc" => {
                 // Rc: data is at offset 4 from Rc pointer
                 let mut code = String::new();
-                code.push_str("mov rax, [rdi]\n");     // Get Rc pointer
-                code.push_str("add rax, 4\n");         // Add data offset
+                code.push_str("mov rax, [rdi]\n"); // Get Rc pointer
+                code.push_str("add rax, 4\n"); // Add data offset
                 code
             }
             "Arc" => {
                 // Arc: data is at offset 8 from Arc pointer
                 let mut code = String::new();
-                code.push_str("mov rax, [rdi]\n");     // Get Arc pointer
-                code.push_str("add rax, 8\n");         // Add data offset
+                code.push_str("mov rax, [rdi]\n"); // Get Arc pointer
+                code.push_str("add rax, 8\n"); // Add data offset
                 code
             }
             _ => String::new(),

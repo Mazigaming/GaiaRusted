@@ -11,8 +11,8 @@
 //! - Array of structs support with element access
 //! - Integration with type checker and code generation
 
-use std::collections::{HashMap, HashSet};
 use crate::typesystem::types::{StructId, Type};
+use std::collections::{HashMap, HashSet};
 
 /// Configuration for nested struct analysis
 #[derive(Debug, Clone)]
@@ -72,9 +72,7 @@ impl FieldAccessPath {
     }
 
     pub fn from_single(field: String) -> Self {
-        FieldAccessPath {
-            path: vec![field],
-        }
+        FieldAccessPath { path: vec![field] }
     }
 
     pub fn push(&mut self, field: String) {
@@ -443,10 +441,7 @@ mod tests {
         let result = analyzer.register_struct(
             "Point".to_string(),
             StructId(1),
-            vec![
-                ("x".to_string(), Type::I64),
-                ("y".to_string(), Type::I64),
-            ],
+            vec![("x".to_string(), Type::I64), ("y".to_string(), Type::I64)],
         );
 
         assert!(result.is_ok());
@@ -483,10 +478,7 @@ mod tests {
 
         let line_info = analyzer.get_struct_info("Line").unwrap();
         assert_eq!(line_info.fields.len(), 2);
-        assert_eq!(
-            line_info.fields[0].nested_struct,
-            Some("Point".to_string())
-        );
+        assert_eq!(line_info.fields[0].nested_struct, Some("Point".to_string()));
     }
 
     #[test]

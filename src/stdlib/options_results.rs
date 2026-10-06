@@ -208,13 +208,7 @@ mod tests {
     #[test]
     fn test_option_and_then() {
         let opt = Some(5);
-        let result = OptionMethods::and_then(opt, |x| {
-            if x > 0 {
-                Some(x * 2)
-            } else {
-                None
-            }
-        });
+        let result = OptionMethods::and_then(opt, |x| if x > 0 { Some(x * 2) } else { None });
         assert_eq!(result, Some(10));
     }
 
@@ -242,13 +236,17 @@ mod tests {
     #[test]
     fn test_result_is_ok() {
         assert!(ResultMethods::is_ok::<i32, String>(&Ok(5)));
-        assert!(!ResultMethods::is_ok::<i32, String>(&Err("error".to_string())));
+        assert!(!ResultMethods::is_ok::<i32, String>(&Err(
+            "error".to_string()
+        )));
     }
 
     #[test]
     fn test_result_is_err() {
         assert!(!ResultMethods::is_err::<i32, String>(&Ok(5)));
-        assert!(ResultMethods::is_err::<i32, String>(&Err("error".to_string())));
+        assert!(ResultMethods::is_err::<i32, String>(&Err(
+            "error".to_string()
+        )));
     }
 
     #[test]

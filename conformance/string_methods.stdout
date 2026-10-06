@@ -1,0 +1,43 @@
+Some(0) Some(15) Some(6)
+[(0, 'H'), (7, 'W'), (15, 'H')]
+["Hello,", "Wörld!", "Hello again."]
+["again.", "Hello", "Wörld!", "Hello,"]
+["again.", "Hello, Wörld! Hello"]
+"a--b"
+Some(", Wörld! Hello again.") None
+Hi, Wörld! Bye again.
+HELLO, WÖRLD! HELLO AGAIN. hello, wörld! hello again.
+27 26 2
+["Hello, Wörld! Hello again"]
+["a", "b", "c"]
+["line1", "line2", "line3"]
+true true true
+Some("Hello") None
+Wörld
+>aXbc! Some('!') >
+>ab true false
+ababab--
+onetwothree one, two, three
+"lamb little a had Mary"
+"SS" "ǆ"
+1,234,567
+"cba"
+532
+"hi"
+true
+"H�I"
+Ok("ok")
+[("x", 1), ("y", 22), ("z", 333)]
+"padded"
+   r
+"aBc"
+true true
+["a", "b", "c", "d"]
+2
+Some((3, 'd'))
+true
+36
+0-1-2-
+"atad"
+Some(("a,b", "c"))
+x

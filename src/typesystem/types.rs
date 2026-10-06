@@ -78,17 +78,17 @@ pub enum Type {
     Str,
     /// String: owned heap-allocated string (String)
     String,
-    
+
     // === Special Types ===
     /// Never type (!): represents diverging functions
     Never,
     /// Unit type (): empty tuple
     Unit,
-    
+
     // === Standard Library Types ===
     /// Vec<T>: growable dynamic array
     Vec(Box<Type>),
-    
+
     // === Composite Types ===
     /// Tuple: (T1, T2, ...)
     Tuple(Vec<Type>),
@@ -103,7 +103,7 @@ pub enum Type {
     Enum(EnumId),
     /// Trait object
     Trait(TraitId),
-    
+
     // === Reference Types ===
     /// Reference: &'a T or &'a mut T
     Reference {
@@ -111,29 +111,29 @@ pub enum Type {
         mutable: bool,
         inner: Box<Type>,
     },
-    
+
     // === Pointer Types ===
     /// Raw pointer: *const T or *mut T
     RawPointer {
         mutable: bool,
         inner: Box<Type>,
     },
-    
+
     // === Generic Types ===
     /// Generic type parameter: T, U, etc.
     Generic(GenericId),
-    
+
     // === Function Types ===
     /// Function type: fn(T1, T2) -> R
     Function {
         params: Vec<Type>,
         ret: Box<Type>,
     },
-    
+
     // === Type Inference ===
     /// Type variable: used during inference
     Variable(TypeVar),
-    
+
     // === Fallback ===
     /// Unknown type: when we can't determine the type yet
     Unknown,
@@ -220,9 +220,18 @@ impl Type {
     pub fn is_primitive(&self) -> bool {
         matches!(
             self,
-            Type::I32 | Type::I64 | Type::I16 | Type::I8
-                | Type::U32 | Type::U64 | Type::U16 | Type::U8
-                | Type::F32 | Type::F64 | Type::Bool | Type::Char
+            Type::I32
+                | Type::I64
+                | Type::I16
+                | Type::I8
+                | Type::U32
+                | Type::U64
+                | Type::U16
+                | Type::U8
+                | Type::F32
+                | Type::F64
+                | Type::Bool
+                | Type::Char
         )
     }
 
@@ -230,9 +239,16 @@ impl Type {
     pub fn is_numeric(&self) -> bool {
         matches!(
             self,
-            Type::I32 | Type::I64 | Type::I16 | Type::I8
-                | Type::U32 | Type::U64 | Type::U16 | Type::U8
-                | Type::F32 | Type::F64
+            Type::I32
+                | Type::I64
+                | Type::I16
+                | Type::I8
+                | Type::U32
+                | Type::U64
+                | Type::U16
+                | Type::U8
+                | Type::F32
+                | Type::F64
         )
     }
 
@@ -240,8 +256,14 @@ impl Type {
     pub fn is_integer(&self) -> bool {
         matches!(
             self,
-            Type::I32 | Type::I64 | Type::I16 | Type::I8
-                | Type::U32 | Type::U64 | Type::U16 | Type::U8
+            Type::I32
+                | Type::I64
+                | Type::I16
+                | Type::I8
+                | Type::U32
+                | Type::U64
+                | Type::U16
+                | Type::U8
         )
     }
 
@@ -262,13 +284,7 @@ impl Type {
 
     /// Get the mutability of a reference
     pub fn is_mutable_ref(&self) -> bool {
-        matches!(
-            self,
-            Type::Reference {
-                mutable: true,
-                ..
-            }
-        )
+        matches!(self, Type::Reference { mutable: true, .. })
     }
 
     /// Check if this is a String type

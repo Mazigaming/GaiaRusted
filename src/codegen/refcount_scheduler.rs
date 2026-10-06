@@ -5,7 +5,6 @@
 /// - Scheduling increments and decrements optimally
 /// - Reducing unnecessary operations through smart analysis
 /// - Eliminating dead stores and loads
-
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Represents a single refcount operation at a location
@@ -93,9 +92,8 @@ impl RefCountScheduler {
 
     /// Optimize all schedules
     pub fn optimize(&mut self) {
-        let mut schedules_to_optimize: Vec<String> = 
-            self.schedules.keys().cloned().collect();
-        
+        let mut schedules_to_optimize: Vec<String> = self.schedules.keys().cloned().collect();
+
         for var_name in schedules_to_optimize {
             if let Some(schedule) = self.schedules.get_mut(&var_name) {
                 // Find consecutive inc-dec pairs
@@ -231,7 +229,7 @@ mod tests {
         schedule.add_operation(1, RefCountOp::Decrement);
 
         assert_eq!(schedule.cost(), 2); // No optimization yet
-        
+
         schedule.mark_eliminable(0, 1);
         assert_eq!(schedule.cost(), 0); // Both operations eliminated
     }
@@ -277,7 +275,7 @@ mod tests {
     #[test]
     fn test_multiple_variables() {
         let mut scheduler = RefCountScheduler::new();
-        
+
         scheduler.add_variable("x".to_string());
         scheduler.record_operation("x", 0, RefCountOp::Increment);
         scheduler.record_operation("x", 2, RefCountOp::Decrement);
@@ -295,7 +293,7 @@ mod tests {
     #[test]
     fn test_control_flow_tracking() {
         let mut scheduler = RefCountScheduler::new();
-        
+
         // Build a simple CFG: 0 -> 1, 0 -> 2
         scheduler.add_cfg_edge(0, 1);
         scheduler.add_cfg_edge(0, 2);

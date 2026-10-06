@@ -8,6 +8,8 @@
 //! - Advanced futures with combinators
 
 pub mod advanced_async;
+pub mod lowering;
+pub mod state_machine;
 
 pub use advanced_async::{
     Poll, SimpleWaker, PollContext, BoxedFuture, SimpleFuture, MapFuture, ThenFuture,
@@ -15,6 +17,10 @@ pub use advanced_async::{
 };
 pub use advanced_async::Task as AdvancedTask;
 pub use advanced_async::TaskState as AdvancedTaskState;
+pub use state_machine::{
+    StateId, AwaitPoint, StateMachine, 
+    generate_state_struct, generate_poll_method,
+};
 
 use crate::parser::ast::Expression;
 use crate::typesystem::types::Type;

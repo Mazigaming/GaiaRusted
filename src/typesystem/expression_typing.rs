@@ -10,9 +10,9 @@
 //! 4. Solve constraints to get concrete types
 //! 5. Return expression with inferred types
 
-use super::types::{Type, TypeVar};
-use super::constraints::{ConstraintGenerator, BinaryOp, UnaryOp};
+use super::constraints::{BinaryOp, ConstraintGenerator, UnaryOp};
 use super::substitution::Substitution;
+use super::types::{Type, TypeVar};
 use std::collections::HashMap;
 
 /// Result of expression typing
@@ -199,7 +199,8 @@ impl ExprTyper {
         param_types: Vec<Type>,
         return_type: Type,
     ) -> ExprTypingResult<()> {
-        self.generator.register_function(name, param_types, return_type);
+        self.generator
+            .register_function(name, param_types, return_type);
         Ok(())
     }
 
@@ -245,10 +246,7 @@ impl ExprTyper {
                 if let Some(var) = self.generator.symbols.get(name) {
                     Ok(Type::Variable(*var))
                 } else {
-                    Err(ExprTypingError::new(format!(
-                        "Unknown variable: {}",
-                        name
-                    )))
+                    Err(ExprTypingError::new(format!("Unknown variable: {}", name)))
                 }
             }
 
@@ -280,7 +278,11 @@ impl ExprTyper {
                     .map_err(|e| ExprTypingError::new(e))
             }
 
-            AstExpr::MethodCall { object, method, args } => {
+            AstExpr::MethodCall {
+                object,
+                method,
+                args,
+            } => {
                 let receiver_ty = self.infer_expr(object)?;
                 let arg_types: Result<Vec<_>, _> =
                     args.iter().map(|arg| self.infer_expr(arg)).collect();
@@ -355,10 +357,7 @@ impl ExprTyper {
 
     /// Type check a list of expressions in sequence
     pub fn type_exprs(&mut self, exprs: &[AstExpr]) -> ExprTypingResult<Vec<TypedExpr>> {
-        exprs
-            .iter()
-            .map(|e| self.type_expr(e))
-            .collect()
+        exprs.iter().map(|e| self.type_expr(e)).collect()
     }
 
     /// Solve all collected constraints and return substitution
@@ -412,7 +411,7 @@ mod tests {
 
         let var_expr = AstExpr::Variable("x".to_string());
         let var_type = typer.infer_expr(&var_expr).unwrap();
-        
+
         // Should resolve to i32 after solving
         let subst = typer.solve().unwrap();
         let resolved = subst.apply(&var_type);
@@ -505,7 +504,10 @@ mod tests {
         };
 
         let result_type = typer.infer_expr(&expr).unwrap();
-        assert!(matches!(result_type, Type::Reference { mutable: false, .. }));
+        assert!(matches!(
+            result_type,
+            Type::Reference { mutable: false, .. }
+        ));
     }
 
     #[test]
@@ -559,11 +561,7 @@ mod tests {
 
         // Register: fn add(x: i32, y: i32) -> i32
         typer
-            .register_function(
-                "add".to_string(),
-                vec![Type::I32, Type::I32],
-                Type::I32,
-            )
+            .register_function("add".to_string(), vec![Type::I32, Type::I32], Type::I32)
             .unwrap();
 
         // add(5, 3)

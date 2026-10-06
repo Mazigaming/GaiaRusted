@@ -159,11 +159,13 @@ impl InliningOptimizer {
     /// Register a call site
     pub fn register_call(&mut self, caller: &str, callee: &str, in_loop: bool, frequency: u32) {
         // Update call graph
-        self.call_graph.entry(caller.to_string())
+        self.call_graph
+            .entry(caller.to_string())
             .or_insert_with(Vec::new)
             .push(callee.to_string());
 
-        self.reverse_call_graph.entry(callee.to_string())
+        self.reverse_call_graph
+            .entry(callee.to_string())
             .or_insert_with(Vec::new)
             .push(caller.to_string());
 
@@ -236,17 +238,18 @@ impl InliningOptimizer {
 
     /// Get inlining candidates (functions good to inline)
     pub fn get_candidates(&self) -> Vec<String> {
-        self.functions.iter()
-            .filter(|(_, func)| {
-                func.size == FunctionSize::Tiny || func.size == FunctionSize::Small
-            })
+        self.functions
+            .iter()
+            .filter(|(_, func)| func.size == FunctionSize::Tiny || func.size == FunctionSize::Small)
             .map(|(name, _)| name.clone())
             .collect()
     }
 
     /// Estimate speedup from inlining
     pub fn estimate_speedup(&self) -> f32 {
-        let inline_calls = self.decisions.iter()
+        let inline_calls = self
+            .decisions
+            .iter()
             .filter(|(_, d)| **d == InliningDecision::Inline)
             .count();
 
@@ -278,16 +281,16 @@ impl InliningOptimizer {
 /// Detect recursive functions
 pub fn detect_recursion(call_graph: &HashMap<String, Vec<String>>) -> HashSet<String> {
     let mut recursive = HashSet::new();
-    
+
     // Simple cycle detection: if a function calls itself (direct recursion)
     for (func, callees) in call_graph {
         if callees.contains(func) {
             recursive.insert(func.clone());
         }
     }
-    
+
     // TODO: Implement indirect recursion detection using DFS
-    
+
     recursive
 }
 
@@ -308,17 +311,17 @@ mod tests {
     fn test_inline_benefit() {
         let func_tiny = FunctionMetadata::new("tiny".to_string(), FunctionSize::Tiny, 1);
         let func_large = FunctionMetadata::new("large".to_string(), FunctionSize::Large, 3);
-        
+
         assert!(func_tiny.inline_benefit() > func_large.inline_benefit());
     }
 
     #[test]
     fn test_inlining_optimizer() {
         let mut optimizer = InliningOptimizer::new(10000);
-        
+
         let mut func = FunctionMetadata::new("add".to_string(), FunctionSize::Tiny, 2);
         optimizer.register_function(func);
-        
+
         let decision = optimizer.decide_inline("main", "add");
         assert_eq!(decision, InliningDecision::Inline);
     }
@@ -326,21 +329,27 @@ mod tests {
     #[test]
     fn test_call_registration() {
         let mut optimizer = InliningOptimizer::new(10000);
-        optimizer.register_function(FunctionMetadata::new("add".to_string(), FunctionSize::Tiny, 2));
-        
+        optimizer.register_function(FunctionMetadata::new(
+            "add".to_string(),
+            FunctionSize::Tiny,
+            2,
+        ));
+
         optimizer.register_call("main", "add", true, 100);
-        
+
         assert!(optimizer.reverse_call_graph.contains_key("add"));
     }
 
     #[test]
     fn test_code_size_budget() {
         let mut optimizer = InliningOptimizer::new(100);
-        
-        optimizer.register_function(
-            FunctionMetadata::new("func".to_string(), FunctionSize::VeryLarge, 1)
-        );
-        
+
+        optimizer.register_function(FunctionMetadata::new(
+            "func".to_string(),
+            FunctionSize::VeryLarge,
+            1,
+        ));
+
         // Should exceed budget
         assert!(optimizer.current_size() > 0);
     }

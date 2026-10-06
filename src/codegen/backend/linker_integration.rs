@@ -3,7 +3,7 @@
 //! Provides LTO-aware linking, symbol table management, and whole-program
 //! optimization during the linking phase.
 
-use crate::codegen::optimization::lto::{SymbolTable, LinkTimeOptimizer, SymbolVisibility};
+use crate::codegen::optimization::lto::{LinkTimeOptimizer, SymbolTable, SymbolVisibility};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -222,7 +222,10 @@ impl SymbolGraph {
 
     /// Add an edge (call) between symbols
     pub fn add_edge(&mut self, from: String, to: String) {
-        self.edges.entry(from).or_insert_with(HashSet::new).insert(to);
+        self.edges
+            .entry(from)
+            .or_insert_with(HashSet::new)
+            .insert(to);
     }
 
     /// Compute strongly connected components (cycles)

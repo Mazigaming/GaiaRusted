@@ -12,8 +12,8 @@
 //! - Method dispatch information
 //! - Comprehensive error detection
 
+use crate::typesystem::types::{StructId, TraitId, Type};
 use std::collections::{HashMap, HashSet};
-use crate::typesystem::types::{Type, StructId, TraitId};
 
 /// Configuration for impl block analysis
 #[derive(Debug, Clone)]
@@ -230,38 +230,24 @@ impl ImplBlockAnalyzer {
     }
 
     /// Get trait impl blocks for a struct
-    pub fn get_trait_impls_for_struct(
-        &self,
-        struct_name: &str,
-    ) -> Vec<(&ImplBlockInfo, &str)> {
+    pub fn get_trait_impls_for_struct(&self, struct_name: &str) -> Vec<(&ImplBlockInfo, &str)> {
         self.impl_blocks
             .values()
             .filter(|impl_info| {
                 impl_info.struct_name == struct_name && impl_info.trait_name.is_some()
             })
-            .map(|impl_info| {
-                (
-                    impl_info,
-                    impl_info.trait_name.as_deref().unwrap_or(""),
-                )
-            })
+            .map(|impl_info| (impl_info, impl_info.trait_name.as_deref().unwrap_or("")))
             .collect()
     }
 
     /// Find method by name and struct
-    pub fn find_method(
-        &self,
-        struct_name: &str,
-        method_name: &str,
-    ) -> Option<MethodDispatchInfo> {
-        self.method_index
-            .get(method_name)
-            .and_then(|methods| {
-                methods
-                    .iter()
-                    .find(|m| m.struct_name == struct_name)
-                    .cloned()
-            })
+    pub fn find_method(&self, struct_name: &str, method_name: &str) -> Option<MethodDispatchInfo> {
+        self.method_index.get(method_name).and_then(|methods| {
+            methods
+                .iter()
+                .find(|m| m.struct_name == struct_name)
+                .cloned()
+        })
     }
 
     /// Get all methods for a struct
@@ -287,11 +273,7 @@ impl ImplBlockAnalyzer {
                 ));
             }
 
-            let provided: HashSet<_> = impl_info
-                .methods
-                .iter()
-                .map(|m| m.name.as_str())
-                .collect();
+            let provided: HashSet<_> = impl_info.methods.iter().map(|m| m.name.as_str()).collect();
             let required: HashSet<_> = required_methods.into_iter().collect();
 
             // Check for missing methods
@@ -643,10 +625,8 @@ mod tests {
             )
             .unwrap();
 
-        let result = analyzer.validate_trait_impl(
-            "impl_Iterator_for_Custom",
-            vec!["next", "size_hint"],
-        );
+        let result =
+            analyzer.validate_trait_impl("impl_Iterator_for_Custom", vec!["next", "size_hint"]);
 
         assert!(result.is_ok());
     }
@@ -671,10 +651,8 @@ mod tests {
             )
             .unwrap();
 
-        let result = analyzer.validate_trait_impl(
-            "impl_Iterator_for_Custom",
-            vec!["next", "size_hint"],
-        );
+        let result =
+            analyzer.validate_trait_impl("impl_Iterator_for_Custom", vec!["next", "size_hint"]);
 
         assert!(result.is_err());
     }

@@ -4,7 +4,7 @@
 //! Handles method calls on String, Vec, and other stdlib types.
 
 use crate::lowering::HirType;
-use crate::stdlib::method_resolution::{StdlibMethodResolver, MethodInfo};
+use crate::stdlib::method_resolution::{MethodInfo, StdlibMethodResolver};
 use crate::typesystem::types::Type;
 use std::collections::HashMap;
 
@@ -45,24 +45,23 @@ pub fn type_to_hirtype(ty: &Type) -> Option<HirType> {
         Type::Vec(inner) => {
             type_to_hirtype(inner).map(|elem_type| HirType::Vec(Box::new(elem_type)))
         }
-        Type::Reference { lifetime: _, mutable, inner } => {
-            type_to_hirtype(inner).map(|elem_type| {
-                if *mutable {
-                    HirType::MutableReference(Box::new(elem_type))
-                } else {
-                    HirType::Reference(Box::new(elem_type))
-                }
-            })
-        }
+        Type::Reference {
+            lifetime: _,
+            mutable,
+            inner,
+        } => type_to_hirtype(inner).map(|elem_type| {
+            if *mutable {
+                HirType::MutableReference(Box::new(elem_type))
+            } else {
+                HirType::Reference(Box::new(elem_type))
+            }
+        }),
         _ => None,
     }
 }
 
 /// Resolves a method call on a stdlib type
-pub fn resolve_stdlib_method(
-    object_type: &HirType,
-    method_name: &str,
-) -> Option<(HirType, bool)> {
+pub fn resolve_stdlib_method(object_type: &HirType, method_name: &str) -> Option<(HirType, bool)> {
     // Convert HirType to Type for resolution
     let ty = hirtype_to_type(object_type)?;
 
@@ -83,8 +82,8 @@ pub fn validate_method_call(
     is_mutable_context: bool,
 ) -> Result<HirType, String> {
     // Try to resolve the method
-    let (return_type, requires_mut) = resolve_stdlib_method(object_type, method_name)
-        .ok_or_else(|| {
+    let (return_type, requires_mut) =
+        resolve_stdlib_method(object_type, method_name).ok_or_else(|| {
             format!(
                 "method `{}` not found for type `{}`",
                 method_name, object_type
@@ -105,24 +104,33 @@ pub fn validate_method_call(
 /// Get all available methods for a type
 pub fn get_available_methods(hir_ty: &HirType) -> Vec<String> {
     match hir_ty {
-        HirType::String => {
-            vec![
-                "new", "from", "len", "is_empty", "push", "push_str", "pop", "clear",
-                "contains", "starts_with", "ends_with", "find", "to_uppercase", "to_lowercase", "trim",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-        }
-        HirType::Vec(_) => {
-            vec![
-                "new", "len", "is_empty", "push", "pop", "clear", "get", "first", "last",
-                "sort", "reverse",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-        }
+        HirType::String => vec![
+            "new",
+            "from",
+            "len",
+            "is_empty",
+            "push",
+            "push_str",
+            "pop",
+            "clear",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "find",
+            "to_uppercase",
+            "to_lowercase",
+            "trim",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        HirType::Vec(_) => vec![
+            "new", "len", "is_empty", "push", "pop", "clear", "get", "first", "last", "sort",
+            "reverse",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
         _ => vec![],
     }
 }
@@ -155,21 +163,21 @@ mod tests {
         let ty = hirtype_to_type(&hir_vec);
         assert!(ty.is_some());
         let Type::Vec(inner) = ty.unwrap() else {
-            assert!(false, "Should be Vec");
+            panic!("Should be Vec");
         };
         assert_eq!(*inner, Type::I32);
-        }
+    }
 
-        #[test]
-        fn test_type_string_to_hirtype() {
+    #[test]
+    fn test_type_string_to_hirtype() {
         let ty = Type::String;
         let hir_ty = type_to_hirtype(&ty);
         assert!(hir_ty.is_some());
         assert_eq!(hir_ty.unwrap(), HirType::String);
-        }
+    }
 
-        #[test]
-        fn test_type_vec_to_hirtype() {
+    #[test]
+    fn test_type_vec_to_hirtype() {
         let ty = Type::Vec(Box::new(Type::I32));
         let hir_ty = type_to_hirtype(&ty);
         assert!(hir_ty.is_some());
@@ -179,7 +187,7 @@ mod tests {
             }
             _ => assert!(false, "Should be Vec"),
         }
-        }
+    }
 
     #[test]
     fn test_hirtype_string_conversion() {
@@ -195,7 +203,7 @@ mod tests {
         let string_methods = get_available_methods(&HirType::String);
         assert!(!string_methods.is_empty());
         assert!(string_methods.contains(&"push".to_string()));
-        
+
         let vec_methods = get_available_methods(&HirType::Vec(Box::new(HirType::Int32)));
         assert!(!vec_methods.is_empty());
         assert!(vec_methods.contains(&"push".to_string()));
@@ -243,9 +251,9 @@ mod tests {
     #[test]
     fn test_is_stdlib_collection() {
         assert!(is_stdlib_collection(&HirType::String));
-        assert!(is_stdlib_collection(&HirType::Vec(
-            Box::new(HirType::Int32),
-        )));
+        assert!(is_stdlib_collection(&HirType::Vec(Box::new(
+            HirType::Int32
+        ),)));
         assert!(!is_stdlib_collection(&HirType::Int32));
     }
 }

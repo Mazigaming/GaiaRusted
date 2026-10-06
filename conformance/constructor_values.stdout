@@ -1,0 +1,4 @@
+[Some(1), Some(2), Some(3)] [Meters(1.5), Meters(2.0)] [Num(3), Num(4)] [Word("a"), Word("bc")]
+[Ok(0), Ok(1)] Pair('a', 'b')
+Some(7) Meters(2.5)
+[1, 2] Some(5)

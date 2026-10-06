@@ -10,7 +10,7 @@
 //! - If the return type contains a reference without explicit lifetime, it borrows from self
 //! - Example: `fn foo(&self) -> &i32` elides to `fn foo<'a>(&'a self) -> &'a i32`
 
-use crate::typesystem::{Type, Lifetime, LifetimeName};
+use crate::typesystem::{Lifetime, LifetimeName, Type};
 use std::collections::HashSet;
 
 /// Information about a method's self parameter
@@ -353,12 +353,8 @@ mod tests {
 
     #[test]
     fn test_validator_add_declared_lifetime() {
-        let mut validator = ImplMethodValidator::new(
-            "foo".to_string(),
-            SelfKind::Immutable,
-            vec![],
-            Type::I32,
-        );
+        let mut validator =
+            ImplMethodValidator::new("foo".to_string(), SelfKind::Immutable, vec![], Type::I32);
 
         validator.add_declared_lifetime("a".to_string());
         assert!(validator.declared_lifetimes.contains("a"));
@@ -366,24 +362,16 @@ mod tests {
 
     #[test]
     fn test_validate_simple_immutable_self() {
-        let validator = ImplMethodValidator::new(
-            "foo".to_string(),
-            SelfKind::Immutable,
-            vec![],
-            Type::I32,
-        );
+        let validator =
+            ImplMethodValidator::new("foo".to_string(), SelfKind::Immutable, vec![], Type::I32);
 
         assert!(validator.validate().is_ok());
     }
 
     #[test]
     fn test_validate_simple_mutable_self() {
-        let validator = ImplMethodValidator::new(
-            "foo".to_string(),
-            SelfKind::Mutable,
-            vec![],
-            Type::Bool,
-        );
+        let validator =
+            ImplMethodValidator::new("foo".to_string(), SelfKind::Mutable, vec![], Type::Bool);
 
         assert!(validator.validate().is_ok());
     }
@@ -422,12 +410,8 @@ mod tests {
 
     #[test]
     fn test_collect_lifetime_refs_none() {
-        let validator = ImplMethodValidator::new(
-            "foo".to_string(),
-            SelfKind::None,
-            vec![],
-            Type::I32,
-        );
+        let validator =
+            ImplMethodValidator::new("foo".to_string(), SelfKind::None, vec![], Type::I32);
 
         let lifetimes = validator.collect_lifetime_refs(&Type::I32);
         assert!(lifetimes.is_empty());
@@ -441,12 +425,8 @@ mod tests {
             inner: Box::new(Type::I32),
         };
 
-        let validator = ImplMethodValidator::new(
-            "foo".to_string(),
-            SelfKind::None,
-            vec![],
-            Type::I32,
-        );
+        let validator =
+            ImplMethodValidator::new("foo".to_string(), SelfKind::None, vec![], Type::I32);
 
         let lifetimes = validator.collect_lifetime_refs(&ref_type);
         // Check that a lifetime was collected
@@ -502,10 +482,9 @@ mod tests {
         let result = validator.validate();
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(
-            e,
-            ImplLifetimeError::AmbiguousReturnLifetime { .. }
-        )));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ImplLifetimeError::AmbiguousReturnLifetime { .. })));
     }
 
     #[test]

@@ -1,0 +1,17 @@
+Ok(42)
+error: empty input
+error: `x1` is not a number
+error: -3 is negative
+6
+parse failed: `oops` is not a number
+Some(20) None
+Some(8)
+7
+true
+Ok(4)
+true Ok(1)
+false Err("bad")
+4
+Some(3) None
+got 4
+4

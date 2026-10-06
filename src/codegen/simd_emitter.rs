@@ -3,15 +3,15 @@
 //! Actual x86-64 SIMD instruction generation for vectorized operations.
 //! Transforms loop patterns into SIMD code paths.
 
-use std::collections::HashMap;
-use crate::mir::{BasicBlock, Statement, Rvalue, Operand, Place};
 use crate::lowering::BinaryOp;
+use crate::mir::{BasicBlock, Operand, Place, Rvalue, Statement};
+use std::collections::HashMap;
 
 /// SIMD vectorization level
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SIMDLevel {
-    SSE2,   // 128-bit vectors (2x i64, 4x i32, etc.)
-    AVX2,   // 256-bit vectors (4x i64, 8x i32, etc.)
+    SSE2, // 128-bit vectors (2x i64, 4x i32, etc.)
+    AVX2, // 256-bit vectors (4x i64, 8x i32, etc.)
 }
 
 impl SIMDLevel {
@@ -129,17 +129,20 @@ impl SIMDEmitter {
 
     /// Emit SSE2 add instruction (packed i64)
     pub fn emit_sse2_padded(&mut self, dst: usize, src: usize) {
-        self.instructions.push(format!("    paddq xmm{}, xmm{}", dst, src));
+        self.instructions
+            .push(format!("    paddq xmm{}, xmm{}", dst, src));
     }
 
     /// Emit SSE2 subtract instruction (packed i64)
     pub fn emit_sse2_psubd(&mut self, dst: usize, src: usize) {
-        self.instructions.push(format!("    psubq xmm{}, xmm{}", dst, src));
+        self.instructions
+            .push(format!("    psubq xmm{}, xmm{}", dst, src));
     }
 
     /// Emit SSE2 multiply instruction (packed i32x4)
     pub fn emit_sse2_pmulld(&mut self, dst: usize, src: usize) {
-        self.instructions.push(format!("    pmulld xmm{}, xmm{}", dst, src));
+        self.instructions
+            .push(format!("    pmulld xmm{}, xmm{}", dst, src));
     }
 
     /// Emit AVX2 load instruction (256-bit)
@@ -168,17 +171,20 @@ impl SIMDEmitter {
 
     /// Emit AVX2 add instruction (packed i64)
     pub fn emit_avx2_paddq(&mut self, dst: usize, src: usize) {
-        self.instructions.push(format!("    vpaddq ymm{}, ymm{}, ymm{}", dst, dst, src));
+        self.instructions
+            .push(format!("    vpaddq ymm{}, ymm{}, ymm{}", dst, dst, src));
     }
 
     /// Emit AVX2 multiply instruction (packed i32x8)
     pub fn emit_avx2_pmulld(&mut self, dst: usize, src: usize) {
-        self.instructions.push(format!("    vpmulld ymm{}, ymm{}, ymm{}", dst, dst, src));
+        self.instructions
+            .push(format!("    vpmulld ymm{}, ymm{}, ymm{}", dst, dst, src));
     }
 
     /// Emit AVX2 shuffle instruction
     pub fn emit_avx2_pshufd(&mut self, dst: usize, src: usize, mask: u8) {
-        self.instructions.push(format!("    vpshufd ymm{}, ymm{}, {}", dst, src, mask));
+        self.instructions
+            .push(format!("    vpshufd ymm{}, ymm{}, {}", dst, src, mask));
     }
 
     /// Detect if a loop is SIMD-friendly
@@ -256,36 +262,55 @@ impl SIMDEmitter {
         let remainder = array_size % elements_per_vector;
 
         // Main vectorized loop
-        self.instructions.push(format!("    xor rcx, rcx                ; loop counter"));
-        self.instructions.push(format!(".simd_loop_sse2_{}_start:", array_var));
-        self.instructions.push(format!("    cmp rcx, {}", iterations));
-        self.instructions.push(format!("    jge .simd_loop_sse2_{}_remainder", array_var));
+        self.instructions
+            .push(format!("    xor rcx, rcx                ; loop counter"));
+        self.instructions
+            .push(format!(".simd_loop_sse2_{}_start:", array_var));
+        self.instructions
+            .push(format!("    cmp rcx, {}", iterations));
+        self.instructions
+            .push(format!("    jge .simd_loop_sse2_{}_remainder", array_var));
 
         // Load vector
         self.emit_sse2_load(vec_reg, "rax", 0);
 
         // Process vector
-        self.instructions.push(format!("    paddq xmm{}, xmm1          ; vector add", vec_reg));
+        self.instructions.push(format!(
+            "    paddq xmm{}, xmm1          ; vector add",
+            vec_reg
+        ));
 
         // Store result
         self.emit_sse2_store("rax", 0, vec_reg);
 
         // Increment and loop
         self.instructions.push(format!("    add rcx, 1"));
-        self.instructions.push(format!("    add rax, 16                 ; next vector (SSE2 = 16 bytes)"));
-        self.instructions.push(format!("    jmp .simd_loop_sse2_{}_start", array_var));
+        self.instructions.push(format!(
+            "    add rax, 16                 ; next vector (SSE2 = 16 bytes)"
+        ));
+        self.instructions
+            .push(format!("    jmp .simd_loop_sse2_{}_start", array_var));
 
         // Scalar epilogue for remainder
-        self.instructions.push(format!(".simd_loop_sse2_{}_remainder:", array_var));
+        self.instructions
+            .push(format!(".simd_loop_sse2_{}_remainder:", array_var));
         if remainder > 0 {
-            self.instructions.push(format!("    xor rcx, rcx                ; scalar loop counter"));
-            self.instructions.push(format!(".scalar_loop_{}_start:", array_var));
-            self.instructions.push(format!("    cmp rcx, {}", remainder));
-            self.instructions.push(format!("    jge .scalar_loop_{}_end", array_var));
-            self.instructions.push(format!("    ; process scalar element"));
+            self.instructions.push(format!(
+                "    xor rcx, rcx                ; scalar loop counter"
+            ));
+            self.instructions
+                .push(format!(".scalar_loop_{}_start:", array_var));
+            self.instructions
+                .push(format!("    cmp rcx, {}", remainder));
+            self.instructions
+                .push(format!("    jge .scalar_loop_{}_end", array_var));
+            self.instructions
+                .push(format!("    ; process scalar element"));
             self.instructions.push(format!("    add rcx, 1"));
-            self.instructions.push(format!("    jmp .scalar_loop_{}_start", array_var));
-            self.instructions.push(format!(".scalar_loop_{}_end:", array_var));
+            self.instructions
+                .push(format!("    jmp .scalar_loop_{}_start", array_var));
+            self.instructions
+                .push(format!(".scalar_loop_{}_end:", array_var));
         }
     }
 
@@ -296,36 +321,55 @@ impl SIMDEmitter {
         let remainder = array_size % elements_per_vector;
 
         // Main vectorized loop
-        self.instructions.push(format!("    xor rcx, rcx                ; loop counter"));
-        self.instructions.push(format!(".simd_loop_avx2_{}_start:", array_var));
-        self.instructions.push(format!("    cmp rcx, {}", iterations));
-        self.instructions.push(format!("    jge .simd_loop_avx2_{}_remainder", array_var));
+        self.instructions
+            .push(format!("    xor rcx, rcx                ; loop counter"));
+        self.instructions
+            .push(format!(".simd_loop_avx2_{}_start:", array_var));
+        self.instructions
+            .push(format!("    cmp rcx, {}", iterations));
+        self.instructions
+            .push(format!("    jge .simd_loop_avx2_{}_remainder", array_var));
 
         // Load vector
         self.emit_avx2_load(vec_reg, "rax", 0);
 
         // Process vector
-        self.instructions.push(format!("    vpaddq ymm{}, ymm{}, ymm1  ; vector add", vec_reg, vec_reg));
+        self.instructions.push(format!(
+            "    vpaddq ymm{}, ymm{}, ymm1  ; vector add",
+            vec_reg, vec_reg
+        ));
 
         // Store result
         self.emit_avx2_store("rax", 0, vec_reg);
 
         // Increment and loop
         self.instructions.push(format!("    add rcx, 1"));
-        self.instructions.push(format!("    add rax, 32                 ; next vector (AVX2 = 32 bytes)"));
-        self.instructions.push(format!("    jmp .simd_loop_avx2_{}_start", array_var));
+        self.instructions.push(format!(
+            "    add rax, 32                 ; next vector (AVX2 = 32 bytes)"
+        ));
+        self.instructions
+            .push(format!("    jmp .simd_loop_avx2_{}_start", array_var));
 
         // Scalar epilogue for remainder
-        self.instructions.push(format!(".simd_loop_avx2_{}_remainder:", array_var));
+        self.instructions
+            .push(format!(".simd_loop_avx2_{}_remainder:", array_var));
         if remainder > 0 {
-            self.instructions.push(format!("    xor rcx, rcx                ; scalar loop counter"));
-            self.instructions.push(format!(".scalar_loop_{}_start:", array_var));
-            self.instructions.push(format!("    cmp rcx, {}", remainder));
-            self.instructions.push(format!("    jge .scalar_loop_{}_end", array_var));
-            self.instructions.push(format!("    ; process scalar element"));
+            self.instructions.push(format!(
+                "    xor rcx, rcx                ; scalar loop counter"
+            ));
+            self.instructions
+                .push(format!(".scalar_loop_{}_start:", array_var));
+            self.instructions
+                .push(format!("    cmp rcx, {}", remainder));
+            self.instructions
+                .push(format!("    jge .scalar_loop_{}_end", array_var));
+            self.instructions
+                .push(format!("    ; process scalar element"));
             self.instructions.push(format!("    add rcx, 1"));
-            self.instructions.push(format!("    jmp .scalar_loop_{}_start", array_var));
-            self.instructions.push(format!(".scalar_loop_{}_end:", array_var));
+            self.instructions
+                .push(format!("    jmp .scalar_loop_{}_start", array_var));
+            self.instructions
+                .push(format!(".scalar_loop_{}_end:", array_var));
         }
     }
 

@@ -1,49 +1,47 @@
-# Rust build artifacts
+# Top level: only the project's own files. Programs compiled by hand, the
+# executables they produce and notes left at the top level stay local;
+# the project lives in the folders below.
+/*
+!/*/
+!/.gitignore
+!/Cargo.toml
+!/Cargo.lock
+!/LICENSE
+!/README.md
+!/ARCHITECTURE.md
+!/CONTRIBUTING.md
+!/CODE_OF_CONDUCT.md
+!/stress_test_comprehensive.rs
+
+# Build output
 /target/
 **/*.rlib
 **/*.rmeta
-*.pdb
 
-# Generated output files
+# What the compiler writes next to an executable
 *.s
 *.o
 *.a
-output
-output.*
-out
-t*
-binary
-output_binary
-# Generated scripts
-build.sh
-*.sh
 
-# IDE and editor files
+# Python bytecode from the test scripts
+__pycache__/
+
+# The v1.2 battery stays local
+/tests_v1_2/
+
+# Of tests/, only the test harness is part of the project: the rest are
+# tests of the earlier pipeline, kept locally until it is removed
+/tests/*
+!/tests/conformance.rs
+!/tests/driver.rs
+!/tests/cli.rs
+!/tests/scratch.rs
+
+# Editors and operating systems
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
-
-# Cargo lock for non-binary crates
-Cargo.lock
-
-# Temporary test files
-test_*.rs
-extreme_test*.rs
-extreme*
-ultimate*
-comprehensive_*.rs
-buildit.*
-mathlib.*
-test_project/
-a.out*
-*txt
-test_*
-benchmark_*.rs
-out_test*
-test*
-
-# OS files
 Thumbs.db

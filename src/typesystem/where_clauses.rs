@@ -240,10 +240,7 @@ impl WhereClauseAnalyzer {
     }
 
     /// Get associated type constraints for a type
-    pub fn get_assoc_constraints(
-        &self,
-        type_name: &str,
-    ) -> Option<Vec<(String, String)>> {
+    pub fn get_assoc_constraints(&self, type_name: &str) -> Option<Vec<(String, String)>> {
         self.constraints.get(type_name).map(|clause| {
             clause
                 .assoc_constraints
@@ -252,24 +249,28 @@ impl WhereClauseAnalyzer {
                 .collect()
         })
     }
-    
+
     /// Check if an associated type name is valid (Fix #4)
     fn is_valid_associated_type(&self, assoc_type: &str) -> bool {
         // Common standard library associated types
         let valid_assoc_types = &[
-            "Item",      // Iterator, etc.
-            "Output",    // Fn
-            "Target",    // Deref
-            "Err",       // Try
-            "Ok",        // Try (alias)
-            "IntoIter",  // IntoIterator
-            "Error",     // FromStr, TryFrom
+            "Item",     // Iterator, etc.
+            "Output",   // Fn
+            "Target",   // Deref
+            "Err",      // Try
+            "Ok",       // Try (alias)
+            "IntoIter", // IntoIterator
+            "Error",    // FromStr, TryFrom
         ];
-        
+
         // Allow any uppercase-starting identifier as a potential associated type
         // This is permissive for v0.13.0; can be made stricter later
-        valid_assoc_types.contains(&assoc_type) || 
-        assoc_type.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+        valid_assoc_types.contains(&assoc_type)
+            || assoc_type
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
     }
 
     /// Validate all constraints for consistency (Fix #4)
@@ -288,83 +289,95 @@ impl WhereClauseAnalyzer {
                 report.trait_bound_count += 1;
                 // Check that trait names are valid (non-empty, not reserved)
                 if bound.trait_name.is_empty() {
-                    report.errors.push(
-                        format!("Type {} has trait bound with empty name", type_name)
-                    );
+                    report.errors.push(format!(
+                        "Type {} has trait bound with empty name",
+                        type_name
+                    ));
                 } else {
                     // Validate that the trait name is well-formed (not a reserved keyword)
                     if self.is_reserved_keyword(&bound.trait_name) {
-                        report.errors.push(
-                            format!("Trait name '{}' is a reserved keyword", bound.trait_name)
-                        );
+                        report.errors.push(format!(
+                            "Trait name '{}' is a reserved keyword",
+                            bound.trait_name
+                        ));
                     }
                 }
             }
-            
+
             // Validate associated type constraints (NOW ENABLED - Fix #4)
             for assoc in &clause.assoc_constraints {
                 report.assoc_constraint_count += 1;
-                
+
                 // Verify associated type constraint is well-formed
                 if assoc.assoc_type.is_empty() {
-                    report.errors.push(
-                        format!("Type {} has associated type constraint with empty type name", type_name)
-                    );
+                    report.errors.push(format!(
+                        "Type {} has associated type constraint with empty type name",
+                        type_name
+                    ));
                 }
                 if assoc.bound_to.is_empty() {
-                    report.errors.push(
-                        format!("Associated type constraint for {} has empty bound", assoc.assoc_type)
-                    );
+                    report.errors.push(format!(
+                        "Associated type constraint for {} has empty bound",
+                        assoc.assoc_type
+                    ));
                 }
-                
+
                 // Validate that associated type projections are valid
                 // For T::Item: Clone, we check that Item is a valid associated type name
                 if !self.is_valid_associated_type(&assoc.assoc_type) {
-                    report.errors.push(
-                        format!("Associated type '{}' is not a recognized associated type", assoc.assoc_type)
-                    );
+                    report.errors.push(format!(
+                        "Associated type '{}' is not a recognized associated type",
+                        assoc.assoc_type
+                    ));
                 }
-                
+
                 // Validate the projection structure (T::Item where T should be a type parameter or path)
                 if !self.is_valid_type_parameter(&assoc.type_name) {
-                    report.errors.push(
-                        format!("Associated type projection for '{}' uses invalid base type", assoc.type_name)
-                    );
+                    report.errors.push(format!(
+                        "Associated type projection for '{}' uses invalid base type",
+                        assoc.type_name
+                    ));
                 }
             }
-            
+
             // Validate lifetime constraints (NOW ENABLED - Fix #4)
             for lifetime in &clause.lifetime_constraints {
                 report.lifetime_constraint_count += 1;
-                
+
                 // Check that lifetime names are valid
                 if lifetime.lifetime.is_empty() {
-                    report.errors.push("Lifetime constraint with empty lifetime name".to_string());
+                    report
+                        .errors
+                        .push("Lifetime constraint with empty lifetime name".to_string());
                 } else if !lifetime.lifetime.starts_with('\'') {
-                    report.errors.push(
-                        format!("Lifetime '{}' should start with apostrophe", lifetime.lifetime)
-                    );
+                    report.errors.push(format!(
+                        "Lifetime '{}' should start with apostrophe",
+                        lifetime.lifetime
+                    ));
                 }
-                
+
                 // Validate lifetime outlives relationships
                 // 'a: 'b means 'a must outlive 'b (or be equal)
                 if let (Some(lower), Some(upper)) = (&lifetime.lower_bound, &lifetime.upper_bound) {
                     // Validate that we have reasonable lifetime names
                     if lower.is_empty() || upper.is_empty() {
-                        report.errors.push(
-                            format!("Lifetime outlives constraint for {} has empty bounds", lifetime.lifetime)
-                        );
+                        report.errors.push(format!(
+                            "Lifetime outlives constraint for {} has empty bounds",
+                            lifetime.lifetime
+                        ));
                     } else if !lower.starts_with('\'') || !upper.starts_with('\'') {
-                        report.errors.push(
-                            format!("Lifetime bounds for {} should start with apostrophe", lifetime.lifetime)
-                        );
+                        report.errors.push(format!(
+                            "Lifetime bounds for {} should start with apostrophe",
+                            lifetime.lifetime
+                        ));
                     } else {
                         // Validate that the lifetime ordering makes sense
                         // (lower_bound outlives upper_bound, so lower_bound >= upper_bound in terms of scope)
                         if lower == upper {
-                            report.errors.push(
-                                format!("Lifetime constraint {} should have different bounds", lifetime.lifetime)
-                            );
+                            report.errors.push(format!(
+                                "Lifetime constraint {} should have different bounds",
+                                lifetime.lifetime
+                            ));
                         }
                     }
                 }
@@ -373,12 +386,15 @@ impl WhereClauseAnalyzer {
 
         Ok(report)
     }
-    
+
     /// Check if a keyword is reserved in the trait namespace
     fn is_reserved_keyword(&self, name: &str) -> bool {
-        matches!(name, "Self" | "type" | "impl" | "trait" | "fn" | "let" | "mut" | "const")
+        matches!(
+            name,
+            "Self" | "type" | "impl" | "trait" | "fn" | "let" | "mut" | "const"
+        )
     }
-    
+
     /// Check if a type parameter name is valid
     fn is_valid_type_parameter(&self, name: &str) -> bool {
         // Type parameters are typically single uppercase letters or identifiers starting with uppercase
@@ -386,7 +402,7 @@ impl WhereClauseAnalyzer {
         if name.is_empty() {
             return false;
         }
-        
+
         let first_char = name.chars().next().unwrap();
         // Allow uppercase letters (type params), lowercase (in contexts like trait bounds), or numbers for special cases
         first_char.is_alphanumeric() && !first_char.is_numeric()
@@ -396,7 +412,11 @@ impl WhereClauseAnalyzer {
     pub fn generate_report(&self) -> WhereClauseAnalysisReport {
         WhereClauseAnalysisReport {
             total_constraints: self.constraints.len(),
-            total_bounds: self.constraints.values().map(|c| c.trait_bounds.len()).sum(),
+            total_bounds: self
+                .constraints
+                .values()
+                .map(|c| c.trait_bounds.len())
+                .sum(),
             total_assoc: self
                 .constraints
                 .values()
@@ -482,7 +502,10 @@ mod tests {
         let mut analyzer = create_test_analyzer();
         analyzer.register_constraint("T", "Clone").ok();
         analyzer.register_constraint("T", "Debug").ok();
-        assert_eq!(analyzer.get_trait_bounds("T"), Some(vec!["Clone".to_string(), "Debug".to_string()]));
+        assert_eq!(
+            analyzer.get_trait_bounds("T"),
+            Some(vec!["Clone".to_string(), "Debug".to_string()])
+        );
     }
 
     #[test]
@@ -555,125 +578,135 @@ mod tests {
 
     #[test]
     fn test_max_constraints() {
-       let config = WhereClauseConfig {
-           max_constraints_per_type: 2,
-           ..Default::default()
-       };
-       let mut analyzer = WhereClauseAnalyzer::new(config);
-       analyzer.register_constraint("T", "Clone").ok();
-       analyzer.register_constraint("T", "Debug").ok();
-       let result = analyzer.register_constraint("T", "Default");
-       assert!(result.is_err());
+        let config = WhereClauseConfig {
+            max_constraints_per_type: 2,
+            ..Default::default()
+        };
+        let mut analyzer = WhereClauseAnalyzer::new(config);
+        analyzer.register_constraint("T", "Clone").ok();
+        analyzer.register_constraint("T", "Debug").ok();
+        let result = analyzer.register_constraint("T", "Default");
+        assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_validate_associated_type_constraint() {
-       let mut analyzer = create_test_analyzer();
-       let result = analyzer.register_associated_type("T", "Item", "i32");
-       assert!(result.is_ok());
-       
-       let report = analyzer.validate_constraints().unwrap();
-       assert_eq!(report.assoc_constraint_count, 1);
-       assert!(report.errors.is_empty());
+        let mut analyzer = create_test_analyzer();
+        let result = analyzer.register_associated_type("T", "Item", "i32");
+        assert!(result.is_ok());
+
+        let report = analyzer.validate_constraints().unwrap();
+        assert_eq!(report.assoc_constraint_count, 1);
+        assert!(report.errors.is_empty());
     }
-    
+
     #[test]
     fn test_validate_empty_associated_type() {
-       let mut analyzer = create_test_analyzer();
-       let result = analyzer.register_associated_type("T", "", "i32");
-       assert!(result.is_err());
+        let mut analyzer = create_test_analyzer();
+        let result = analyzer.register_associated_type("T", "", "i32");
+        assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_validate_lifetime_constraint_valid() {
-       let mut analyzer = create_test_analyzer();
-       let result = analyzer.register_lifetime_constraint("'a", None, Some("'b"));
-       assert!(result.is_ok());
-       
-       let report = analyzer.validate_constraints().unwrap();
-       assert_eq!(report.lifetime_constraint_count, 1);
+        let mut analyzer = create_test_analyzer();
+        let result = analyzer.register_lifetime_constraint("'a", None, Some("'b"));
+        assert!(result.is_ok());
+
+        let report = analyzer.validate_constraints().unwrap();
+        assert_eq!(report.lifetime_constraint_count, 1);
     }
-    
+
     #[test]
     fn test_validate_lifetime_constraint_invalid_format() {
-       let mut analyzer = create_test_analyzer();
-       let result = analyzer.register_lifetime_constraint("a", None, Some("b"));
-       assert!(result.is_ok());  // Registration succeeds, but validation will catch it
-       
-       let report = analyzer.validate_constraints().unwrap();
-       assert!(!report.errors.is_empty());  // Should have validation errors
-       assert!(report.errors.iter().any(|e| e.contains("apostrophe")));
+        let mut analyzer = create_test_analyzer();
+        let result = analyzer.register_lifetime_constraint("a", None, Some("b"));
+        assert!(result.is_ok()); // Registration succeeds, but validation will catch it
+
+        let report = analyzer.validate_constraints().unwrap();
+        assert!(!report.errors.is_empty()); // Should have validation errors
+        assert!(report.errors.iter().any(|e| e.contains("apostrophe")));
     }
-    
+
     #[test]
     fn test_validate_lifetime_outlives_relationship() {
-       let mut analyzer = create_test_analyzer();
-       // Register with same bounds - should trigger error
-       analyzer.register_lifetime_constraint("'a", Some("'b"), Some("'b")).ok();
-       
-       let report = analyzer.validate_constraints().unwrap();
-       // Should error because lower_bound == upper_bound (both 'b)
-       assert!(report.errors.iter().any(|e| e.contains("different bounds")));
+        let mut analyzer = create_test_analyzer();
+        // Register with same bounds - should trigger error
+        analyzer
+            .register_lifetime_constraint("'a", Some("'b"), Some("'b"))
+            .ok();
+
+        let report = analyzer.validate_constraints().unwrap();
+        // Should error because lower_bound == upper_bound (both 'b)
+        assert!(report.errors.iter().any(|e| e.contains("different bounds")));
     }
-    
+
     #[test]
     fn test_validate_trait_bound_reserved_keyword() {
-       let mut analyzer = create_test_analyzer();
-       analyzer.register_constraint("T", "Clone").ok();
-       
-       // Try to add a reserved keyword as trait
-       analyzer.register_constraint("U", "impl").ok();
-       
-       let report = analyzer.validate_constraints().unwrap();
-       // Should have error for reserved keyword
-       assert!(report.errors.iter().any(|e| e.contains("reserved")));
+        let mut analyzer = create_test_analyzer();
+        analyzer.register_constraint("T", "Clone").ok();
+
+        // Try to add a reserved keyword as trait
+        analyzer.register_constraint("U", "impl").ok();
+
+        let report = analyzer.validate_constraints().unwrap();
+        // Should have error for reserved keyword
+        assert!(report.errors.iter().any(|e| e.contains("reserved")));
     }
-    
+
     #[test]
     fn test_validate_associated_type_recognized() {
-       let mut analyzer = create_test_analyzer();
-       
-       // Register valid associated types
-       analyzer.register_associated_type("T", "Item", "i32").ok();
-       analyzer.register_associated_type("T", "Output", "bool").ok();
-       analyzer.register_associated_type("T", "Target", "String").ok();
-       
-       let report = analyzer.validate_constraints().unwrap();
-       assert_eq!(report.assoc_constraint_count, 3);
-       assert!(report.errors.is_empty());
+        let mut analyzer = create_test_analyzer();
+
+        // Register valid associated types
+        analyzer.register_associated_type("T", "Item", "i32").ok();
+        analyzer
+            .register_associated_type("T", "Output", "bool")
+            .ok();
+        analyzer
+            .register_associated_type("T", "Target", "String")
+            .ok();
+
+        let report = analyzer.validate_constraints().unwrap();
+        assert_eq!(report.assoc_constraint_count, 3);
+        assert!(report.errors.is_empty());
     }
-    
+
     #[test]
     fn test_validate_complex_where_clause() {
-       let mut analyzer = create_test_analyzer();
-       
-       // Register multiple constraint types
-       analyzer.register_constraint("T", "Clone").ok();
-       analyzer.register_constraint("T", "Debug").ok();
-       analyzer.register_associated_type("T", "Item", "Display").ok();
-       analyzer.register_lifetime_constraint("'a", Some("'a"), Some("'b")).ok();
-       
-       let report = analyzer.validate_constraints().unwrap();
-       assert_eq!(report.constraint_count, 2);  // T and 'a
-       assert_eq!(report.trait_bound_count, 2);
-       assert_eq!(report.assoc_constraint_count, 1);
-       assert_eq!(report.lifetime_constraint_count, 1);
+        let mut analyzer = create_test_analyzer();
+
+        // Register multiple constraint types
+        analyzer.register_constraint("T", "Clone").ok();
+        analyzer.register_constraint("T", "Debug").ok();
+        analyzer
+            .register_associated_type("T", "Item", "Display")
+            .ok();
+        analyzer
+            .register_lifetime_constraint("'a", Some("'a"), Some("'b"))
+            .ok();
+
+        let report = analyzer.validate_constraints().unwrap();
+        assert_eq!(report.constraint_count, 2); // T and 'a
+        assert_eq!(report.trait_bound_count, 2);
+        assert_eq!(report.assoc_constraint_count, 1);
+        assert_eq!(report.lifetime_constraint_count, 1);
     }
-    
+
     #[test]
     fn test_is_valid_associated_type() {
         let analyzer = create_test_analyzer();
-        
+
         // Standard library associated types should be recognized
         assert!(analyzer.is_valid_associated_type("Item"));
         assert!(analyzer.is_valid_associated_type("Output"));
         assert!(analyzer.is_valid_associated_type("Target"));
         assert!(analyzer.is_valid_associated_type("Error"));
-        
+
         // Uppercase custom types should also be allowed
         assert!(analyzer.is_valid_associated_type("CustomType"));
-        
+
         // Lowercase shouldn't be allowed
         assert!(!analyzer.is_valid_associated_type("item"));
     }
-    }
+}

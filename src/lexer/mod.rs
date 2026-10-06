@@ -124,7 +124,7 @@ impl Lexer {
         if self.current_char() == Some('/') && self.peek_char(1) == Some('/') {
             self.advance(); // skip first /
             self.advance(); // skip second /
-            // Skip until newline
+                            // Skip until newline
             while let Some(ch) = self.current_char() {
                 if ch == '\n' {
                     self.advance();
@@ -137,7 +137,7 @@ impl Lexer {
         else if self.current_char() == Some('/') && self.peek_char(1) == Some('*') {
             self.advance(); // skip /
             self.advance(); // skip *
-            // Skip until */
+                            // Skip until */
             while !self.is_at_end() {
                 if self.current_char() == Some('*') && self.peek_char(1) == Some('/') {
                     self.advance(); // skip *
@@ -221,7 +221,10 @@ impl Lexer {
             if ch.is_ascii_digit() {
                 num_str.push(ch);
                 self.advance();
-            } else if ch == '.' && !is_float && self.peek_char(1).map_or(false, |c| c.is_ascii_digit()) {
+            } else if ch == '.'
+                && !is_float
+                && self.peek_char(1).map_or(false, |c| c.is_ascii_digit())
+            {
                 is_float = true;
                 num_str.push(ch);
                 self.advance();
@@ -236,19 +239,18 @@ impl Lexer {
         let suffix = self.read_numeric_suffix();
 
         if is_float {
-            let value = num_str.parse::<f64>()
+            let value = num_str
+                .parse::<f64>()
                 .map_err(|_| LexError::InvalidNumber(num_str))?;
             Ok(token::Token::Float(value, suffix))
         } else {
             // Try to parse as i64; if it fails, try u64 for large unsigned values
             match num_str.parse::<i64>() {
                 Ok(value) => Ok(token::Token::Integer(value, suffix)),
-                Err(_) => {
-                    match num_str.parse::<u64>() {
-                        Ok(value) => Ok(token::Token::Integer(value as i64, suffix)),
-                        Err(_) => Err(LexError::InvalidNumber(num_str))
-                    }
-                }
+                Err(_) => match num_str.parse::<u64>() {
+                    Ok(value) => Ok(token::Token::Integer(value as i64, suffix)),
+                    Err(_) => Err(LexError::InvalidNumber(num_str)),
+                },
             }
         }
     }
@@ -262,7 +264,7 @@ impl Lexer {
                     let start_pos = self.position;
                     let mut suffix = String::new();
                     suffix.push(ch);
-                    
+
                     while let Some(c) = self.current_char() {
                         if c.is_ascii_alphanumeric() || c == '_' {
                             suffix.push(c);
@@ -271,13 +273,12 @@ impl Lexer {
                             break;
                         }
                     }
-                    
+
                     let valid_suffixes = [
-                        "i8", "i16", "i32", "i64", "isize",
-                        "u8", "u16", "u32", "u64", "usize",
+                        "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
                         "f32", "f64",
                     ];
-                    
+
                     if valid_suffixes.contains(&suffix.as_str()) {
                         Some(suffix)
                     } else {
@@ -285,7 +286,7 @@ impl Lexer {
                         None
                     }
                 }
-                _ => None
+                _ => None,
             }
         } else {
             None
@@ -320,11 +321,26 @@ impl Lexer {
             } else if ch == '\\' {
                 self.advance();
                 match self.current_char() {
-                    Some('n') => { string.push('\n'); self.advance(); }
-                    Some('t') => { string.push('\t'); self.advance(); }
-                    Some('r') => { string.push('\r'); self.advance(); }
-                    Some('\\') => { string.push('\\'); self.advance(); }
-                    Some('"') => { string.push('"'); self.advance(); }
+                    Some('n') => {
+                        string.push('\n');
+                        self.advance();
+                    }
+                    Some('t') => {
+                        string.push('\t');
+                        self.advance();
+                    }
+                    Some('r') => {
+                        string.push('\r');
+                        self.advance();
+                    }
+                    Some('\\') => {
+                        string.push('\\');
+                        self.advance();
+                    }
+                    Some('"') => {
+                        string.push('"');
+                        self.advance();
+                    }
                     Some(ch) => {
                         string.push(ch);
                         self.advance();
@@ -350,7 +366,7 @@ impl Lexer {
                         // Check if this is actually a lifetime (no closing quote following)
                         // Lifetimes like 'a, 'static, '_ don't have a closing quote immediately after the identifier
                         // Character literals like 'a', 'z' have a closing quote
-                        
+
                         // Look ahead to check if there's a closing quote after the identifier
                         let mut pos = 2; // Skip the opening quote and first letter
                         while let Some(ch) = self.peek_char(pos) {
@@ -505,15 +521,33 @@ impl Lexer {
             } else if ch == '\\' {
                 self.advance();
                 match self.current_char() {
-                    Some('n') => { bytes.push(b'\n'); self.advance(); }
-                    Some('t') => { bytes.push(b'\t'); self.advance(); }
-                    Some('r') => { bytes.push(b'\r'); self.advance(); }
-                    Some('\\') => { bytes.push(b'\\'); self.advance(); }
-                    Some('"') => { bytes.push(b'"'); self.advance(); }
-                    Some('0') => { bytes.push(0u8); self.advance(); }
-                    Some(ch) if ch.is_ascii() => { 
-                        bytes.push(ch as u8); 
-                        self.advance(); 
+                    Some('n') => {
+                        bytes.push(b'\n');
+                        self.advance();
+                    }
+                    Some('t') => {
+                        bytes.push(b'\t');
+                        self.advance();
+                    }
+                    Some('r') => {
+                        bytes.push(b'\r');
+                        self.advance();
+                    }
+                    Some('\\') => {
+                        bytes.push(b'\\');
+                        self.advance();
+                    }
+                    Some('"') => {
+                        bytes.push(b'"');
+                        self.advance();
+                    }
+                    Some('0') => {
+                        bytes.push(0u8);
+                        self.advance();
+                    }
+                    Some(ch) if ch.is_ascii() => {
+                        bytes.push(ch as u8);
+                        self.advance();
                     }
                     _ => return Err(LexError::UnterminatedString),
                 }
@@ -594,7 +628,9 @@ impl Lexer {
             }
 
             // Check for comments
-            if self.current_char() == Some('/') && (self.peek_char(1) == Some('/') || self.peek_char(1) == Some('*')) {
+            if self.current_char() == Some('/')
+                && (self.peek_char(1) == Some('/') || self.peek_char(1) == Some('*'))
+            {
                 self.skip_comment();
                 continue;
             }

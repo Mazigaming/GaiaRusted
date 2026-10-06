@@ -33,9 +33,9 @@
 
 pub mod ast;
 
-use crate::lexer::token::{Token, Keyword};
-use std::fmt;
+use crate::lexer::token::{Keyword, Token};
 use std::cell::RefCell;
+use std::fmt;
 use std::io::Write;
 
 pub use ast::*;
@@ -47,9 +47,7 @@ thread_local! {
 
 /// Get the current visibility modifier that was parsed
 pub fn get_current_visibility() -> ast::Visibility {
-    CURRENT_VISIBILITY.with(|v| {
-        v.borrow().clone()
-    })
+    CURRENT_VISIBILITY.with(|v| v.borrow().clone())
 }
 
 /// Register the current visibility with the lowering module immediately
@@ -101,9 +99,9 @@ pub struct Parser {
 impl Parser {
     /// Create a new parser from tokens
     pub fn new(tokens: Vec<Token>) -> Self {
-        Parser { 
-            tokens, 
-            position: 0, 
+        Parser {
+            tokens,
+            position: 0,
             restrictions: Restrictions::None,
             errors: Vec::new(),
             error_recovery_enabled: true,
@@ -136,7 +134,10 @@ impl Parser {
 
         while !self.check(&Token::Eof) {
             let current = self.current();
-            if SYNC_TOKENS.iter().any(|t| std::mem::discriminant(t) == std::mem::discriminant(current)) {
+            if SYNC_TOKENS
+                .iter()
+                .any(|t| std::mem::discriminant(t) == std::mem::discriminant(current))
+            {
                 break;
             }
             self.advance();
@@ -144,7 +145,11 @@ impl Parser {
     }
 
     /// Helper to set restrictions for a scope and restore after
-    fn with_restrictions<T>(&mut self, restrictions: Restrictions, f: impl FnOnce(&mut Self) -> ParseResult<T>) -> ParseResult<T> {
+    fn with_restrictions<T>(
+        &mut self,
+        restrictions: Restrictions,
+        f: impl FnOnce(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<T> {
         let old = self.restrictions;
         self.restrictions = restrictions;
         let result = f(self);
@@ -161,7 +166,9 @@ impl Parser {
 
     /// Peek at next token
     fn peek(&self, offset: usize) -> &Token {
-        self.tokens.get(self.position + offset).unwrap_or(&Token::Eof)
+        self.tokens
+            .get(self.position + offset)
+            .unwrap_or(&Token::Eof)
     }
 
     /// Advance to next token and return the current one
@@ -179,14 +186,14 @@ impl Parser {
             // For Keyword tokens, compare the keyword variant specifically
             (Token::Keyword(kw1), Token::Keyword(kw2)) => kw1 == kw2,
             // For other tokens, compare discriminants
-            _ => std::mem::discriminant(self.current()) == std::mem::discriminant(token)
+            _ => std::mem::discriminant(self.current()) == std::mem::discriminant(token),
         }
     }
 
     /// Consume a specific token or error
     pub fn consume(&mut self, expected: &str) -> ParseResult<Token> {
         let token = self.current().clone();
-        
+
         match self.current() {
             Token::Semicolon if expected == ";" => {
                 self.advance();
@@ -344,13 +351,14 @@ impl Parser {
     }
 
     fn is_block_like_expression(&self, expr: &Expression) -> bool {
-        matches!(expr,
-            Expression::If { .. } |
-            Expression::Match { .. } |
-            Expression::Loop(_) |
-            Expression::While { .. } |
-            Expression::Block(_) |
-            Expression::For { .. }
+        matches!(
+            expr,
+            Expression::If { .. }
+                | Expression::Match { .. }
+                | Expression::Loop(_)
+                | Expression::While { .. }
+                | Expression::Block(_)
+                | Expression::For { .. }
         )
     }
 
@@ -375,11 +383,11 @@ impl Parser {
             self.advance(); // consume #
             if self.check(&Token::LeftBracket) {
                 self.advance(); // consume [
-                // Parse attribute contents
+                                // Parse attribute contents
                 let attr_name = if self.current() != &Token::RightBracket {
                     let name = self.expect_identifier()?;
                     let mut args = Vec::new();
-                    
+
                     // Parse attribute arguments if present: #[derive(Clone, Debug)]
                     if self.check(&Token::LeftParen) {
                         self.advance(); // consume (
@@ -398,18 +406,18 @@ impl Parser {
                             self.advance(); // consume )
                         }
                     }
-                    
+
                     attributes.push(Attribute {
                         name,
                         args,
                         is_macro: true,
                     });
-                    
+
                     Some(())
                 } else {
                     None
                 };
-                
+
                 // Skip until we find the matching ]
                 if attr_name.is_some() {
                     if self.check(&Token::RightBracket) {
@@ -435,11 +443,11 @@ impl Parser {
         // Handle visibility modifiers (pub, pub(crate), pub(super), pub(in path), etc.)
         let visibility = if self.check(&Token::Keyword(Keyword::Pub)) {
             self.advance();
-            
+
             // Check for visibility modifier: pub(...)
             if self.check(&Token::LeftParen) {
                 self.advance(); // consume (
-                
+
                 // Parse the visibility level
                 if let Token::Keyword(Keyword::Crate) = self.current() {
                     self.advance();
@@ -491,26 +499,20 @@ impl Parser {
             ast::Visibility::Private
         };
 
-        // Handle extern functions (skip the ABI string)
-        if self.check(&Token::Keyword(Keyword::Extern)) {
-            self.advance();
-            // Skip the ABI string (e.g., "C")
-            if let Token::String(_) = self.current() {
-                self.advance();
-            }
-        }
-
         // Convert advanced visibility to bool for now
         // Full visibility info stored in thread-local for lowering phase
         let is_pub = !matches!(visibility, ast::Visibility::Private);
-        
+
         // Store the full visibility info for the lowering phase to use
         CURRENT_VISIBILITY.with(|v| {
             *v.borrow_mut() = visibility.clone();
         });
-        
+
         // DEBUG: Log what visibility was parsed
-        let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/visibility_debug.log")
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/visibility_debug.log")
             .and_then(|mut f| writeln!(f, "[PARSE] Parsed visibility: {:?}", visibility));
 
         // Check for unsafe keyword at item level (unsafe fn, unsafe impl, unsafe extern)
@@ -521,13 +523,39 @@ impl Parser {
             false
         };
 
+        // Check for async keyword at item level (async fn or async unsafe fn or unsafe async fn)
+        // Handle both "async unsafe fn" and "unsafe async fn" orderings
+        let mut is_item_async = if self.check(&Token::Keyword(Keyword::Async)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // After async, check again for unsafe (handles "async unsafe fn")
+        let is_item_unsafe_after_async =
+            if is_item_async && self.check(&Token::Keyword(Keyword::Unsafe)) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
+        // Combine unsafe flags
+        let final_is_unsafe = is_item_unsafe || is_item_unsafe_after_async;
+
         match self.current() {
             Token::Keyword(Keyword::Fn) => {
-                // PHASE 4.1: Handle unsafe fn
+                // PHASE 4.1: Handle unsafe fn and/or async fn
                 let mut func_item = self.parse_function(is_pub)?;
-                if is_item_unsafe {
+                if final_is_unsafe {
                     if let Item::Function { ref mut is_unsafe, .. } = func_item {
                         *is_unsafe = true;
+                    }
+                }
+                if is_item_async {
+                    if let Item::Function { ref mut is_async, .. } = func_item {
+                        *is_async = true;
                     }
                 }
                 Ok(func_item)
@@ -566,7 +594,9 @@ impl Parser {
                 self.advance();
                 s
             } else {
-                return Err(ParseError::InvalidSyntax("Expected ABI string after 'extern'".to_string()));
+                return Err(ParseError::InvalidSyntax(
+                    "Expected ABI string after 'extern'".to_string(),
+                ));
             };
             Some(abi_str)
         } else {
@@ -610,7 +640,7 @@ impl Parser {
         // Skip where clause if present (consume but ignore for now)
         if self.check(&Token::Keyword(Keyword::Where)) {
             self.advance();
-            
+
             // Skip until we find {
             while !self.check(&Token::LeftBrace) && !self.check(&Token::Eof) {
                 self.advance();
@@ -618,7 +648,7 @@ impl Parser {
         }
 
         let body = self.parse_block()?;
-        
+
         // Register visibility immediately while we still have it
         register_current_visibility_to_lowering(&name);
 
@@ -660,7 +690,7 @@ impl Parser {
             } else {
                 self.expect_identifier()?
             };
-            
+
             if self.check(&Token::Colon) {
                 self.consume(":")?;
                 let mut ty = self.parse_type()?;
@@ -684,9 +714,10 @@ impl Parser {
                 };
                 params.push(Parameter { name, mutable, ty });
             } else {
-                return Err(ParseError::InvalidSyntax(
-                    format!("Parameter {} needs type annotation", name)
-                ));
+                return Err(ParseError::InvalidSyntax(format!(
+                    "Parameter {} needs type annotation",
+                    name
+                )));
             }
 
             if !self.check(&Token::RightParen) {
@@ -766,16 +797,16 @@ impl Parser {
             match self.current() {
                 Token::Identifier(_) => {
                     let param_name = self.expect_identifier()?;
-                    
+
                     // Consume : if present
                     if !self.consume(":").is_ok() {
                         // If we can't consume :, maybe we're done with where clause
                         break;
                     }
-                    
+
                     let mut bounds = Vec::new();
-                    let trait_bounds = Vec::new();  // TODO: Populate with associated type bounds later
-                    
+                    let trait_bounds = Vec::new(); // TODO: Populate with associated type bounds later
+
                     loop {
                         if let Token::Identifier(bound) = self.current() {
                             bounds.push(bound.clone());
@@ -791,8 +822,8 @@ impl Parser {
                         }
                     }
 
-                    constraints.push(WhereConstraint { 
-                        param_name, 
+                    constraints.push(WhereConstraint {
+                        param_name,
                         bounds,
                         trait_bounds,
                     });
@@ -819,50 +850,56 @@ impl Parser {
             Token::Keyword(Keyword::Impl) => {
                 // Parse impl Trait syntax: impl Trait, impl Trait1 + Trait2
                 self.advance();
-                
+
                 let mut bounds = Vec::new();
-                
+
                 // Parse first trait bound
                 if let Token::Identifier(trait_name) = self.current() {
                     bounds.push(trait_name.clone());
                     self.advance();
                 } else {
-                    return Err(ParseError::InvalidSyntax("Expected trait name after 'impl'".to_string()));
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected trait name after 'impl'".to_string(),
+                    ));
                 }
-                
+
                 // Parse additional trait bounds
                 while self.check(&Token::Plus) {
                     self.advance();
-                    
+
                     if let Token::Identifier(trait_name) = self.current() {
                         bounds.push(trait_name.clone());
                         self.advance();
                     } else {
-                        return Err(ParseError::InvalidSyntax("Expected trait name after '+'".to_string()));
+                        return Err(ParseError::InvalidSyntax(
+                            "Expected trait name after '+'".to_string(),
+                        ));
                     }
                 }
-                
+
                 Ok(Type::ImplTrait { bounds })
             }
             Token::Keyword(Keyword::Dyn) => {
                 // Parse dyn Trait syntax: dyn Trait, dyn Trait + OtherTrait, dyn Trait + 'a
                 self.advance();
-                
+
                 let mut bounds = Vec::new();
                 let mut lifetime = None;
-                
+
                 // Parse first trait bound
                 if let Token::Identifier(trait_name) = self.current() {
                     bounds.push(trait_name.clone());
                     self.advance();
                 } else {
-                    return Err(ParseError::InvalidSyntax("Expected trait name after 'dyn'".to_string()));
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected trait name after 'dyn'".to_string(),
+                    ));
                 }
-                
+
                 // Parse additional bounds and lifetime
                 while self.check(&Token::Plus) {
                     self.advance();
-                    
+
                     // Check for lifetime
                     if let Token::Lifetime(lt) = self.current() {
                         lifetime = Some(lt.clone());
@@ -872,16 +909,18 @@ impl Parser {
                         bounds.push(trait_name.clone());
                         self.advance();
                     } else {
-                        return Err(ParseError::InvalidSyntax("Expected trait name or lifetime after '+'".to_string()));
+                        return Err(ParseError::InvalidSyntax(
+                            "Expected trait name or lifetime after '+'".to_string(),
+                        ));
                     }
                 }
-                
+
                 Ok(Type::TraitObject { bounds, lifetime })
             }
             Token::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
-                
+
                 // Check for generic types
                 if self.check(&Token::Less) {
                     self.advance();
@@ -902,7 +941,7 @@ impl Parser {
             }
             Token::Ampersand => {
                 self.advance();
-                
+
                 // Check for lifetime annotation: &'a T or &'a mut T
                 let lifetime = if let Token::Lifetime(lt) = self.current() {
                     let name = lt.clone();
@@ -911,7 +950,7 @@ impl Parser {
                 } else {
                     None
                 };
-                
+
                 let mutable = if self.check(&Token::Keyword(Keyword::Mut)) {
                     self.advance();
                     true
@@ -919,7 +958,11 @@ impl Parser {
                     false
                 };
                 let inner = Box::new(self.parse_type()?);
-                Ok(Type::Reference { lifetime, mutable, inner })
+                Ok(Type::Reference {
+                    lifetime,
+                    mutable,
+                    inner,
+                })
             }
             Token::LeftParen => {
                 self.advance();
@@ -936,7 +979,7 @@ impl Parser {
             Token::LeftBracket => {
                 self.advance();
                 let element = Box::new(self.parse_type()?);
-                
+
                 // Check for sized array [T; N]
                 let size = if self.check(&Token::Semicolon) {
                     self.advance();
@@ -950,12 +993,14 @@ impl Parser {
                         self.advance();
                         Some(Box::new(Expression::Variable(size_name)))
                     } else {
-                        return Err(ParseError::InvalidSyntax("Expected array size (integer or identifier)".to_string()));
+                        return Err(ParseError::InvalidSyntax(
+                            "Expected array size (integer or identifier)".to_string(),
+                        ));
                     }
                 } else {
                     None
                 };
-                
+
                 self.consume("]")?;
                 Ok(Type::Array { element, size })
             }
@@ -968,7 +1013,9 @@ impl Parser {
                     self.advance();
                     false
                 } else {
-                    return Err(ParseError::InvalidSyntax("Raw pointer must be followed by 'const' or 'mut'".to_string()));
+                    return Err(ParseError::InvalidSyntax(
+                        "Raw pointer must be followed by 'const' or 'mut'".to_string(),
+                    ));
                 };
                 let inner = Box::new(self.parse_type()?);
                 Ok(Type::Pointer { mutable, inner })
@@ -978,7 +1025,11 @@ impl Parser {
     }
 
     /// Parse a struct definition
-    fn parse_struct_with_attributes(&mut self, attributes: Vec<ast::Attribute>, is_pub: bool) -> ParseResult<Item> {
+    fn parse_struct_with_attributes(
+        &mut self,
+        attributes: Vec<ast::Attribute>,
+        is_pub: bool,
+    ) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Struct)?;
         let name = self.expect_identifier()?;
 
@@ -1005,20 +1056,26 @@ impl Parser {
                 });
 
                 if !self.check(&Token::RightBrace) {
-                    eprintln!("DEBUG match_expr: About to consume comma, current token = {:?}", self.current());
+                    eprintln!(
+                        "DEBUG match_expr: About to consume comma, current token = {:?}",
+                        self.current()
+                    );
                     self.consume(",")?;
-                    eprintln!("DEBUG match_expr: Consumed comma, current token = {:?}", self.current());
+                    eprintln!(
+                        "DEBUG match_expr: Consumed comma, current token = {:?}",
+                        self.current()
+                    );
                 }
-                }
+            }
 
             self.consume("}")?;
         }
-        
+
         // Register visibility immediately
         register_current_visibility_to_lowering(&name);
 
-        Ok(Item::Struct { 
-            name, 
+        Ok(Item::Struct {
+            name,
             generics,
             fields,
             is_pub,
@@ -1026,7 +1083,7 @@ impl Parser {
             where_clause,
         })
     }
-    
+
     fn parse_struct(&mut self) -> ParseResult<Item> {
         self.parse_struct_with_attributes(Vec::new(), false)
     }
@@ -1057,16 +1114,17 @@ impl Parser {
                 statements.push(self.parse_while_statement()?);
             } else if self.check(&Token::Keyword(Keyword::If)) {
                 statements.push(self.parse_if_statement()?);
-            } else if matches!(self.current(),
-                Token::Keyword(Keyword::Fn) |
-                Token::Keyword(Keyword::Struct) |
-                Token::Keyword(Keyword::Enum) |
-                Token::Keyword(Keyword::Trait) |
-                Token::Keyword(Keyword::Impl) |
-                Token::Keyword(Keyword::Mod) |
-                Token::Keyword(Keyword::Use) |
-                Token::Keyword(Keyword::Const) |
-                Token::Keyword(Keyword::Static)
+            } else if matches!(
+                self.current(),
+                Token::Keyword(Keyword::Fn)
+                    | Token::Keyword(Keyword::Struct)
+                    | Token::Keyword(Keyword::Enum)
+                    | Token::Keyword(Keyword::Trait)
+                    | Token::Keyword(Keyword::Impl)
+                    | Token::Keyword(Keyword::Mod)
+                    | Token::Keyword(Keyword::Use)
+                    | Token::Keyword(Keyword::Const)
+                    | Token::Keyword(Keyword::Static)
             ) {
                 let item = self.parse_item()?;
                 statements.push(Statement::Item(Box::new(item)));
@@ -1082,24 +1140,25 @@ impl Parser {
                 } else if self.is_block_like_expression(&expr) {
                     statements.push(Statement::Expression(expr));
                 } else {
-                    return Err(ParseError::InvalidSyntax(
-                        "Expected ';' or '}'".to_string(),
-                    ));
+                    return Err(ParseError::InvalidSyntax("Expected ';' or '}'".to_string()));
                 }
             }
         }
 
         self.consume("}")?;
 
-        Ok(Block { statements, expression })
+        Ok(Block {
+            statements,
+            expression,
+        })
     }
 
     /// Parse a let statement: let name: type = expr;
     fn parse_let_statement(&mut self) -> ParseResult<Statement> {
         self.expect_keyword(Keyword::Let)?;
-        
+
         let pattern = self.parse_pattern()?;
-        
+
         let (name, mutable) = match &pattern {
             Pattern::Identifier(n) => (n.clone(), false),
             Pattern::MutableBinding(n) => (n.clone(), true),
@@ -1147,63 +1206,71 @@ impl Parser {
         self.expect_keyword(Keyword::For)?;
         let var = self.expect_identifier()?;
         self.expect_keyword(Keyword::In)?;
-        
+
         // Parse the iterator expression with NO_STRUCT_LITERAL restriction
         let iter = self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
             parser.parse_expression()
         })?;
-        
+
         let body = self.parse_block()?;
-        
-        Ok(Statement::For { var, iter: Box::new(iter), body })
+
+        Ok(Statement::For {
+            var,
+            iter: Box::new(iter),
+            body,
+        })
     }
 
     /// Parse a while statement: `while condition { ... }`
     fn parse_while_statement(&mut self) -> ParseResult<Statement> {
         self.expect_keyword(Keyword::While)?;
-        let condition = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
-            parser.parse_expression()
-        })?);
+        let condition = Box::new(
+            self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+                parser.parse_expression()
+            })?,
+        );
         let body = self.parse_block()?;
-        
+
         Ok(Statement::While { condition, body })
     }
 
     /// Parse an if statement: `if condition { ... } else { ... }`
     fn parse_if_statement(&mut self) -> ParseResult<Statement> {
         self.expect_keyword(Keyword::If)?;
-        
+
         // Check for 'if let' pattern
         let condition = if self.check(&Token::Keyword(Keyword::Let)) {
             self.advance(); // consume 'let'
-            // Skip pattern: e.g., "Some(val)" or "Ok(x)"
+                            // Skip pattern: e.g., "Some(val)" or "Ok(x)"
             let _pattern_str = self.expect_identifier()?;
-            
+
             if self.check(&Token::LeftParen) {
                 self.advance(); // consume '('
                 let _inner_pattern = self.expect_identifier()?;
                 self.consume(")")?;
             }
-            
+
             // Expect '=' after pattern
             self.consume("=")?;
-            
+
             // Parse the expression being matched
             let _expr = self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
                 parser.parse_expression()
             })?;
-            
+
             // For now, just use 'true' as the condition
             // A full implementation would need to properly handle pattern binding and matching
             Box::new(Expression::Bool(true))
         } else {
-            Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
-                parser.parse_expression()
-            })?)
+            Box::new(
+                self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+                    parser.parse_expression()
+                })?,
+            )
         };
-        
+
         let then_body = self.parse_block()?;
-        
+
         let else_body = if self.check(&Token::Keyword(Keyword::Else)) {
             self.advance();
             if self.check(&Token::Keyword(Keyword::If)) {
@@ -1221,8 +1288,12 @@ impl Parser {
         } else {
             None
         };
-        
-        Ok(Statement::If { condition, then_body, else_body })
+
+        Ok(Statement::If {
+            condition,
+            then_body,
+            else_body,
+        })
     }
 
     // ===== Expression Parsing =====
@@ -1301,7 +1372,6 @@ impl Parser {
 
         Ok(expr)
     }
-
 
     /// Parse bitwise OR: expr | expr
     fn parse_bitwise_or(&mut self) -> ParseResult<Expression> {
@@ -1506,7 +1576,11 @@ impl Parser {
                 };
                 let operand = Box::new(self.parse_unary()?);
                 Ok(Expression::Unary {
-                    op: if is_mut { UnaryOp::MutableReference } else { UnaryOp::Reference },
+                    op: if is_mut {
+                        UnaryOp::MutableReference
+                    } else {
+                        UnaryOp::Reference
+                    },
                     operand,
                 })
             }
@@ -1517,7 +1591,7 @@ impl Parser {
     /// Parse range expressions: a..b, a..=b, a.., ..b
     fn parse_range(&mut self) -> ParseResult<Expression> {
         // eprintln!("[DEBUG] parse_range: START, current token={:?}, restriction={:?}", self.current(), self.restrictions);
-        
+
         // Check for range starting with .. (e.g., ..5, ..=10)
         if self.check(&Token::DotDotEqual) {
             // ..= with optional end
@@ -1563,7 +1637,7 @@ impl Parser {
                 });
             }
         }
-        
+
         let mut expr = self.parse_postfix()?;
         // eprintln!("[DEBUG] parse_range: After postfix, current token={:?}, expr type parsed", self.current());
 
@@ -1663,23 +1737,29 @@ impl Parser {
 
     /// Check if current token is an expression terminator
     fn is_expression_terminator(&self) -> bool {
-        matches!(self.current(),
-            Token::Semicolon | Token::RightBrace | Token::RightParen |
-            Token::Comma | Token::LeftBrace | Token::FatArrow |
-            Token::RightBracket
+        matches!(
+            self.current(),
+            Token::Semicolon
+                | Token::RightBrace
+                | Token::RightParen
+                | Token::Comma
+                | Token::LeftBrace
+                | Token::FatArrow
+                | Token::RightBracket
         )
     }
 
     /// Check if current token is an item keyword (fn, struct, enum, trait, impl, mod, use)
     fn is_item_keyword(&self) -> bool {
-        matches!(self.current(),
-            Token::Keyword(Keyword::Fn) |
-            Token::Keyword(Keyword::Struct) |
-            Token::Keyword(Keyword::Enum) |
-            Token::Keyword(Keyword::Trait) |
-            Token::Keyword(Keyword::Impl) |
-            Token::Keyword(Keyword::Mod) |
-            Token::Keyword(Keyword::Use)
+        matches!(
+            self.current(),
+            Token::Keyword(Keyword::Fn)
+                | Token::Keyword(Keyword::Struct)
+                | Token::Keyword(Keyword::Enum)
+                | Token::Keyword(Keyword::Trait)
+                | Token::Keyword(Keyword::Impl)
+                | Token::Keyword(Keyword::Mod)
+                | Token::Keyword(Keyword::Use)
         )
     }
 
@@ -1691,11 +1771,15 @@ impl Parser {
             match self.current() {
                 Token::LeftParen => {
                     // Handle function calls on Path expressions like `Point::new(5, 10)`
-                    if let Expression::Path { segments, is_absolute } = expr {
+                    if let Expression::Path {
+                        segments,
+                        is_absolute,
+                    } = expr
+                    {
                         self.advance();
                         let args = self.parse_arguments()?;
                         self.consume(")")?;
-                        
+
                         // Convert path to function call
                         // For Type::method, use the full path as context
                         if segments.len() > 1 {
@@ -1710,9 +1794,9 @@ impl Parser {
                             };
                         } else {
                             // Simple function call
-                            expr = Expression::FunctionCall { 
-                                name: segments[0].clone(), 
-                                args 
+                            expr = Expression::FunctionCall {
+                                name: segments[0].clone(),
+                                args,
                             };
                         }
                     } else {
@@ -1723,30 +1807,39 @@ impl Parser {
                 }
                 Token::Dot => {
                     self.advance();
-                    let field_or_method = match self.current() {
-                        Token::Integer(n, _) => {
-                            let n = *n;
-                            self.advance();
-                            n.to_string()
-                        }
-                        _ => self.expect_field_name()?
-                    };
-                    
-                    if self.check(&Token::LeftParen) {
+
+                    // Check for .await syntax (postfix await expression)
+                    if self.check(&Token::Keyword(Keyword::Await)) {
                         self.advance();
-                        let args = self.parse_arguments()?;
-                        self.consume(")")?;
-                        expr = Expression::MethodCall {
-                            receiver: Box::new(expr),
-                            method: field_or_method,
-                            type_args: Vec::new(),
-                            args,
+                        expr = Expression::Await {
+                            value: Box::new(expr),
                         };
                     } else {
-                        expr = Expression::FieldAccess {
-                            object: Box::new(expr),
-                            field: field_or_method,
+                        let field_or_method = match self.current() {
+                            Token::Integer(n, _) => {
+                                let n = *n;
+                                self.advance();
+                                n.to_string()
+                            }
+                            _ => self.expect_field_name()?,
                         };
+
+                        if self.check(&Token::LeftParen) {
+                            self.advance();
+                            let args = self.parse_arguments()?;
+                            self.consume(")")?;
+                            expr = Expression::MethodCall {
+                                receiver: Box::new(expr),
+                                method: field_or_method,
+                                type_args: Vec::new(),
+                                args,
+                            };
+                        } else {
+                            expr = Expression::FieldAccess {
+                                object: Box::new(expr),
+                                field: field_or_method,
+                            };
+                        }
                     }
                 }
                 Token::LeftBracket => {
@@ -1761,6 +1854,12 @@ impl Parser {
                 Token::Question => {
                     self.advance();
                     expr = Expression::Try {
+                        value: Box::new(expr),
+                    };
+                }
+                Token::Keyword(Keyword::Await) => {
+                    self.advance();
+                    expr = Expression::Await {
                         value: Box::new(expr),
                     };
                 }
@@ -1821,19 +1920,25 @@ impl Parser {
                         self.advance();
                         let args = self.parse_arguments()?;
                         self.consume(")")?;
-                        Ok(Expression::FunctionCall { name: macro_name, args })
+                        Ok(Expression::FunctionCall {
+                            name: macro_name,
+                            args,
+                        })
                     } else if self.check(&Token::LeftBracket) {
                         // Handle bracket-style macros like vec![1, 2, 3]
                         self.advance();
                         let elements = self.parse_bracket_contents()?;
                         self.consume("]")?;
-                        
+
                         // Special case: vec! macro gets its own expression type
                         if macro_name == "vec" {
                             Ok(Expression::VecMacro { elements })
                         } else {
                             // Other bracket macros treated as function calls (for now)
-                            Ok(Expression::FunctionCall { name: macro_name, args: elements })
+                            Ok(Expression::FunctionCall {
+                                name: macro_name,
+                                args: elements,
+                            })
                         }
                     } else {
                         return Err(ParseError::InvalidSyntax(
@@ -1847,17 +1952,22 @@ impl Parser {
                     self.consume(")")?;
                     // For now, join path with :: to create a qualified name
                     let func_name = path.join("::");
-                    Ok(Expression::FunctionCall { name: func_name, args })
-                } else if self.check(&Token::LeftBrace) && matches!(self.restrictions, Restrictions::None) {
+                    Ok(Expression::FunctionCall {
+                        name: func_name,
+                        args,
+                    })
+                } else if self.check(&Token::LeftBrace)
+                    && matches!(self.restrictions, Restrictions::None)
+                {
                     // Struct literal or Enum struct literal
                     // Struct literal: Name { field: value, ... } (path.len() == 1)
                     // Enum struct literal: EnumName::VariantName { field: value, ... } (path.len() == 2)
                     self.advance();
                     let mut fields = Vec::new();
-                    
+
                     while !self.check(&Token::RightBrace) {
                         let field_name = self.expect_identifier()?;
-                        
+
                         // Support shorthand field syntax: `field` is equivalent to `field: field`
                         let field_value = if self.check(&Token::Colon) {
                             self.advance();
@@ -1866,16 +1976,16 @@ impl Parser {
                             // Shorthand: field name only, expands to field: field
                             Expression::Variable(field_name.clone())
                         };
-                        
+
                         fields.push((field_name, field_value));
-                        
+
                         if !self.check(&Token::RightBrace) {
                             self.consume(",")?;
                         }
                     }
-                    
+
                     self.consume("}")?;
-                    
+
                     if path.len() == 1 {
                         Ok(Expression::StructLiteral {
                             struct_name: path[0].clone(),
@@ -1903,20 +2013,20 @@ impl Parser {
             }
             Token::LeftParen => {
                 self.advance();
-                
+
                 // Check for empty tuple
                 if self.check(&Token::RightParen) {
                     self.advance();
                     return Ok(Expression::Tuple(Vec::new()));
                 }
-                
+
                 let first = self.parse_expression()?;
-                
+
                 // Check for tuple
                 if self.check(&Token::Comma) {
                     self.advance();
                     let mut elements = vec![first];
-                    
+
                     // Allow trailing comma in tuples
                     if !self.check(&Token::RightParen) {
                         loop {
@@ -1930,7 +2040,7 @@ impl Parser {
                             }
                         }
                     }
-                    
+
                     self.consume(")")?;
                     Ok(Expression::Tuple(elements))
                 } else {
@@ -1948,6 +2058,7 @@ impl Parser {
             Token::Keyword(Keyword::While) => self.parse_while_expression(),
             Token::Keyword(Keyword::For) => self.parse_for_loop(),
             Token::Keyword(Keyword::Unsafe) => self.parse_unsafe_block(),
+            Token::Keyword(Keyword::Async) => self.parse_async_block(),
             Token::Keyword(Keyword::Self_) => {
                 self.advance();
                 Ok(Expression::Variable("self".to_string()))
@@ -1956,7 +2067,7 @@ impl Parser {
                 // Handle crate:: paths like crate::math::add
                 let mut path = vec!["crate".to_string()];
                 self.advance();
-                
+
                 // Expect :: after crate
                 if !self.check(&Token::DoubleColon) {
                     // Just "crate" by itself is not valid in expression context
@@ -1965,21 +2076,21 @@ impl Parser {
                     ));
                 }
                 self.advance();
-                
+
                 // Parse the rest of the path
                 loop {
-                   path.push(self.expect_identifier()?);
-                   if !self.check(&Token::DoubleColon) {
-                       break;
-                   }
-                   self.advance();
-               }
-               
-               // Return a path that will be handled by postfix parser for calls
-               Ok(Expression::Path {
-                   segments: path,
-                   is_absolute: true,
-               })
+                    path.push(self.expect_identifier()?);
+                    if !self.check(&Token::DoubleColon) {
+                        break;
+                    }
+                    self.advance();
+                }
+
+                // Return a path that will be handled by postfix parser for calls
+                Ok(Expression::Path {
+                    segments: path,
+                    is_absolute: true,
+                })
             }
             Token::Pipe | Token::OrOr => self.parse_closure(),
             Token::LeftBracket => self.parse_array(),
@@ -2022,9 +2133,11 @@ impl Parser {
     /// Parse if expression
     fn parse_if_expression(&mut self) -> ParseResult<Expression> {
         self.expect_keyword(Keyword::If)?;
-        let condition = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
-            parser.parse_expression()
-        })?);
+        let condition = Box::new(
+            self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+                parser.parse_expression()
+            })?,
+        );
         let then_body = self.parse_block()?;
 
         let else_body = if self.check(&Token::Keyword(Keyword::Else)) {
@@ -2049,10 +2162,11 @@ impl Parser {
     /// Parse match expression
     fn parse_match_expression(&mut self) -> ParseResult<Expression> {
         self.expect_keyword(Keyword::Match)?;
-        let scrutinee = Box::new(self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
-            parser.parse_expression()
-        })?);
-
+        let scrutinee = Box::new(
+            self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
+                parser.parse_expression()
+            })?,
+        );
 
         self.consume("{")?;
         let mut arms = Vec::new();
@@ -2068,11 +2182,15 @@ impl Parser {
             self.consume("=>")?;
             let body = self.parse_expression()?;
 
-            arms.push(MatchArm { pattern, guard, body });
+            arms.push(MatchArm {
+                pattern,
+                guard,
+                body,
+            });
 
-             if !self.check(&Token::RightBrace) && self.check(&Token::Comma) {
-                 self.consume(",")?;
-             }
+            if !self.check(&Token::RightBrace) && self.check(&Token::Comma) {
+                self.consume(",")?;
+            }
         }
 
         self.consume("}")?;
@@ -2091,9 +2209,10 @@ impl Parser {
                 while !self.check(&Token::RightBracket) {
                     if self.check(&Token::DotDot) {
                         self.advance();
-                        let rest_ident = if matches!(self.current(), Token::Identifier(_)) && 
-                                           !self.check(&Token::RightBracket) &&
-                                           !self.check(&Token::Comma) {
+                        let rest_ident = if matches!(self.current(), Token::Identifier(_))
+                            && !self.check(&Token::RightBracket)
+                            && !self.check(&Token::Comma)
+                        {
                             Some(Box::new(Pattern::Identifier(self.expect_identifier()?)))
                         } else {
                             Some(Box::new(Pattern::Wildcard))
@@ -2109,19 +2228,22 @@ impl Parser {
                 }
 
                 self.consume("]")?;
-                Pattern::Slice { patterns, rest: rest_pattern }
+                Pattern::Slice {
+                    patterns,
+                    rest: rest_pattern,
+                }
             }
             Token::LeftParen => {
                 self.advance();
                 let mut patterns = Vec::new();
-                
+
                 while !self.check(&Token::RightParen) {
                     patterns.push(self.parse_pattern()?);
                     if !self.check(&Token::RightParen) {
                         self.consume(",")?;
                     }
                 }
-                
+
                 self.consume(")")?;
                 Pattern::Tuple(patterns)
             }
@@ -2142,7 +2264,7 @@ impl Parser {
                         let next_name = self.expect_identifier()?;
                         path.push(next_name);
                     }
-                    
+
                     let inner_pattern = if self.check(&Token::LeftParen) {
                         self.advance();
                         let inner = if self.check(&Token::RightParen) {
@@ -2168,7 +2290,7 @@ impl Parser {
                     } else {
                         None
                     };
-                    
+
                     Pattern::EnumVariant {
                         path,
                         data: inner_pattern,
@@ -2222,25 +2344,33 @@ impl Parser {
             }
             _ => return Err(ParseError::InvalidSyntax("Expected pattern".to_string())),
         };
-        
+
         if self.check(&Token::DotDot) || self.check(&Token::DotDotEqual) {
             let inclusive = self.check(&Token::DotDotEqual);
             self.advance();
-            
+
             let end_expr = match self.current() {
                 Token::Integer(val, _) => {
                     let val = *val;
                     self.advance();
                     Expression::Integer(val)
                 }
-                _ => return Err(ParseError::InvalidSyntax("Expected integer after range operator".to_string())),
+                _ => {
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected integer after range operator".to_string(),
+                    ))
+                }
             };
-            
+
             let start_expr = match pattern {
                 Pattern::Literal(expr) => expr,
-                _ => return Err(ParseError::InvalidSyntax("Range patterns must start with a literal".to_string())),
+                _ => {
+                    return Err(ParseError::InvalidSyntax(
+                        "Range patterns must start with a literal".to_string(),
+                    ))
+                }
             };
-            
+
             Ok(Pattern::Range {
                 start: Box::new(start_expr),
                 end: Box::new(end_expr),
@@ -2273,6 +2403,22 @@ impl Parser {
         Ok(Expression::UnsafeBlock(body))
     }
 
+    /// Parse async block: `async { ... }` or `async move { ... }`
+    fn parse_async_block(&mut self) -> ParseResult<Expression> {
+        self.expect_keyword(Keyword::Async)?;
+
+        // Check for `move` keyword (async move { ... })
+        let _is_move = if self.check(&Token::Keyword(Keyword::Move)) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        let body = self.parse_block()?;
+        Ok(Expression::AsyncBlock(body))
+    }
+
     /// Parse array literal
     fn parse_array(&mut self) -> ParseResult<Expression> {
         self.consume("[")?;
@@ -2294,19 +2440,23 @@ impl Parser {
         self.expect_keyword(Keyword::For)?;
         let var = self.expect_identifier()?;
         self.expect_keyword(Keyword::In)?;
-        
+
         // Parse the iterator expression with NO_STRUCT_LITERAL restriction
-        // to prevent `identifier {` in `0..passes {` from being parsed as struct literal  
+        // to prevent `identifier {` in `0..passes {` from being parsed as struct literal
         // eprintln!("[DEBUG] parse_for_loop: Before parsing iter, restriction={:?}", self.restrictions);
         let iter = self.with_restrictions(Restrictions::NoStructLiteral, |parser| {
             // eprintln!("[DEBUG] parse_for_loop: Inside with_restrictions, restriction={:?}", parser.restrictions);
             parser.parse_expression()
         })?;
         // eprintln!("[DEBUG] parse_for_loop: After parsing iter, restriction={:?}", self.restrictions);
-        
+
         let body = self.parse_block()?;
-        
-        Ok(Expression::For { var, iter: Box::new(iter), body })
+
+        Ok(Expression::For {
+            var,
+            iter: Box::new(iter),
+            body,
+        })
     }
 
     /// Parse closure: `|param1, param2| body` or `move |x| x + 1` or `|| body`
@@ -2320,7 +2470,7 @@ impl Parser {
         };
 
         let mut params = Vec::new();
-        
+
         // Handle || (OrOr token) as empty parameter list
         if self.check(&Token::OrOr) {
             self.advance();
@@ -2328,10 +2478,10 @@ impl Parser {
         } else {
             // Expecting: | params | body
             self.consume("|")?;
-            
+
             while !self.check(&Token::Pipe) {
                 let param = self.expect_identifier()?;
-                
+
                 // Parse type annotation if present
                 let param_type = if self.check(&Token::Colon) {
                     self.advance();
@@ -2339,17 +2489,17 @@ impl Parser {
                 } else {
                     None
                 };
-                
+
                 params.push((param, param_type));
-                
+
                 if !self.check(&Token::Pipe) {
                     self.consume(",")?;
                 }
             }
-            
+
             self.consume("|")?;
         }
-        
+
         // Check for return type annotation: -> Type
         let return_type = if self.check(&Token::Arrow) {
             self.advance();
@@ -2357,10 +2507,15 @@ impl Parser {
         } else {
             None
         };
-        
+
         let body = Box::new(self.parse_expression()?);
-        
-        Ok(Expression::Closure { params, return_type, body, is_move })
+
+        Ok(Expression::Closure {
+            params,
+            return_type,
+            body,
+            is_move,
+        })
     }
 
     /// Parse enum definition: `enum Name { Variant1, Variant2(Type), ... }`
@@ -2368,15 +2523,15 @@ impl Parser {
         self.expect_keyword(Keyword::Enum)?;
         let name = self.expect_identifier()?;
         let generics = self.parse_generics()?;
-        
+
         let where_clause = self.parse_where_clause()?;
-        
+
         self.consume("{")?;
-        
+
         let mut variants = Vec::new();
         while !self.check(&Token::RightBrace) {
             let var_name = self.expect_identifier()?;
-            
+
             let variant = if self.check(&Token::LeftParen) {
                 self.advance();
                 let mut types = Vec::new();
@@ -2395,8 +2550,12 @@ impl Parser {
                     let field_name = self.expect_identifier()?;
                     self.consume(":")?;
                     let ty = self.parse_type()?;
-                    fields.push(StructField { name: field_name, ty, attributes: Vec::new() });
-                    
+                    fields.push(StructField {
+                        name: field_name,
+                        ty,
+                        attributes: Vec::new(),
+                    });
+
                     if !self.check(&Token::RightBrace) {
                         self.consume(",")?;
                     }
@@ -2406,20 +2565,20 @@ impl Parser {
             } else {
                 EnumVariant::Unit(var_name)
             };
-            
+
             variants.push(variant);
             if !self.check(&Token::RightBrace) {
                 self.consume(",")?;
             }
         }
-        
+
         self.consume("}")?;
-        
+
         // Register visibility immediately
         register_current_visibility_to_lowering(&name);
-        
-        Ok(Item::Enum { 
-            name, 
+
+        Ok(Item::Enum {
+            name,
             generics,
             variants,
             is_pub,
@@ -2433,11 +2592,11 @@ impl Parser {
         self.expect_keyword(Keyword::Trait)?;
         let name = self.expect_identifier()?;
         let generics = self.parse_generics()?;
-        
+
         let where_clause = self.parse_where_clause()?;
-        
+
         self.consume("{")?;
-        
+
         let mut methods = Vec::new();
         while !self.check(&Token::RightBrace) {
             if self.check(&Token::Keyword(Keyword::Fn)) {
@@ -2447,14 +2606,14 @@ impl Parser {
                 self.advance();
                 let assoc_type_name = self.expect_identifier()?;
                 let mut ty = None;
-                
+
                 if self.check(&Token::Equal) {
                     self.advance();
                     ty = Some(self.parse_type()?);
                 }
-                
+
                 self.consume(";")?;
-                
+
                 methods.push(Item::AssociatedType {
                     name: assoc_type_name,
                     bounds: Vec::new(),
@@ -2465,10 +2624,10 @@ impl Parser {
                 self.advance();
             }
         }
-        
+
         self.consume("}")?;
-        Ok(Item::Trait { 
-            name, 
+        Ok(Item::Trait {
+            name,
             generics,
             supertraits: Vec::new(),
             methods,
@@ -2483,18 +2642,18 @@ impl Parser {
         let name = self.expect_identifier()?;
         let generics = self.parse_generics()?;
         let where_clause = self.parse_where_clause()?;
-        
+
         self.consume("(")?;
         let params = self.parse_parameters()?;
         self.consume(")")?;
-        
+
         let return_type = if self.check(&Token::Arrow) {
             self.advance();
             Some(self.parse_type()?)
         } else {
             None
         };
-        
+
         let body = if self.check(&Token::LeftBrace) {
             self.parse_block()?
         } else {
@@ -2504,7 +2663,7 @@ impl Parser {
                 expression: None,
             }
         };
-        
+
         Ok(Item::Function {
             name,
             generics,
@@ -2523,12 +2682,12 @@ impl Parser {
     /// Parse impl block: `impl Name { ... }` or `impl Trait for Name { ... }`
     fn parse_impl(&mut self) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Impl)?;
-        
+
         // Parse generic parameters: impl<'a> or impl<T>
         let generics = self.parse_generics()?;
-        
+
         let struct_name = self.expect_identifier()?;
-        
+
         let trait_name = if self.check(&Token::Keyword(Keyword::For)) {
             // Trait impl: impl Trait for Struct
             self.advance();
@@ -2536,19 +2695,19 @@ impl Parser {
         } else {
             None
         };
-        
+
         // Re-parse struct_name if we just consumed a trait
         let struct_name = if trait_name.is_some() {
             self.expect_identifier()?
         } else {
             struct_name
         };
-        
+
         let where_clause = self.parse_where_clause()?;
-        
+
         self.consume("{")?;
         let mut methods = Vec::new();
-        
+
         while !self.check(&Token::RightBrace) {
             if self.check(&Token::Keyword(Keyword::Fn)) {
                 methods.push(self.parse_function(false)?);
@@ -2561,12 +2720,12 @@ impl Parser {
                 self.advance(); // Skip unknown items
             }
         }
-        
+
         self.consume("}")?;
-        Ok(Item::Impl { 
+        Ok(Item::Impl {
             generics,
-            trait_name, 
-            struct_name, 
+            trait_name,
+            struct_name,
             methods,
             is_unsafe: false,
             attributes: Vec::new(),
@@ -2578,21 +2737,21 @@ impl Parser {
     fn parse_module(&mut self, is_pub: bool) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Mod)?;
         let name = self.expect_identifier()?;
-        
+
         // Register module visibility immediately
         register_current_visibility_to_lowering(&name);
-        
+
         if self.check(&Token::LeftBrace) {
             self.advance();
             let mut items = Vec::new();
-            
+
             while !self.check(&Token::RightBrace) && !self.check(&Token::Eof) {
                 items.push(self.parse_item()?);
             }
-            
+
             self.consume("}")?;
-            Ok(Item::Module { 
-                name, 
+            Ok(Item::Module {
+                name,
                 items,
                 is_inline: true,
                 is_pub,
@@ -2601,8 +2760,8 @@ impl Parser {
         } else {
             // File-based module: `mod name;`
             self.consume(";")?;
-            Ok(Item::Module { 
-                name, 
+            Ok(Item::Module {
+                name,
                 items: Vec::new(),
                 is_inline: false,
                 is_pub,
@@ -2613,23 +2772,23 @@ impl Parser {
 
     /// Parse use statement: `use path::to::item;` or `pub use path::to::item;`
     fn parse_use(&mut self, is_public: bool) -> ParseResult<Item> {
-         self.expect_keyword(Keyword::Use)?;
-         
-         // Support crate::, super::, and regular paths
-         let first = if self.check(&Token::Keyword(Keyword::Crate)) {
-             self.advance();
-             "crate".to_string()
-         } else if self.check(&Token::Keyword(Keyword::Super)) {
-             self.advance();
-             "super".to_string()
-         } else {
-             self.expect_identifier()?
-         };
-         
-         let mut path = vec![first];
-         while self.check(&Token::DoubleColon) {
-             self.advance();
-             if self.check(&Token::LeftBrace) {
+        self.expect_keyword(Keyword::Use)?;
+
+        // Support crate::, super::, and regular paths
+        let first = if self.check(&Token::Keyword(Keyword::Crate)) {
+            self.advance();
+            "crate".to_string()
+        } else if self.check(&Token::Keyword(Keyword::Super)) {
+            self.advance();
+            "super".to_string()
+        } else {
+            self.expect_identifier()?
+        };
+
+        let mut path = vec![first];
+        while self.check(&Token::DoubleColon) {
+            self.advance();
+            if self.check(&Token::LeftBrace) {
                 let mut brace_depth = 1;
                 self.advance();
                 while brace_depth > 0 && self.current() != &Token::Eof {
@@ -2654,11 +2813,11 @@ impl Parser {
                 path.push(self.expect_identifier()?);
             }
         }
-        
+
         let is_glob = path.iter().any(|p| p == "*");
-        
+
         self.consume(";")?;
-        Ok(Item::Use { 
+        Ok(Item::Use {
             path,
             is_glob,
             is_public,
@@ -2675,7 +2834,7 @@ impl Parser {
         self.consume("=")?;
         let value = self.parse_expression()?;
         self.consume(";")?;
-        
+
         Ok(Item::Const {
             name,
             ty,
@@ -2700,7 +2859,7 @@ impl Parser {
         self.consume("=")?;
         let value = self.parse_expression()?;
         self.consume(";")?;
-        
+
         Ok(Item::Static {
             name,
             ty,
@@ -2715,18 +2874,18 @@ impl Parser {
     fn parse_type_alias(&mut self, is_public: bool) -> ParseResult<Item> {
         self.expect_keyword(Keyword::Type)?;
         let name = self.expect_identifier()?;
-        
+
         // Parse generic parameters if present
         let generics = if self.check(&Token::Less) {
             self.parse_generics()?
         } else {
             Vec::new()
         };
-        
+
         self.consume("=")?;
         let ty = self.parse_type()?;
         self.consume(";")?;
-        
+
         Ok(Item::TypeAlias {
             name,
             generics,
@@ -2736,25 +2895,24 @@ impl Parser {
         })
     }
 
-
-    
     /// PHASE 5: Parse macro_rules! definition (simplified - just collect tokens)
     /// Parse macro_rules! definition (PHASE 5.1b - Using real parser)
     pub fn parse_macro_rules_item(&mut self) -> ParseResult<Item> {
         // PHASE 5.1b-INTEGRATE: Use the real macro parser from macros/parsing.rs
         // The parser expects to be at MacroRules keyword (which we are)
-        
+
         match self.parse_macro_rules() {
             Ok((name, rules)) => {
                 // Convert macros::MacroRule to ast::MacroRule
-                let ast_rules = rules.into_iter().map(|rule| {
-                    ast::MacroRule {
+                let ast_rules = rules
+                    .into_iter()
+                    .map(|rule| ast::MacroRule {
                         pattern: format!("{:?}", rule.pattern),
                         body: format!("{:?}", rule.body),
                         actual_rule: Some(Box::new(rule)),
-                    }
-                }).collect();
-                
+                    })
+                    .collect();
+
                 Ok(Item::MacroDefinition {
                     name,
                     rules: ast_rules,
@@ -2764,18 +2922,22 @@ impl Parser {
             Err(e) => {
                 // If real parser fails, fall back to simplified version
                 // Re-sync: we're still at MacroRules keyword (parser position was restored on error)
-                
+
                 if let Token::Keyword(Keyword::MacroRules) = self.current() {
                     self.advance();
                 } else {
-                    return Err(ParseError::InvalidSyntax("Expected macro_rules keyword".to_string()));
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected macro_rules keyword".to_string(),
+                    ));
                 }
-                
+
                 if !self.check(&Token::Bang) {
-                    return Err(ParseError::InvalidSyntax("Expected ! after macro_rules".to_string()));
+                    return Err(ParseError::InvalidSyntax(
+                        "Expected ! after macro_rules".to_string(),
+                    ));
                 }
                 self.advance();
-                
+
                 let name = match self.current() {
                     Token::Identifier(n) => {
                         let name = n.clone();
@@ -2783,12 +2945,14 @@ impl Parser {
                         name
                     }
                     _ => {
-                        return Err(ParseError::InvalidSyntax("Expected macro name after macro_rules!".to_string()));
+                        return Err(ParseError::InvalidSyntax(
+                            "Expected macro name after macro_rules!".to_string(),
+                        ));
                     }
                 };
-                
+
                 self.consume("{")?;
-                
+
                 let mut brace_depth = 1;
                 while brace_depth > 0 && self.current() != &Token::Eof {
                     match self.current() {
@@ -2805,7 +2969,7 @@ impl Parser {
                         }
                     }
                 }
-                
+
                 Ok(Item::MacroDefinition {
                     name,
                     rules: vec![ast::MacroRule {
@@ -2820,15 +2984,18 @@ impl Parser {
     }
 }
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
-fn resolve_file_modules_recursive(
-    items: &mut Vec<Item>,
-    base_dir: &Path,
-) -> Result<(), String> {
+fn resolve_file_modules_recursive(items: &mut Vec<Item>, base_dir: &Path) -> Result<(), String> {
     for item in items.iter_mut() {
-        if let Item::Module { name, items: ref mut module_items, is_inline, .. } = item {
+        if let Item::Module {
+            name,
+            items: ref mut module_items,
+            is_inline,
+            ..
+        } = item
+        {
             if !*is_inline {
                 let name_str = name.as_str();
                 let rs_file = base_dir.join(format!("{}.rs", name_str));
@@ -2842,14 +3009,20 @@ fn resolve_file_modules_recursive(
                     return Err(format!("Module '{}' not found", name_str));
                 };
 
-                let module_source = fs::read_to_string(&file_path)
-                    .map_err(|e| format!("Failed to read module file '{}': {}", file_path.display(), e))?;
+                let module_source = fs::read_to_string(&file_path).map_err(|e| {
+                    format!(
+                        "Failed to read module file '{}': {}",
+                        file_path.display(),
+                        e
+                    )
+                })?;
 
                 let tokens = crate::lexer::lex(&module_source)
                     .map_err(|e| format!("Lexer error in module '{}': {}", name_str, e))?;
 
                 let mut module_parser = Parser::new(tokens);
-                let parsed_items = module_parser.parse_program()
+                let parsed_items = module_parser
+                    .parse_program()
                     .map_err(|e| format!("Parser error in module '{}': {}", name_str, e))?;
 
                 let mut new_items = parsed_items;
@@ -2887,17 +3060,16 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, String> {
 
 /// Parse with file-based module resolution
 /// Resolves `mod name;` statements to load from name.rs files
-pub fn parse_with_modules(tokens: Vec<Token>, source_file: Option<&str>) -> Result<Program, String> {
+pub fn parse_with_modules(
+    tokens: Vec<Token>,
+    source_file: Option<&str>,
+) -> Result<Program, String> {
     let mut parser = Parser::new(tokens);
     let ast = parser.parse_program().map_err(|e| e.to_string())?;
-    
+
     // Get the directory of the source file
-    let base_dir = source_file.and_then(|f| {
-        Path::new(f)
-            .parent()
-            .and_then(|p| p.to_str())
-    });
-    
+    let base_dir = source_file.and_then(|f| Path::new(f).parent().and_then(|p| p.to_str()));
+
     // Resolve file-based modules
     resolve_file_modules(ast, base_dir)
 }

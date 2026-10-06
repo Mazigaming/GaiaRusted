@@ -1,0 +1,17 @@
+Fahrenheit(212.0) Fahrenheit(-40.0)
+Ok(Even(4)) Err("5 is odd")
+Ok(Even(8))
+[    0xff] [0x10    ] [ff] [0x000000ff]
+["0.9.12", "1.2.0", "1.2.3", "1.10.0"]
+Err("bad version 1.2") Err("invalid digit found in string")
+<str> <string> <c>
+7 1 3
+true Ok(-5)
+[97, 98, 99] x boxed
+[1, 2, 3] [1, 2, 3]
+13
+hi ok
+4
+"abcde"
+258
+[2, 1]

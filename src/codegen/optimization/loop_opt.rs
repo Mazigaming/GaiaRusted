@@ -1,4 +1,3 @@
-
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -133,7 +132,10 @@ impl LoopOptimizer {
     }
 
     fn is_loop_invariant(&self, line: &str) -> bool {
-        !line.contains("i ") && !line.contains("[i]") && !line.contains("*i") && !line.contains("i*")
+        !line.contains("i ")
+            && !line.contains("[i]")
+            && !line.contains("*i")
+            && !line.contains("i*")
     }
 
     pub fn loop_peeling(&mut self, ir: &str, peels: usize) -> String {
@@ -201,7 +203,10 @@ impl LoopOptimizer {
         let mut result = String::new();
         for (loop_idx, count) in iter_counts {
             if count <= threshold {
-                result.push_str(&format!("; unrolled loop {} ({} iterations)\n", loop_idx, count));
+                result.push_str(&format!(
+                    "; unrolled loop {} ({} iterations)\n",
+                    loop_idx, count
+                ));
                 self.statistics.loops_unrolled += 1;
             }
         }

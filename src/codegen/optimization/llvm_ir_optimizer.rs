@@ -1,4 +1,3 @@
-
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -173,8 +172,7 @@ impl LLVMIROptimizer {
 
     fn simplify_xor(&self, line: &str) -> String {
         if line.contains("xor i64 ") && line.contains(" 0") {
-            line.replace("xor i64 ", "move ")
-                .replace(" 0", "")
+            line.replace("xor i64 ", "move ").replace(" 0", "")
         } else {
             line.to_string()
         }

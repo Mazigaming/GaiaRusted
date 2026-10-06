@@ -229,7 +229,12 @@ impl DiagnosticsEngine {
     }
 
     /// Add type mismatch error
-    pub fn add_type_mismatch(&mut self, expected: &str, found: &str, location: Option<SourceLocation>) {
+    pub fn add_type_mismatch(
+        &mut self,
+        expected: &str,
+        found: &str,
+        location: Option<SourceLocation>,
+    ) {
         let mut diag = Diagnostic::new(
             ErrorCode::E001,
             Severity::Error,
@@ -269,7 +274,12 @@ impl DiagnosticsEngine {
     }
 
     /// Add lifetime error
-    pub fn add_lifetime_mismatch(&mut self, lifetime1: &str, lifetime2: &str, location: Option<SourceLocation>) {
+    pub fn add_lifetime_mismatch(
+        &mut self,
+        lifetime1: &str,
+        lifetime2: &str,
+        location: Option<SourceLocation>,
+    ) {
         let mut diag = Diagnostic::new(
             ErrorCode::E101,
             Severity::Error,
@@ -286,11 +296,19 @@ impl DiagnosticsEngine {
     }
 
     /// Add generic constraint error
-    pub fn add_generic_constraint_unmet(&mut self, param: &str, bound: &str, location: Option<SourceLocation>) {
+    pub fn add_generic_constraint_unmet(
+        &mut self,
+        param: &str,
+        bound: &str,
+        location: Option<SourceLocation>,
+    ) {
         let mut diag = Diagnostic::new(
             ErrorCode::E201,
             Severity::Error,
-            format!("generic parameter `{}` does not satisfy bound `{}`", param, bound),
+            format!(
+                "generic parameter `{}` does not satisfy bound `{}`",
+                param, bound
+            ),
         );
 
         if let Some(loc) = location {
@@ -303,11 +321,18 @@ impl DiagnosticsEngine {
     }
 
     /// Add pattern exhaustiveness error
-    pub fn add_pattern_not_exhaustive(&mut self, patterns: Vec<String>, location: Option<SourceLocation>) {
+    pub fn add_pattern_not_exhaustive(
+        &mut self,
+        patterns: Vec<String>,
+        location: Option<SourceLocation>,
+    ) {
         let mut diag = Diagnostic::new(
             ErrorCode::E301,
             Severity::Error,
-            format!("pattern matching is not exhaustive, missing: {}", patterns.join(", ")),
+            format!(
+                "pattern matching is not exhaustive, missing: {}",
+                patterns.join(", ")
+            ),
         );
 
         if let Some(loc) = location {
@@ -320,7 +345,12 @@ impl DiagnosticsEngine {
     }
 
     /// Add enum variant error
-    pub fn add_enum_variant_not_found(&mut self, enum_name: &str, variant: &str, location: Option<SourceLocation>) {
+    pub fn add_enum_variant_not_found(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        location: Option<SourceLocation>,
+    ) {
         let mut diag = Diagnostic::new(
             ErrorCode::E401,
             Severity::Error,
@@ -346,12 +376,17 @@ impl DiagnosticsEngine {
 
     /// Get diagnostics by severity
     pub fn diagnostics_by_severity(&self, severity: Severity) -> Vec<&Diagnostic> {
-        self.diagnostics.iter().filter(|d| d.severity == severity).collect()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == severity)
+            .collect()
     }
 
     /// Check if there are any errors
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(|d| d.severity == Severity::Error || d.severity == Severity::Fatal)
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error || d.severity == Severity::Fatal)
     }
 
     /// Count diagnostics by severity
@@ -456,11 +491,7 @@ mod tests {
         let mut engine = DiagnosticsEngine::new(config);
 
         for i in 0..5 {
-            let diag = Diagnostic::new(
-                ErrorCode::E001,
-                Severity::Error,
-                format!("error {}", i),
-            );
+            let diag = Diagnostic::new(ErrorCode::E001, Severity::Error, format!("error {}", i));
             engine.add_diagnostic(diag);
         }
 

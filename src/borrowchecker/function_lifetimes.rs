@@ -3,9 +3,9 @@
 //! Handles lifetime parameter extraction from function signatures
 //! and generates constraints that ensure type safety.
 
-use crate::parser::ast::{Type, GenericParam, Parameter};
-use super::lifetimes::{Lifetime, LifetimeContext, LifetimeElision};
 use super::lifetime_validation::FunctionLifetimeValidator;
+use super::lifetimes::{Lifetime, LifetimeContext, LifetimeElision};
+use crate::parser::ast::{GenericParam, Parameter, Type};
 
 /// Information about a function's lifetime parameters and constraints
 #[derive(Debug, Clone)]
@@ -97,26 +97,22 @@ fn extract_return_lifetime(
     return_type: &Option<Type>,
 ) -> Option<Lifetime> {
     match return_type {
-        Some(ty) => {
-            match ty {
-                Type::Reference { lifetime, .. } => {
-                    if let Some(lt) = lifetime {
-                        Some(lifetime_ctx.register_named_lifetime(lt.clone()))
-                    } else {
-                        let input_refs: Vec<bool> = param_types.iter()
-                            .map(|t| matches!(t, Type::Reference { .. }))
-                            .collect();
-                        let (_, return_lt) = LifetimeElision::elide_function_lifetimes(
-                            input_refs,
-                            true,
-                            lifetime_ctx,
-                        );
-                        return_lt
-                    }
+        Some(ty) => match ty {
+            Type::Reference { lifetime, .. } => {
+                if let Some(lt) = lifetime {
+                    Some(lifetime_ctx.register_named_lifetime(lt.clone()))
+                } else {
+                    let input_refs: Vec<bool> = param_types
+                        .iter()
+                        .map(|t| matches!(t, Type::Reference { .. }))
+                        .collect();
+                    let (_, return_lt) =
+                        LifetimeElision::elide_function_lifetimes(input_refs, true, lifetime_ctx);
+                    return_lt
                 }
-                _ => None,
             }
-        }
+            _ => None,
+        },
         None => None,
     }
 }
@@ -145,7 +141,8 @@ pub fn validate_function_lifetimes(
     info: &FunctionLifetimes,
     named_lifetime_params: &[String],
 ) -> Result<(), String> {
-    let mut used_lifetime_params: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut used_lifetime_params: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     for opt_lt in &info.param_lifetimes {
         if let Some(Lifetime::Named(name)) = opt_lt {
@@ -177,13 +174,13 @@ pub fn validate_function_lifetimes_detailed(
     return_type: &Option<Type>,
 ) -> Result<(), Vec<String>> {
     let mut validator = FunctionLifetimeValidator::new(generics);
-    
+
     // Collect parameter lifetimes
     validator.add_parameters(params);
-    
+
     // Collect return type lifetimes
     validator.add_return_type(return_type);
-    
+
     // Perform validation
     validator.validate()
 }

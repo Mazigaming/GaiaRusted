@@ -185,6 +185,13 @@ impl StringMethodRegistry {
             "String",
             "builtin_str_reverse",
         ));
+
+        self.register_method(StringMethod::new(
+            "to_string",
+            vec![],
+            "String",
+            "builtin_str_to_string",
+        ));
     }
 
     /// Register a string method

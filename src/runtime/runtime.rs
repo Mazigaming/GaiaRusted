@@ -13,8 +13,12 @@ pub fn generate_runtime_assembly() -> String {
     format_str: .string "%ld\n"
     format_str_bool: .string "%d\n"
     format_str_f64: .string "%f\n"
+    true_str: .string "true"
+    false_str: .string "false"
     print_string_fmt: .string "%s"
     print_str_newline: .string "%s\n"
+    f64_fixed_fmt: .string "%.*f"
+    nan_str: .string "NaN"
     panic_msg: .string "assertion failed\n"
     assert_fail_msg: .string "assertion failed\n"
     format_fail_msg: .string "format!\n"
@@ -22,6 +26,7 @@ pub fn generate_runtime_assembly() -> String {
     unimplemented_msg: .string "unimplemented!(): feature not implemented\n"
     panic_custom_fmt: .string "panicked at: %s\n"
     dbg_msg: .string "[DEBUG] value: %ld\n"
+    alloc_fail_msg: .string "out of memory\n"
 
 .section .text
 .globl gaia_print_i32
@@ -29,7 +34,11 @@ pub fn generate_runtime_assembly() -> String {
 .globl gaia_print_bool
 .globl gaia_print_f64
 .globl gaia_print_str
+.globl gaia_bool_to_str
+.globl gaia_f64_to_str
 .globl __builtin_println
+.globl __builtin_format
+.globl __builtin_format_args
 .globl gaia_vec_new
 .globl gaia_vec_push
 .globl gaia_vec_pop
@@ -133,6 +142,7 @@ pub fn generate_runtime_assembly() -> String {
 .globl String_impl_pad_end
 .globl String_impl_truncate
 .globl __extract_enum_value
+.globl __enum_discriminant
 .globl assert
 .globl assert_eq
 .globl assert_ne
@@ -141,6 +151,111 @@ pub fn generate_runtime_assembly() -> String {
 .globl dbg
 .globl todo
 .globl unimplemented
+.globl __gaia_alloc
+.globl __gaia_free
+
+# ============================================================
+# __gaia_alloc(size: rdi) -> *mut u8 in rax
+# Allocates memory via mmap syscall. Returns pointer or panics.
+# ============================================================
+__gaia_alloc:
+    push rbp
+    mov rbp, rsp
+    push r12
+    mov r12, rdi            # save requested size
+
+    # Round size up to nearest 4096-byte page
+    add rdi, 4095
+    and rdi, -4096
+    mov rsi, rdi            # length = rounded up size
+
+    xor rdi, rdi            # addr = NULL (let kernel choose)
+    mov rdx, 3              # PROT_READ | PROT_WRITE
+    mov r10, 0x22           # MAP_PRIVATE | MAP_ANONYMOUS
+    mov r8, -1              # fd = -1
+    xor r9, r9              # offset = 0
+    mov rax, 9              # SYS_mmap
+    syscall
+
+    # Check for error (rax contains -errno if negative)
+    test rax, rax
+    js __gaia_alloc_fail   # if rax < 0 (signed), mmap returned -errno
+
+    pop r12
+    mov rsp, rbp
+    pop rbp
+    ret
+
+__gaia_alloc_fail:
+    lea rdi, [rip + alloc_fail_msg]
+    call panic
+    ud2
+
+# ============================================================
+# __gaia_free(ptr: rdi, size: rsi)
+# Frees memory via munmap syscall.
+# ============================================================
+__gaia_free:
+    push rbp
+    mov rbp, rsp
+    # Round size up to page boundary
+    add rsi, 4095
+    and rsi, -4096
+    mov rax, 11             # SYS_munmap
+    syscall
+    mov rsp, rbp
+    pop rbp
+    ret
+
+# ============================================================
+# __builtin_format_args(fmt: rdi, arg1: rsi, arg2: rdx, ...) -> *mut u8 in rax
+# Formats arguments into a heap-allocated buffer using sprintf.
+# ============================================================
+__builtin_format_args:
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 8          # slot for the buffer pointer; also keeps the stack 16-byte aligned
+
+    # Save all incoming register args
+    mov rbx, rdi        # rbx = format string
+    mov r12, rsi        # r12 = arg1
+    mov r13, rdx        # r13 = arg2
+    mov r14, rcx        # r14 = arg3
+    mov r15, r8         # r15 = arg4
+
+    # Allocate 256-byte buffer on heap
+    mov rdi, 256
+    call __gaia_alloc   # rax = buffer
+    mov qword ptr [rbp - 48], rax
+
+    # snprintf(buffer, 256, fmt, arg1, arg2, arg3)
+    mov rdi, rax        # buffer
+    mov rsi, 256        # never write past the buffer
+    mov rdx, rbx        # format string
+    mov rcx, r12        # arg1
+    mov r8, r13         # arg2
+    mov r9, r14         # arg3
+    sub rsp, 8          # keep the stack 16-byte aligned across the push
+    push r15            # arg4 goes on the stack
+    mov rax, 0          # No XMM registers used
+    call snprintf
+    add rsp, 16
+
+    mov rax, qword ptr [rbp - 48]
+
+    add rsp, 8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
 
 gaia_print_i32:
     push rbp
@@ -150,9 +265,7 @@ gaia_print_i32:
     mov rax, rdi          # Save the value in rax
     mov rdi, rsi          # format string in rdi
     mov rsi, rax          # value in rsi
-    sub rsp, 8            # Align stack to 16 bytes (we pushed rbp, so subtract 8 more)
     call printf
-    add rsp, 8
     mov rsp, rbp
     pop rbp
     ret
@@ -165,9 +278,7 @@ gaia_print_i64:
     mov rax, rdi          # Save the value in rax
     mov rdi, rsi          # format string in rdi
     mov rsi, rax          # value in rsi
-    sub rsp, 8            # Align stack to 16 bytes (we pushed rbp, so subtract 8 more)
     call printf
-    add rsp, 8
     mov rsp, rbp
     pop rbp
     ret
@@ -176,13 +287,11 @@ gaia_print_bool:
     push rbp
     mov rbp, rsp
     # rdi contains the bool value (0 or 1)
-    lea rsi, [rip + format_str_bool]
-    mov rax, rdi          # Save the value
-    mov rdi, rsi          # format string in rdi
-    mov rsi, rax          # value in rsi
-    sub rsp, 8            # Align stack
+    call gaia_bool_to_str
+    mov rsi, rax
+    lea rdi, [rip + print_str_newline]
+    xor rax, rax          # No XMM registers used
     call printf
-    add rsp, 8
     mov rsp, rbp
     pop rbp
     ret
@@ -191,22 +300,74 @@ gaia_print_f64:
     push rbp
     mov rbp, rsp
     # rdi contains the float value (64-bit, as i64 bits)
-    # We need to move it to xmm0 and call printf with proper format
-    lea rax, [rip + format_str_f64]
-    movq xmm0, rdi        # Move 64-bit integer bits to xmm0 (as float bits)
-    mov rdi, rax          # format string in rdi
-    mov rax, 1            # printf needs 1 xmm argument
-    sub rsp, 8            # Align stack to 16 bytes
+    call gaia_f64_to_str
+    mov rsi, rax
+    lea rdi, [rip + print_str_newline]
+    xor rax, rax          # No XMM registers used
     call printf
-    add rsp, 8
     mov rsp, rbp
     pop rbp
     ret
 
+# gaia_bool_to_str(value: rdi) -> *const u8 in rax ("true" / "false")
+gaia_bool_to_str:
+    test rdi, rdi
+    lea rax, [rip + false_str]
+    lea rdx, [rip + true_str]
+    cmovnz rax, rdx
+    ret
+
+# gaia_f64_to_str(bits: rdi) -> *const u8 in rax
+# Formats an f64 the way Rust's Display does: the shortest decimal expansion
+# that parses back to the same value (4.0 -> "4", 3.14 -> "3.14"), never in
+# exponent form. Found by widening the precision until strtod round-trips.
+gaia_f64_to_str:
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12
+    push r13
+    sub rsp, 8              # keep the stack 16-byte aligned for libc calls
+    mov r13, rdi            # r13 = value bits
+    mov rdi, 512
+    call __gaia_alloc
+    mov rbx, rax            # rbx = output buffer
+    movq xmm0, r13
+    ucomisd xmm0, xmm0
+    jp gaia_f64_to_str_nan  # NaN never round-trips
+    xor r12, r12            # r12 = digits after the decimal point
+gaia_f64_to_str_loop:
+    mov rdi, rbx
+    mov rsi, 512
+    lea rdx, [rip + f64_fixed_fmt]
+    mov rcx, r12
+    movq xmm0, r13
+    mov rax, 1              # one XMM argument
+    call snprintf
+    mov rdi, rbx
+    xor rsi, rsi
+    call strtod
+    movq rax, xmm0
+    cmp rax, r13
+    je gaia_f64_to_str_done
+    inc r12
+    cmp r12, 340            # enough for the smallest subnormal
+    jle gaia_f64_to_str_loop
+gaia_f64_to_str_done:
+    mov rax, rbx
+    add rsp, 8
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+gaia_f64_to_str_nan:
+    lea rbx, [rip + nan_str]
+    jmp gaia_f64_to_str_done
+
 gaia_print_str:
     push rbp
     mov rbp, rsp
-    sub rsp, 8          # Align stack to 16-byte boundary for printf
     mov rsi, rdi        # RSI = string pointer (second argument)
     lea rdi, [rip + print_string_fmt]  # RDI = format string "%s" (first argument)
     xor rax, rax        # RAX = 0 (no XMM registers used)
@@ -218,7 +379,6 @@ gaia_print_str:
 __builtin_println:
     push rbp
     mov rbp, rsp
-    sub rsp, 8          # Align stack to 16-byte boundary for printf
     mov rsi, rdi        # RSI = string pointer (second argument)
     lea rdi, [rip + print_str_newline]  # RDI = format string "%s\n" (first argument)
     xor rax, rax        # RAX = 0 (no XMM registers used)
@@ -230,7 +390,6 @@ __builtin_println:
 __builtin_printf:
     push rbp
     mov rbp, rsp
-    sub rsp, 8          # Align stack to 16-byte boundary for printf
     xor rax, rax        # RAX = 0 (no XMM registers used for integer-only calls)
     call printf
     mov rsp, rbp
@@ -269,29 +428,123 @@ gaia_vec_new:
     ret
 
 gaia_vec_push:
-    # Push element to vector
-    # rdi = vec pointer (ptr to capacity:i64, length:i64, ...data)
-    # rsi = value
-    # Returns: void
+    # Push element to vector with automatic capacity growth.
+    #
+    # Vec layout in memory:
+    #   [rdi +  0] cap:   i64   (number of elements capacity)
+    #   [rdi +  8] len:   i64   (number of elements stored)
+    #   [rdi + 16] ptr:   i64   (pointer to heap data buffer, or 0 if inline)
+    #   [rdi + 24..] inline_data (used only when ptr == 0 and cap is small)
+    #
+    # When ptr == 0, data is stored inline starting at rdi+24.
+    # When ptr != 0, data is on the heap at *ptr.
+    #
+    # rdi = *Vec
+    # rsi = value to push
     push rbp
     mov rbp, rsp
-    
-    mov rcx, [rdi]          # get capacity
-    mov r8, [rdi + 8]       # get length
-    
-    # Check if we need to resize (simplified - just fail if full)
-    cmp r8, rcx
-    jge vec_push_done
-    
-    # Store value at data[length]
-    lea rax, [rdi + 16]     # data starts at rdi + 16
-    mov [rax + r8*8], rsi   # store value at data[length]
-    
-    # Increment length
-    inc r8
-    mov [rdi + 8], r8       # update length
-    
-vec_push_done:
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov r12, rdi            # r12 = vec pointer (stable)
+    mov r13, rsi            # r13 = value to push
+
+    mov r14, [r12]          # r14 = capacity
+    mov r15, [r12 + 8]      # r15 = length
+
+    # Do we have space?
+    cmp r15, r14
+    jl .vec_push_fits
+
+    # ---- GROW ----
+    # new_cap = max(cap * 2, 1)
+    test r14, r14
+    jz .vec_cap_zero
+    mov rdi, r14
+    shl rdi, 1              # new_cap = cap * 2
+    jmp .vec_do_alloc
+
+.vec_cap_zero:
+    mov rdi, 4              # start with 4 elements
+
+.vec_do_alloc:
+    push rdi                # save new_cap
+    shl rdi, 3              # bytes = new_cap * 8
+    call __gaia_alloc       # rax = new heap buffer
+    pop rdi                 # rdi = new_cap (restore)
+
+    mov rcx, [r12 + 16]     # rcx = old data ptr (0 if inline)
+    mov rdx, rax            # rdx = new data ptr
+
+    # Copy existing elements from old location to new buffer
+    mov r8, [r12 + 8]       # r8 = current length (elements to copy)
+    test r8, r8
+    jz .vec_skip_copy
+
+    test rcx, rcx
+    jz .vec_copy_from_inline    # old ptr == 0: copy from inline storage
+
+.vec_copy_from_heap:
+    # Copy from heap buffer (old ptr in rcx) to new buffer (rdx)
+    xor r9, r9
+.vec_copy_heap_loop:
+    cmp r9, r8
+    jge .vec_skip_copy
+    mov r10, [rcx + r9*8]
+    mov [rdx + r9*8], r10
+    inc r9
+    jmp .vec_copy_heap_loop
+
+.vec_copy_from_inline:
+    # Copy from inline storage (rdi+24) to new buffer (rdx)
+    push rdx
+    push r8
+    lea rcx, [r12 + 24]    # inline data starts here
+    xor r9, r9
+.vec_copy_inline_loop:
+    cmp r9, r8
+    jge .vec_copy_done_inline
+    mov r10, [rcx + r9*8]
+    mov [rdx + r9*8], r10
+    inc r9
+    jmp .vec_copy_inline_loop
+.vec_copy_done_inline:
+    pop r8
+    pop rdx
+
+.vec_skip_copy:
+    # Update vec: cap = new_cap, ptr = new data ptr
+    mov [r12], rdi          # update capacity
+    mov [r12 + 16], rdx    # update ptr
+
+    # Reload length for the store below
+    mov r15, [r12 + 8]
+
+.vec_push_fits:
+    # Store value at data[len]
+    mov rax, [r12 + 16]     # rax = data ptr
+    test rax, rax
+    jz .vec_push_inline     # if ptr == 0, use inline storage
+
+    # Heap storage
+    mov [rax + r15*8], r13
+    jmp .vec_push_inc_len
+
+.vec_push_inline:
+    # Inline storage at rdi+24
+    lea rax, [r12 + 24]
+    mov [rax + r15*8], r13
+
+.vec_push_inc_len:
+    inc r15
+    mov [r12 + 8], r15      # update length
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
     mov rsp, rbp
     pop rbp
     ret
@@ -326,24 +579,33 @@ vec_pop_done:
 
 gaia_vec_get:
     # Get element from vector
-    # rdi = vec pointer
-    # rsi = index
-    # Returns: value at index (in rax), or 0 if out of bounds
+    # rdi = vec pointer, rsi = index
+    # Returns: value at index in rax, or 0 if out of bounds
     push rbp
     mov rbp, rsp
-    
-    mov rcx, [rdi + 8]      # get length
-    cmp rsi, rcx            # check if index < length
-    jge vec_get_out_of_bounds
-    
-    lea rax, [rdi + 16]     # data starts at rdi + 16
-    mov rax, [rax + rsi*8]  # get value at data[index]
-    jmp vec_get_done
-    
-vec_get_out_of_bounds:
-    xor rax, rax            # return 0 on bounds error
-    
-vec_get_done:
+
+    mov rcx, [rdi + 8]      # length
+    cmp rsi, rcx
+    jge .vec_get_oob
+
+    mov rax, [rdi + 16]     # rax = heap ptr
+    test rax, rax
+    jz .vec_get_inline
+
+    # Heap: data at *rax+index*8
+    mov rax, [rax + rsi*8]
+    jmp .vec_get_done
+
+.vec_get_inline:
+    # Inline: data at rdi+24+index*8
+    lea rax, [rdi + 24]
+    mov rax, [rax + rsi*8]
+    jmp .vec_get_done
+
+.vec_get_oob:
+    xor rax, rax
+
+.vec_get_done:
     mov rsp, rbp
     pop rbp
     ret
@@ -816,6 +1078,110 @@ gaia_hashset_is_disjoint:
     ret
 
 # String operations
+# String layout in memory:
+#   [cap:i64] at data_ptr - 16
+#   [len:i64] at data_ptr - 8
+#   [data:u8] at data_ptr
+# The user-visible String value is a char* pointing to the data area.
+
+gaia_string_new:
+    # Create a new empty string
+    # Returns: data pointer in rax (points to buffer+16)
+    push rbp
+    mov rbp, rsp
+
+    # Allocate 256 bytes for the string buffer
+    mov rdi, 256
+    call __gaia_alloc   # rax = buffer
+    mov qword ptr [rax], 256        # capacity = 256
+    mov qword ptr [rax + 8], 0      # length = 0
+    mov byte ptr [rax + 16], 0      # null terminator
+
+    lea rax, [rax + 16]             # return data pointer
+
+    mov rsp, rbp
+    pop rbp
+    ret
+
+gaia_string_push_str:
+    # Append a string to an existing string
+    # rdi = string data pointer (char*)
+    # rsi = source string pointer (char*)
+    # rdx = source length (i64)
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov rbx, rdi        # rbx = dst data pointer
+    mov r12, rsi        # r12 = src data pointer
+    mov r13, rdx        # r13 = src length
+
+    # Access header fields (negative offsets from data pointer)
+    mov r14, qword ptr [rbx - 8]    # r14 = current length
+    mov r15, qword ptr [rbx - 16]   # r15 = capacity
+
+    # Check if we need to grow: new_len = current_len + src_len + 1 (null)
+    mov rax, r14
+    add rax, r13
+    inc rax
+    cmp rax, r15
+    jle .push_str_fits
+
+    # Grow: double capacity until it fits
+.push_str_grow:
+    add r15, r15
+    cmp rax, r15
+    jg .push_str_grow
+
+    # Reallocate: allocate new buffer, copy header + data
+    mov rdi, r15
+    add rdi, 16            # total size = cap + 16 for header
+    call __gaia_alloc       # rax = new buffer
+    mov qword ptr [rax], r15       # new capacity
+    mov qword ptr [rax + 8], r14   # preserved length
+
+    # Copy old data (from old buffer+16 to new buffer+16)
+    mov rcx, r14
+    lea rsi, [rbx - 16 + 16]       # src = old data pointer
+    mov rdi, rax
+    add rdi, 16                    # dst = new data pointer
+    rep movsb
+
+    # Update rbx to point to new data area
+    lea rbx, [rax + 16]
+
+.push_str_fits:
+    # Data pointer is in rbx (either old or new)
+    mov rax, rbx
+    add rax, r14        # dst = data + current_len
+
+    # Copy src_len bytes from src to dst
+    mov rcx, r13        # count
+    mov rsi, r12        # src
+    mov rdi, rax        # dst
+    rep movsb
+
+    # Update length
+    mov rax, r14
+    add rax, r13
+    mov qword ptr [rbx - 8], rax
+
+    # Null terminator
+    mov byte ptr [rbx + rax], 0
+
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+
 gaia_string_len:
     # Get string length
     # rdi = string pointer
@@ -2794,21 +3160,37 @@ String_impl_truncate:
       pop rbp
       ret
 
-# __extract_enum_value: Extract the inner value from Option<T> or Result<T, E>
-# Memory layout: [tag:i64][value:i64]
-# rdi = pointer to the Option/Result (or the value itself if stored in register)
-# Returns: the inner value in rax
-__extract_enum_value:
-      push rbp
-      mov rbp, rsp
-      # For Option/Result, the value is at offset 8 from the base
-      # In our encoding, it's just the second i64
-      mov rax, [rdi + 8]  # Extract the value at offset 8
-      mov rsp, rbp
-      pop rbp
-      ret
+# __extract_enum_value: Extract the inner value from an enum variant
+# Memory layout: [tag:i64][field0:i64][field1:i64]...
+# rdi = pointer to the enum
+ # rsi = field index (0 for first payload field)
+ # Returns: the field value in rax
+ __extract_enum_value:
+       push rbp
+       mov rbp, rsp
+       mov rax, rdi
+       mov rcx, rsi
+       shl rcx, 3
+       add rax, rcx
+       add rax, 8
+       mov rax, [rax]
+       mov rsp, rbp
+       pop rbp
+       ret
 
-# PHASE 5.2: Runtime support for builtin macros
+ # __enum_discriminant: Extract the discriminant (tag) from an enum
+ # Memory layout: [tag:i64][field0:i64][field1:i64]...
+ # rdi = pointer to the enum
+ # Returns: the discriminant in rax
+ __enum_discriminant:
+       push rbp
+       mov rbp, rsp
+       mov rax, [rdi]
+       mov rsp, rbp
+       pop rbp
+       ret
+
+ # PHASE 5.2: Runtime support for builtin macros
 
 # assert!(condition) - takes bool in rdi, exits if false
 assert:
@@ -2818,10 +3200,9 @@ assert:
       jne .assert_ok       # If true, continue
       # If false, print error and exit
       lea rdi, [rip + assert_fail_msg]
-      sub rsp, 8
+      xor rax, rax
       call printf
-      add rsp, 8
-      mov rax, 1           # Exit code 1
+      mov rdi, 101         # Exit code 101, same as a Rust panic
       call exit
 .assert_ok:
       mov rsp, rbp
@@ -2836,10 +3217,9 @@ assert_eq:
       je .assert_eq_ok     # If equal, continue
       # If not equal, print error and exit
       lea rdi, [rip + assert_fail_msg]
-      sub rsp, 8
+      xor rax, rax
       call printf
-      add rsp, 8
-      mov rax, 1           # Exit code 1
+      mov rdi, 101         # Exit code 101, same as a Rust panic
       call exit
 .assert_eq_ok:
       mov rsp, rbp
@@ -2854,10 +3234,9 @@ assert_ne:
       jne .assert_ne_ok    # If not equal, continue
       # If equal, print error and exit
       lea rdi, [rip + assert_fail_msg]
-      sub rsp, 8
+      xor rax, rax
       call printf
-      add rsp, 8
-      mov rax, 1           # Exit code 1
+      mov rdi, 101         # Exit code 101, same as a Rust panic
       call exit
 .assert_ne_ok:
       mov rsp, rbp
@@ -2868,7 +3247,6 @@ assert_ne:
 panic:
       push rbp
       mov rbp, rsp
-      sub rsp, 8
       # Check if rdi is empty/null - if so use default message
       test rdi, rdi
       jnz .panic_custom
@@ -2882,11 +3260,8 @@ panic:
       xor rax, rax
       call printf
 .panic_exit:
-      mov rsp, rbp
-      pop rbp
-      mov rax, 101         # Exit code 101
+      mov rdi, 101         # Exit code 101
       call exit
-      ret
 
 # format!(fmt, ...) - takes format string in rdi, returns string (stub implementation)
 format:
@@ -2903,13 +3278,16 @@ format:
 dbg:
       push rbp
       mov rbp, rsp
-      mov rsi, rdi         # Save the value in rsi for printf
+      push rbx
+      sub rsp, 8           # keep the stack 16-byte aligned
+      mov rbx, rdi         # printf clobbers rsi, keep the value in a callee-saved register
+      mov rsi, rdi
       lea rdi, [rip + dbg_msg]  # Format string in rdi
-      sub rsp, 8
+      xor rax, rax
       call printf          # Print "[DEBUG] value: <value>\n"
+      mov rax, rbx         # Return the original value
       add rsp, 8
-      mov rax, rsi         # Return the original value
-      mov rsp, rbp
+      pop rbx
       pop rbp
       ret
 
@@ -2917,49 +3295,40 @@ dbg:
 todo:
       push rbp
       mov rbp, rsp
-      lea rdi, [rip + todo_msg]  # Print "todo!(): not yet implemented\n"
-      sub rsp, 8
+      lea rdi, [rip + todo_msg]
+      xor rax, rax
       call printf
-      add rsp, 8
-      mov rsp, rbp
-      pop rbp
-      mov rax, 101         # Exit code 101 (convention for unimplemented)
+      mov rdi, 101         # Exit code 101 (convention for unimplemented)
       call exit
-      ret
 
 # unimplemented!() - prints message and exits
 unimplemented:
       push rbp
       mov rbp, rsp
-      lea rdi, [rip + unimplemented_msg]  # Print "unimplemented!(): feature not implemented\n"
-      sub rsp, 8
+      lea rdi, [rip + unimplemented_msg]
+      xor rax, rax
       call printf
-      add rsp, 8
-      mov rsp, rbp
-      pop rbp
-      mov rax, 101         # Exit code 101 (convention for unimplemented)
+      mov rdi, 101         # Exit code 101 (convention for unimplemented)
       call exit
-      ret
 "#
     .to_string()
 }
 
 /// Generate a main function that calls the user's main entry point
 pub fn generate_main_wrapper() -> String {
-     r#"
+    r#"
 .section .text
 .globl main
 
 main:
      push rbp
      mov rbp, rsp
-     sub rsp, 8
      call gaia_main
      mov rsp, rbp
      pop rbp
      ret
      "#
-     .to_string()
+    .to_string()
 }
 
 #[cfg(test)]

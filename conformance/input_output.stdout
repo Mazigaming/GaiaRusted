@@ -1,0 +1,8 @@
+row 0: sum 6 max Some(3)
+row 1: sum 35 max Some(40)
+row 2: sum 7 max Some(7)
+rest ["leftover text", "and more"]
+[3, 2, 1] 14 bytes
+false true
+NotFound | No such file or directory (os error 2)
+"one\n" 4

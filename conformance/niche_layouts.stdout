@@ -1,0 +1,13 @@
+8 8 16
+1 1 4
+1 4 8
+8 8 24
+16 8 16
+4 [Some(1), None, Some(3)]
+[Some(true), None, Some(false)] [Some(Some(true)), Some(None), None] 2
+[Some(Less), None, Some(Greater)]
+dot line:ab empty 
+5
+None Some("hi") None
+Some("b") Some(1)
+[Some('a'), Some('é'), None] Ok(5) Err(())

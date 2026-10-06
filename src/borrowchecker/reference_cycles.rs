@@ -63,20 +63,18 @@ impl ReferenceGraph {
 
     /// Add an edge to the graph
     pub fn add_edge(&mut self, from: String, to: String, kind: ReferenceKind) {
-        self.edges.push(ReferenceEdge { from: from.clone(), to: to.clone(), kind });
-        
-        self.adjacency
-            .entry(from)
-            .or_insert_with(Vec::new)
-            .push(to);
+        self.edges.push(ReferenceEdge {
+            from: from.clone(),
+            to: to.clone(),
+            kind,
+        });
+
+        self.adjacency.entry(from).or_insert_with(Vec::new).push(to);
     }
 
     /// Get all edges from a type
     pub fn get_edges_from(&self, from: &str) -> Vec<&ReferenceEdge> {
-        self.edges
-            .iter()
-            .filter(|e| e.from == from)
-            .collect()
+        self.edges.iter().filter(|e| e.from == from).collect()
     }
 
     /// Check if there's a cycle starting from a node

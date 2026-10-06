@@ -249,7 +249,11 @@ impl LifetimeElisionAnalyzer {
     pub fn generate_report(&self) -> LifetimeElisionAnalysisReport {
         LifetimeElisionAnalysisReport {
             function_count: self.functions.len(),
-            total_input_positions: self.functions.values().map(|s| s.input_positions.len()).sum(),
+            total_input_positions: self
+                .functions
+                .values()
+                .map(|s| s.input_positions.len())
+                .sum(),
             total_output_positions: self
                 .functions
                 .values()
@@ -344,18 +348,14 @@ mod tests {
     #[test]
     fn test_output_lifetime_count() {
         let mut analyzer = create_test_analyzer();
-        analyzer
-            .register_function("foo", vec!["&str"], "&str")
-            .ok();
+        analyzer.register_function("foo", vec!["&str"], "&str").ok();
         assert_eq!(analyzer.output_lifetime_count("foo"), Some(1));
     }
 
     #[test]
     fn test_infer_lifetimes_rule2() {
         let mut analyzer = create_test_analyzer();
-        analyzer
-            .register_function("foo", vec!["&str"], "&str")
-            .ok();
+        analyzer.register_function("foo", vec!["&str"], "&str").ok();
         let report = analyzer.infer_lifetimes("foo").unwrap();
         assert_eq!(report.inferred_count, 1);
     }
@@ -395,7 +395,9 @@ mod tests {
     fn test_multiple_functions() {
         let mut analyzer = create_test_analyzer();
         analyzer.register_function("foo", vec!["&str"], "&str").ok();
-        analyzer.register_function("bar", vec!["&str", "&str"], "&str").ok();
+        analyzer
+            .register_function("bar", vec!["&str", "&str"], "&str")
+            .ok();
         assert_eq!(analyzer.functions.len(), 2);
     }
 

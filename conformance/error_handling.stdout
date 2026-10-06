@@ -1,0 +1,19 @@
+ok 42
+ok 7
+err negative: -3 / Negative(-3) / source: 
+err empty input / Empty / source: 
+err parse error: invalid digit found in string / Parse(ParseIntError { kind: InvalidDigit }) / source: invalid digit found in string
+Some(6)
+total too large
+parse error: invalid digit found in string
+Some('H') None
+Ok([1, 2, 3]) Err("invalid digit found in string")
+Some([1, 2])
+9 0 Some("boom")
+None Ok(6)
+Some(4) Some(4) Some((4, 'a')) Ok(4)
+12 -1
+Some(4) None
+10
+converted
+missing file NotFound

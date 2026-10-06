@@ -150,7 +150,8 @@ impl EnumSupportAnalyzer {
             return Err("Enum name cannot be empty".to_string());
         }
 
-        self.enums.insert(name.to_string(), EnumDefinition::new(name.to_string()));
+        self.enums
+            .insert(name.to_string(), EnumDefinition::new(name.to_string()));
         Ok(())
     }
 
@@ -249,12 +250,9 @@ impl EnumSupportAnalyzer {
 
     /// Get all variant names for an enum
     pub fn get_variant_names(&self, enum_name: &str) -> Option<Vec<String>> {
-        self.enums.get(enum_name).map(|e| {
-            e.variants
-                .iter()
-                .map(|v| v.name.clone())
-                .collect()
-        })
+        self.enums
+            .get(enum_name)
+            .map(|e| e.variants.iter().map(|v| v.name.clone()).collect())
     }
 
     /// Validate an enum
@@ -397,11 +395,8 @@ mod tests {
     fn test_register_tuple_variant() {
         let mut analyzer = create_test_analyzer();
         analyzer.register_enum("Option").ok();
-        let result = analyzer.register_variant(
-            "Option",
-            "Some",
-            VariantKind::Tuple(vec!["T".to_string()]),
-        );
+        let result =
+            analyzer.register_variant("Option", "Some", VariantKind::Tuple(vec!["T".to_string()]));
         assert!(result.is_ok());
     }
 

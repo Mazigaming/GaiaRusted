@@ -126,11 +126,17 @@ impl TailLoopGenerator {
         let factor = self.config.unroll_factor.factor();
 
         // Initialize loop counter
-        self.instructions.push(format!("    mov rax, {}          ; initialize {} = start", start, loop_var));
+        self.instructions.push(format!(
+            "    mov rax, {}          ; initialize {} = start",
+            start, loop_var
+        ));
 
         // Calculate main loop iterations
         let main_iters = format!("({} - {}) / {}", end, start, stride * factor as i64);
-        self.instructions.push(format!("    mov rcx, {}          ; main loop iterations", main_iters));
+        self.instructions.push(format!(
+            "    mov rcx, {}          ; main loop iterations",
+            main_iters
+        ));
     }
 
     /// Generate main unrolled loop body
@@ -148,16 +154,23 @@ impl TailLoopGenerator {
         // Generate factor copies of the loop body with different iteration offsets
         for i in 0..factor {
             let offset = (i as i64) * self.config.stride;
-            self.instructions.push(format!("    ; iteration {} (offset {})", i, offset));
-            self.instructions.push(format!("    mov rax, [rax + {}]  ; load", offset));
-            self.instructions.push(format!("    add rax, 1           ; increment"));
-            self.instructions.push(format!("    mov [rax], rax       ; store"));
+            self.instructions
+                .push(format!("    ; iteration {} (offset {})", i, offset));
+            self.instructions
+                .push(format!("    mov rax, [rax + {}]  ; load", offset));
+            self.instructions
+                .push(format!("    add rax, 1           ; increment"));
+            self.instructions
+                .push(format!("    mov [rax], rax       ; store"));
         }
 
         // Decrement counter and loop
         self.instructions.push(format!("    dec rcx"));
-        self.instructions.push(format!("    add rax, {}  ; next {} iterations", 
-            stride * factor as i64, factor));
+        self.instructions.push(format!(
+            "    add rax, {}  ; next {} iterations",
+            stride * factor as i64,
+            factor
+        ));
         self.instructions.push(format!("    jmp {}", main_label));
 
         self.instructions.push(format!("{}:", end_label));
@@ -174,21 +187,35 @@ impl TailLoopGenerator {
         let epilogue_end_label = self.gen_label(".unroll_epilogue_end_");
 
         self.instructions.push(format!("{}:", epilogue_label));
-        self.instructions.push(format!("    cmp rcx, {}        ; remainder iterations", remainder));
-        self.instructions.push(format!("    je {}", epilogue_end_label));
+        self.instructions.push(format!(
+            "    cmp rcx, {}        ; remainder iterations",
+            remainder
+        ));
+        self.instructions
+            .push(format!("    je {}", epilogue_end_label));
 
         // Scalar epilogue loop
         let scalar_label = self.gen_label(".scalar_");
-        self.instructions.push(format!("    xor rcx, rcx                ; reset counter"));
+        self.instructions
+            .push(format!("    xor rcx, rcx                ; reset counter"));
         self.instructions.push(format!("{}:", scalar_label));
-        self.instructions.push(format!("    cmp rcx, {}        ; remainder count", remainder));
-        self.instructions.push(format!("    je {}", epilogue_end_label));
+        self.instructions.push(format!(
+            "    cmp rcx, {}        ; remainder count",
+            remainder
+        ));
+        self.instructions
+            .push(format!("    je {}", epilogue_end_label));
 
-        self.instructions.push(format!("    mov rax, [rax]   ; load single element"));
-        self.instructions.push(format!("    add rax, 1       ; increment"));
-        self.instructions.push(format!("    mov [rax], rax   ; store single element"));
-        self.instructions.push(format!("    add rax, {}      ; next element", 
-            self.config.stride));
+        self.instructions
+            .push(format!("    mov rax, [rax]   ; load single element"));
+        self.instructions
+            .push(format!("    add rax, 1       ; increment"));
+        self.instructions
+            .push(format!("    mov [rax], rax   ; store single element"));
+        self.instructions.push(format!(
+            "    add rax, {}      ; next element",
+            self.config.stride
+        ));
         self.instructions.push(format!("    inc rcx"));
         self.instructions.push(format!("    jmp {}", scalar_label));
 
@@ -241,9 +268,12 @@ impl LoopUnroller {
 
     /// Get total speedup from all unrolled loops
     pub fn total_speedup(&self) -> f32 {
-        let avg_factor = self.loops.iter()
+        let avg_factor = self
+            .loops
+            .iter()
             .map(|l| l.unroll_factor.factor() as f32)
-            .sum::<f32>() / (self.loops.len().max(1) as f32);
+            .sum::<f32>()
+            / (self.loops.len().max(1) as f32);
 
         // Speedup scales roughly linearly with unroll factor up to 4x-8x
         // Beyond that, returns diminish due to register pressure and cache effects
@@ -290,7 +320,7 @@ mod tests {
         let config = LoopUnrollingConfig::new("i".to_string(), 0, 10, 1);
         let mut gen = TailLoopGenerator::new(config);
         let asm = gen.generate();
-        
+
         assert!(asm.contains("unroll"));
         // With 10 iterations and 8x unroll, should have epilogue for remaining 2 iterations
         assert!(asm.contains("epilogue"));

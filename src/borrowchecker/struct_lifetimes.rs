@@ -3,9 +3,9 @@
 //! Handles lifetime parameters in struct definitions and validates
 //! that field lifetimes are properly constrained by struct lifetimes.
 
-use crate::parser::ast::{Type, GenericParam, StructField};
-use super::lifetimes::{Lifetime, LifetimeContext};
 use super::lifetime_validation::StructLifetimeValidator;
+use super::lifetimes::{Lifetime, LifetimeContext};
+use crate::parser::ast::{GenericParam, StructField, Type};
 
 /// Information about a struct's lifetime parameters and field constraints
 #[derive(Debug, Clone)]
@@ -104,7 +104,10 @@ pub fn generate_struct_constraints(
                 lifetime_ctx.add_constraint(
                     struct_lt,
                     field_lt.clone(),
-                    format!("struct lifetime '{}' must outlive field lifetime", struct_param),
+                    format!(
+                        "struct lifetime '{}' must outlive field lifetime",
+                        struct_param
+                    ),
                 );
             }
         }
@@ -116,7 +119,8 @@ pub fn validate_struct_lifetimes(
     info: &StructLifetimes,
     named_lifetime_params: &[String],
 ) -> Result<(), String> {
-    let mut used_lifetime_params: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut used_lifetime_params: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     for opt_lt in &info.field_lifetimes {
         if let Some(Lifetime::Named(name)) = opt_lt {
@@ -143,12 +147,12 @@ pub fn validate_struct_lifetimes_detailed(
     fields: &[StructField],
 ) -> Result<(), Vec<String>> {
     let mut validator = StructLifetimeValidator::new(generics);
-    
+
     // Collect field lifetimes
     for (_i, field) in fields.iter().enumerate() {
         validator.add_field(field.name.clone(), &field.ty);
     }
-    
+
     // Perform validation
     validator.validate()
 }

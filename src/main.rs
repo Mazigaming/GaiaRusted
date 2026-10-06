@@ -7,23 +7,28 @@ use std::fs;
 use std::process;
 use std::time::Instant;
 
-mod lexer;
-mod parser;
-mod lowering;
-mod typechecker;
 mod borrowchecker;
-mod mir;
 mod codegen;
 mod formatter;
+mod lexer;
+mod lowering;
+mod mir;
+mod parser;
+mod typechecker;
+mod typesystem;
 
-use formatter::{Phase, Status, Colors};
+use formatter::{Colors, Phase, Status};
 
 fn main() {
     let total_start = Instant::now();
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("{}usage:{} gaiarusted <file.rs> [-o <output>]", Colors::BOLD, Colors::RESET);
+        eprintln!(
+            "{}usage:{} gaiarusted <file.rs> [-o <output>]",
+            Colors::BOLD,
+            Colors::RESET
+        );
         process::exit(1);
     }
 
@@ -114,12 +119,33 @@ fn main() {
     phase_times.push(("Lowering".to_string(), lower_time));
     println!();
 
-    // Phase 4: Type Checking
+    // Phase 4: Type Checking (flat check + HM unification via IntegratedTypeChecker)
     let tc_start = Instant::now();
     formatter::progress(&Phase::TYPECHECKING);
     if let Err(e) = typechecker::check_types(&hir) {
         formatter::error(&format!("type check error: {}", e));
         process::exit(1);
+    }
+    // Also run IntegratedTypeChecker (HM unification engine) on the raw AST
+    {
+        use crate::typesystem::IntegratedTypeChecker;
+        let mut itc = IntegratedTypeChecker::new();
+        match itc.check_program(&ast) {
+            Ok(report) => {
+                // Report any hard errors from the HM checker
+                if !report.errors.is_empty() {
+                    for err in &report.errors {
+                        formatter::error(&format!("type error: {}", err.message));
+                    }
+                    process::exit(1);
+                }
+            }
+            Err(e) => {
+                // Non-fatal: log but don't block compilation for now
+                // (The HM checker may flag things the flat checker accepts)
+                let _ = e; // suppress unused warning
+            }
+        }
     }
     let tc_time = tc_start.elapsed();
     phase_times.push(("Type Checking".to_string(), tc_time));
@@ -194,8 +220,12 @@ fn main() {
 
     // Print summary
     println!();
-    println!("{}summary:{}",Colors::DIM, Colors::RESET);
-    println!("  {}• {} lines of code", Colors::CYAN, source.lines().count());
+    println!("{}summary:{}", Colors::DIM, Colors::RESET);
+    println!(
+        "  {}• {} lines of code",
+        Colors::CYAN,
+        source.lines().count()
+    );
     println!("  {}• {} ms total", Colors::CYAN, total_time.as_millis());
     println!();
 }

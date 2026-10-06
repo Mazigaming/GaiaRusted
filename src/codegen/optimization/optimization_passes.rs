@@ -102,7 +102,9 @@ impl OptimizationEngine {
             }
         }
 
-        let _ = self.optimization_stats.entry("ConstantFolding".to_string())
+        let _ = self
+            .optimization_stats
+            .entry("ConstantFolding".to_string())
             .and_modify(|e| *e += 1)
             .or_insert(1);
         Ok(())
@@ -123,14 +125,18 @@ impl OptimizationEngine {
             }
         }
 
-        let _ = self.optimization_stats.entry("DeadCodeElimination".to_string())
+        let _ = self
+            .optimization_stats
+            .entry("DeadCodeElimination".to_string())
             .and_modify(|e| *e += 1)
             .or_insert(1);
         Ok(())
     }
 
     fn loop_invariant_code_motion(&mut self) -> Result<(), String> {
-        let _ = self.optimization_stats.entry("LoopInvariant".to_string())
+        let _ = self
+            .optimization_stats
+            .entry("LoopInvariant".to_string())
             .and_modify(|e| *e += 1)
             .or_insert(1);
         Ok(())
@@ -148,7 +154,9 @@ impl OptimizationEngine {
             }
         }
 
-        let _ = self.optimization_stats.entry("CommonSubexpression".to_string())
+        let _ = self
+            .optimization_stats
+            .entry("CommonSubexpression".to_string())
             .and_modify(|e| *e += 1)
             .or_insert(1);
         Ok(())
@@ -162,22 +170,24 @@ impl OptimizationEngine {
 
             if let Some(next_instr) = next {
                 if curr.operation == "load" && next_instr.operation == "store" {
-                    if curr.operands == next_instr.operands {
-                    }
+                    if curr.operands == next_instr.operands {}
                 }
             }
 
             i += 1;
         }
 
-        let _ = self.optimization_stats.entry("Peephole".to_string())
+        let _ = self
+            .optimization_stats
+            .entry("Peephole".to_string())
             .and_modify(|e| *e += 1)
             .or_insert(1);
         Ok(())
     }
 
     pub fn get_optimized_instructions(&self) -> Vec<Instruction> {
-        self.instructions.iter()
+        self.instructions
+            .iter()
             .filter(|instr| !self.dead_instructions.contains(&instr.id))
             .cloned()
             .collect()
@@ -192,7 +202,8 @@ impl OptimizationEngine {
     }
 
     pub fn is_pass_enabled(&self, pass_name: &str) -> bool {
-        self.passes.iter()
+        self.passes
+            .iter()
             .find(|p| p.name == pass_name)
             .map(|p| p.enabled)
             .unwrap_or(false)

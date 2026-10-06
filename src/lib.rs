@@ -38,6 +38,14 @@
 //! let result = compile_files(&config)?;
 //! ```
 
+// The typed pipeline: syntax → sema → ir → x64
+pub mod syntax;
+pub mod sema;
+pub mod ir;
+pub mod x64;
+pub mod pipeline;
+pub mod driver;
+
 // Frontend: Lexing, Parsing & Macros
 pub mod lexer;
 pub mod parser;
@@ -115,6 +123,10 @@ pub mod pattern_matching {
 }
 pub mod option_result {
     pub use crate::stdlib::options_results::*;
+    // The helper methods operate on the std types; re-export them so the
+    // `gaiarusted::option_result::{Option, Result}` path keeps working.
+    pub use std::option::Option;
+    pub use std::result::Result;
 }
 pub mod library_api {
     pub use crate::compiler::*;
@@ -124,7 +136,7 @@ pub mod modules {
     pub use crate::utilities::modules::*;
 }
 
-pub use config::{CompilationConfig, OutputFormat};
+pub use config::{CompilationConfig, OutputFormat, Pipeline};
 pub use compiler::{compile_files, CompilationResult, CompileError, ErrorKind};
 pub use utilities::error_reporting::{Diagnostic, ErrorReporter, SourceLocation, Severity};
 pub use utilities::builtins::BuiltinFunction;

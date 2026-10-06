@@ -47,9 +47,28 @@ impl std::fmt::Display for OutputFormat {
     }
 }
 
+/// Which compiler implementation handles a program.
+///
+/// The typed pipeline (`syntax` → `sema` → `ir` → `x64`) is the compiler
+/// proper. The legacy pipeline remains for programs using features the typed
+/// one does not cover yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pipeline {
+    /// The typed pipeline, falling back to the legacy one if it cannot
+    /// compile the program.
+    #[default]
+    Auto,
+    /// The typed pipeline only.
+    Typed,
+    /// The legacy pipeline only.
+    Legacy,
+}
+
 /// Configuration for compilation
 #[derive(Debug, Clone)]
 pub struct CompilationConfig {
+     /// Which compiler implementation handles the program
+     pub pipeline: Pipeline,
      /// Source files to compile
      pub source_files: Vec<PathBuf>,
      /// Library paths for linking
@@ -80,6 +99,7 @@ impl CompilationConfig {
     /// Create a new default configuration
     pub fn new() -> Self {
         CompilationConfig {
+            pipeline: Pipeline::default(),
             source_files: Vec::new(),
             lib_paths: Vec::new(),
             libraries: Vec::new(),
@@ -93,6 +113,12 @@ impl CompilationConfig {
             crate_version: "0.0.0".to_string(),
             is_library: false,
         }
+    }
+
+    /// Choose which compiler implementation handles the program
+    pub fn with_pipeline(mut self, pipeline: Pipeline) -> Self {
+        self.pipeline = pipeline;
+        self
     }
 
     /// Add a source file

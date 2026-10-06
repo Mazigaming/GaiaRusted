@@ -119,10 +119,7 @@ impl LifetimeConstraintSolver {
                             .map(|s| s.contains(&target))
                             .unwrap_or(false)
                         {
-                            self.reachability
-                                .get_mut(&node)
-                                .unwrap()
-                                .insert(target);
+                            self.reachability.get_mut(&node).unwrap().insert(target);
                             changed = true;
                         }
                     }
@@ -154,11 +151,7 @@ impl LifetimeConstraintSolver {
             self.build_outlives_graph()?;
             self.compute_transitive_closure()?;
         }
-        Ok(self
-            .reachability
-            .get(lifetime)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.reachability.get(lifetime).cloned().unwrap_or_default())
     }
 
     pub fn get_outlived_by(&mut self, lifetime: &str) -> LifetimeResult<HashSet<String>> {

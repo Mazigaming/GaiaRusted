@@ -1,0 +1,55 @@
+variable field
+  moved name
+  drop name
+  drop pet
+  drop street
+  drop city
+nested field
+  took city
+  drop city
+  end of block
+  drop name
+  drop pet
+  drop street
+conditional
+  took pet
+  drop pet
+  round 0 ends
+  drop name
+  drop street
+  drop city
+  round 1 ends
+  drop name
+  drop pet
+  drop street
+  drop city
+refill
+  took name
+  drop name
+  drop pet
+  refilled
+  drop new name
+  drop new pet
+  drop street
+  drop city
+temporary
+  drop name
+  drop pet
+  drop street
+  have city
+  drop city
+tuple
+  right 5
+  drop right
+  drop left
+loop reuse
+  drop name
+  drop street
+  drop city
+  drop name
+  drop street
+  drop city
+  kept 2
+  drop pet
+  drop pet
+done

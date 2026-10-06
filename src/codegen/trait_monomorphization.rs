@@ -88,7 +88,7 @@ impl TraitMonomorphizationRegistry {
         type_args: Vec<String>,
     ) -> Result<String, String> {
         let key = format!("{}::{}", trait_name, method_name);
-        
+
         if !self.generic_methods.contains_key(&key) {
             return Err(format!(
                 "Generic trait method '{}::{}' not registered",
@@ -96,12 +96,8 @@ impl TraitMonomorphizationRegistry {
             ));
         }
 
-        let concrete_symbol = self.generate_concrete_symbol(
-            trait_name,
-            method_name,
-            impl_type,
-            &type_args,
-        );
+        let concrete_symbol =
+            self.generate_concrete_symbol(trait_name, method_name, impl_type, &type_args);
 
         let instance = ConcreteTraitMethod {
             trait_name: trait_name.to_string(),
@@ -136,17 +132,28 @@ impl TraitMonomorphizationRegistry {
             .collect::<Vec<_>>()
             .join("_");
 
-        let impl_part = impl_type.replace(" ", "_").replace("<", "_").replace(">", "_");
+        let impl_part = impl_type
+            .replace(" ", "_")
+            .replace("<", "_")
+            .replace(">", "_");
 
         if type_part.is_empty() {
             format!("{}__{}__{}", trait_name, impl_part, method_name)
         } else {
-            format!("{}__{}__{}_{}", trait_name, impl_part, type_part, method_name)
+            format!(
+                "{}__{}__{}_{}",
+                trait_name, impl_part, type_part, method_name
+            )
         }
     }
 
     /// Register an implementation mapping
-    pub fn register_impl_mapping(&mut self, trait_name: String, impl_type: String, method_mapping: HashMap<String, String>) {
+    pub fn register_impl_mapping(
+        &mut self,
+        trait_name: String,
+        impl_type: String,
+        method_mapping: HashMap<String, String>,
+    ) {
         let key = format!("{}::{}", trait_name, impl_type);
         self.impl_map.insert(key, method_mapping);
     }
@@ -165,7 +172,11 @@ impl TraitMonomorphizationRegistry {
     }
 
     /// Get all instantiations for a specific trait method
-    pub fn get_instantiations(&self, trait_name: &str, method_name: &str) -> Vec<ConcreteTraitMethod> {
+    pub fn get_instantiations(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+    ) -> Vec<ConcreteTraitMethod> {
         self.instances
             .values()
             .filter(|inst| inst.trait_name == trait_name && inst.method_name == method_name)
@@ -205,10 +216,15 @@ impl TraitMonomorphizationRegistry {
         let mut errors = Vec::new();
 
         for (key, _method) in &self.generic_methods {
-            if !self.instances.values().any(|inst| {
-                format!("{}::{}", inst.trait_name, inst.method_name) == *key
-            }) {
-                errors.push(format!("No instantiation found for generic method: {}", key));
+            if !self
+                .instances
+                .values()
+                .any(|inst| format!("{}::{}", inst.trait_name, inst.method_name) == *key)
+            {
+                errors.push(format!(
+                    "No instantiation found for generic method: {}",
+                    key
+                ));
             }
         }
 
@@ -239,7 +255,7 @@ mod tests {
             vec!["F".to_string()],
             "fn(F) -> Self".to_string(),
         );
-        
+
         assert_eq!(registry.generic_methods.len(), 1);
     }
 
@@ -267,12 +283,7 @@ mod tests {
     #[test]
     fn test_unregistered_method_fails() {
         let mut registry = TraitMonomorphizationRegistry::new();
-        let result = registry.instantiate_trait_method(
-            "Unknown",
-            "method",
-            "Type",
-            vec![],
-        );
+        let result = registry.instantiate_trait_method("Unknown", "method", "Type", vec![]);
 
         assert!(result.is_err());
     }
@@ -280,12 +291,8 @@ mod tests {
     #[test]
     fn test_concrete_symbol_generation() {
         let registry = TraitMonomorphizationRegistry::new();
-        let symbol = registry.generate_concrete_symbol(
-            "Display",
-            "fmt",
-            "String",
-            &["Debug".to_string()],
-        );
+        let symbol =
+            registry.generate_concrete_symbol("Display", "fmt", "String", &["Debug".to_string()]);
 
         assert!(symbol.contains("Display"));
         assert!(symbol.contains("String"));
@@ -314,19 +321,13 @@ mod tests {
             "fn(F) -> Self".to_string(),
         );
 
-        registry.instantiate_trait_method(
-            "Iterator",
-            "map",
-            "Vec<i32>",
-            vec!["i32".to_string()],
-        ).ok();
+        registry
+            .instantiate_trait_method("Iterator", "map", "Vec<i32>", vec!["i32".to_string()])
+            .ok();
 
-        registry.instantiate_trait_method(
-            "Iterator",
-            "map",
-            "Vec<String>",
-            vec!["String".to_string()],
-        ).ok();
+        registry
+            .instantiate_trait_method("Iterator", "map", "Vec<String>", vec!["String".to_string()])
+            .ok();
 
         let instances = registry.get_instantiations("Iterator", "map");
         assert_eq!(instances.len(), 2);
@@ -342,12 +343,9 @@ mod tests {
             "fn(F) -> Self".to_string(),
         );
 
-        registry.instantiate_trait_method(
-            "Iterator",
-            "map",
-            "Vec<i32>",
-            vec!["i32".to_string()],
-        ).ok();
+        registry
+            .instantiate_trait_method("Iterator", "map", "Vec<i32>", vec!["i32".to_string()])
+            .ok();
 
         let symbols = registry.generate_linker_symbols();
         assert!(!symbols.is_empty());

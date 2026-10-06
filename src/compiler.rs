@@ -6,15 +6,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
-use crate::config::{CompilationConfig, OutputFormat};
-use crate::lexer;
-use crate::parser;
-use crate::lowering;
-use crate::typechecker;
 use crate::borrowchecker;
-use crate::mir;
 use crate::codegen;
 use crate::codegen::backend::assembler::Assembler;
+use crate::config::{CompilationConfig, OutputFormat, Pipeline};
+use crate::lexer;
+use crate::lowering;
+use crate::mir;
+use crate::parser;
+use crate::runtime::async_lowering;
+use crate::typechecker;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -85,10 +86,16 @@ impl CompileError {
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}: {} ({})", self.phase, self.message, 
-            self.file.as_ref()
+        write!(
+            f,
+            "{}: {} ({})",
+            self.phase,
+            self.message,
+            self.file
+                .as_ref()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "unknown location".to_string()))
+                .unwrap_or_else(|| "unknown location".to_string())
+        )
     }
 }
 
@@ -142,12 +149,97 @@ impl CompilationStats {
 
 /// Compile multiple files according to configuration
 pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, CompileError> {
+    if config.pipeline == Pipeline::Legacy {
+        return compile_files_legacy(config);
+    }
+    let failure = match compile_files_typed(config)? {
+        Ok(result) => return Ok(result),
+        Err(failure) => failure,
+    };
+    // Not every program is within the typed pipeline's reach yet.
+    if config.pipeline == Pipeline::Auto {
+        if let Ok(result) = compile_files_legacy(config) {
+            if result.success {
+                return Ok(result);
+            }
+        }
+    }
+    Ok(CompilationResult {
+        success: false,
+        output_files: Vec::new(),
+        stats: CompilationStats::new(),
+        errors: vec![failure],
+    })
+}
+
+/// The `phase` of errors reported by the typed pipeline. Their message is a
+/// complete, rendered diagnostic.
+pub const TYPED_PIPELINE_PHASE: &str = "Compilation";
+
+/// The crate root among the source files: `main.rs` or `lib.rs` if present,
+/// otherwise the first file given.
+fn crate_root(config: &CompilationConfig) -> Option<&PathBuf> {
+    let is_root = |file: &&PathBuf| file.file_name().is_some_and(|name| name == "main.rs" || name == "lib.rs");
+    config.source_files.iter().find(is_root).or_else(|| config.source_files.first())
+}
+
+/// Compile with the typed pipeline. The inner `Err` is a compile error in
+/// the program (or a feature the pipeline does not support yet).
+fn compile_files_typed(
+    config: &CompilationConfig,
+) -> Result<Result<CompilationResult, CompileError>, CompileError> {
+    let started = Instant::now();
+    config
+        .validate()
+        .map_err(|e| CompileError::new("Configuration", &e, ErrorKind::InternalError))?;
+    let Some(root) = crate_root(config) else {
+        return Err(CompileError::new("Configuration", "no source files given", ErrorKind::InternalError));
+    };
+    let extra_files: Vec<PathBuf> = config.source_files.iter().filter(|file| *file != root).cloned().collect();
+
+    let assembly = match crate::pipeline::compile(
+        root,
+        &extra_files,
+        crate::pipeline::Emit::Assembly,
+        crate::pipeline::OptLevel::from_number(config.opt_level),
+    ) {
+        Ok(assembly) => assembly,
+        Err(failure) => {
+            // The diagnostic already names the file and line it is about.
+            let rendered = failure.render();
+            let details = rendered.strip_prefix("error: ").unwrap_or(&rendered);
+            return Ok(Err(CompileError::new(TYPED_PIPELINE_PHASE, details.trim_end(), ErrorKind::CodeIssue)));
+        }
+    };
+
+    let mut stats = CompilationStats::new();
+    stats.files_compiled = config.source_files.len();
+    stats.total_lines = config
+        .source_files
+        .iter()
+        .filter_map(|file| fs::read_to_string(file).ok())
+        .map(|source| source.lines().count())
+        .sum();
+    stats.assembly_size = assembly.len();
+    Ok(match write_output(config, &assembly) {
+        Ok(output_files) => {
+            stats.compilation_time_ms = started.elapsed().as_millis();
+            Ok(CompilationResult { success: true, output_files, stats, errors: Vec::new() })
+        }
+        Err(e) => Err(CompileError::new("Output Generation", &e, ErrorKind::InternalError)),
+    })
+}
+
+/// Compile with the legacy pipeline.
+fn compile_files_legacy(config: &CompilationConfig) -> Result<CompilationResult, CompileError> {
     let total_start = Instant::now();
-    
+
     // Initialize dashboard for real-time progress display
     let mut dashboard = crate::dashboard::Dashboard::new();
-    
-    config.validate().map_err(|e| CompileError::new("Configuration", &e, ErrorKind::InternalError))?;
+
+    config
+        .validate()
+        .map_err(|e| CompileError::new("Configuration", &e, ErrorKind::InternalError))?;
 
     let mut stats = CompilationStats::new();
     let mut errors = Vec::new();
@@ -157,19 +249,26 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     // Parsing phase - compile main file first, then handle modules
     dashboard.start_phase("Parsing");
     let mut module_loader = crate::module_loader::ModuleLoader::new(".");
-    
+
     // Find the main file (conventionally main.rs or lib.rs)
-    let main_file_path = config.source_files.iter()
-        .find(|f| f.file_name().map(|n| n == "main.rs" || n == "lib.rs").unwrap_or(false))
+    let main_file_path = config
+        .source_files
+        .iter()
+        .find(|f| {
+            f.file_name()
+                .map(|n| n == "main.rs" || n == "lib.rs")
+                .unwrap_or(false)
+        })
         .or_else(|| config.source_files.first())
         .cloned();
-    
+
     // Compile main file first
     if let Some(main_source_file) = &main_file_path {
         if config.verbose {
             println!("📝 Compiling: {}", main_source_file.display());
         }
 
+        lowering::set_current_file_is_crate_root(true);
         match compile_single_file(main_source_file, config, &mut stats, &mut module_loader) {
             Ok((hir_items, loc)) => {
                 stats.files_compiled += 1;
@@ -178,7 +277,11 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             }
             Err(e) => {
                 if config.verbose {
-                    println!("❌ Error compiling {}: {}", main_source_file.display(), e.message);
+                    println!(
+                        "❌ Error compiling {}: {}",
+                        main_source_file.display(),
+                        e.message
+                    );
                 }
                 errors.push(CompileError {
                     file: Some(main_source_file.clone()),
@@ -187,7 +290,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
             }
         }
     }
-    
+
     // Then compile other files
     for source_file in &config.source_files {
         if Some(source_file) != main_file_path.as_ref() {
@@ -195,6 +298,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                 println!("📝 Compiling: {}", source_file.display());
             }
 
+            lowering::set_current_file_is_crate_root(false);
             match compile_single_file(source_file, config, &mut stats, &mut module_loader) {
                 Ok((hir_items, loc)) => {
                     stats.files_compiled += 1;
@@ -203,7 +307,11 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                 }
                 Err(e) => {
                     if config.verbose {
-                        println!("❌ Error compiling {}: {}", source_file.display(), e.message);
+                        println!(
+                            "❌ Error compiling {}: {}",
+                            source_file.display(),
+                            e.message
+                        );
                     }
                     errors.push(CompileError {
                         file: Some(source_file.clone()),
@@ -233,14 +341,22 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     // Type Checking phase
     dashboard.start_phase("Type Checking");
     let tc_start = Instant::now();
-    use std::io::Write;
-    let _ = std::fs::File::create("/tmp/type_checking_started.txt")
-        .and_then(|mut f| writeln!(f, "Type checking started with {} HIR items", all_hir_items.len()));
     if let Err(mut e) = typechecker::check_types(&all_hir_items) {
         if e.file.is_none() && !config.source_files.is_empty() {
             e.file = Some(config.source_files[0].clone());
         }
         errors.push(e);
+    }
+    // Run IntegratedTypeChecker for HM unification on HIR items
+    {
+        let mut itc = crate::typesystem::IntegratedTypeChecker::new();
+        if let Err(e) = itc.check_items_hir(&all_hir_items) {
+            errors.push(CompileError::new(
+                "Type Checking (HM)",
+                &e.to_string(),
+                ErrorKind::CodeIssue,
+            ));
+        }
     }
     stats.typechecking_time_ms = tc_start.elapsed().as_millis();
     dashboard.end_phase("Type Checking");
@@ -249,7 +365,11 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
     dashboard.start_phase("Borrow Checking");
     let bc_start = Instant::now();
     if let Err(e) = borrowchecker::check_borrows(&all_hir_items) {
-        errors.push(CompileError::new("Borrow Checking", &e.to_string(), ErrorKind::CodeIssue));
+        errors.push(CompileError::new(
+            "Borrow Checking",
+            &e.to_string(),
+            ErrorKind::CodeIssue,
+        ));
     }
     stats.borrowchecking_time_ms = bc_start.elapsed().as_millis();
     dashboard.end_phase("Borrow Checking");
@@ -272,11 +392,15 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         Ok(mir_items) => {
             stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
             dashboard.end_phase("MIR Lowering");
-            
+
             let mir_opt_start = Instant::now();
             let mut optimized_mir = mir_items.clone();
             if let Err(e) = mir::optimize_mir(&mut optimized_mir, config.opt_level) {
-                errors.push(CompileError::new("MIR Optimization", &e.to_string(), ErrorKind::InternalError));
+                errors.push(CompileError::new(
+                    "MIR Optimization",
+                    &e.to_string(),
+                    ErrorKind::InternalError,
+                ));
             }
             stats.mir_optimization_time_ms = mir_opt_start.elapsed().as_millis();
 
@@ -289,7 +413,7 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                         stats.codegen_time_ms = codegen_start.elapsed().as_millis();
                         stats.assembly_size = assembly.len();
                         dashboard.end_phase("Code Generation");
-                        
+
                         let output_start = Instant::now();
                         match write_output(&config, &assembly) {
                             Ok(files) => {
@@ -298,14 +422,22 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
                             }
                             Err(e) => {
                                 stats.output_time_ms = output_start.elapsed().as_millis();
-                                errors.push(CompileError::new("Output Generation", &e, ErrorKind::InternalError));
+                                errors.push(CompileError::new(
+                                    "Output Generation",
+                                    &e,
+                                    ErrorKind::InternalError,
+                                ));
                             }
                         }
                     }
                     Err(e) => {
                         stats.codegen_time_ms = codegen_start.elapsed().as_millis();
                         dashboard.end_phase("Code Generation");
-                        errors.push(CompileError::new("Code Generation", &e.to_string(), ErrorKind::InternalError));
+                        errors.push(CompileError::new(
+                            "Code Generation",
+                            &e.to_string(),
+                            ErrorKind::InternalError,
+                        ));
                     }
                 }
             }
@@ -313,7 +445,11 @@ pub fn compile_files(config: &CompilationConfig) -> Result<CompilationResult, Co
         Err(e) => {
             stats.mir_lowering_time_ms = mir_lower_start.elapsed().as_millis();
             dashboard.end_phase("MIR Lowering");
-            errors.push(CompileError::new("MIR Lowering", &e.to_string(), ErrorKind::InternalError));
+            errors.push(CompileError::new(
+                "MIR Lowering",
+                &e.to_string(),
+                ErrorKind::InternalError,
+            ));
         }
     }
 
@@ -341,8 +477,12 @@ fn compile_single_file(
     _module_loader: &mut crate::module_loader::ModuleLoader,
 ) -> Result<(Vec<lowering::HirItem>, usize), CompileError> {
     let source = fs::read_to_string(source_file).map_err(|e| {
-        CompileError::new("File Reading", &format!("Failed to read file: {}", e), ErrorKind::InternalError)
-            .with_file(source_file.to_path_buf())
+        CompileError::new(
+            "File Reading",
+            &format!("Failed to read file: {}", e),
+            ErrorKind::InternalError,
+        )
+        .with_file(source_file.to_path_buf())
     })?;
 
     let loc = source.lines().count();
@@ -368,6 +508,10 @@ fn compile_single_file(
         CompileError::new("Lowering", &e.to_string(), ErrorKind::CodeIssue)
             .with_file(source_file.to_path_buf())
     })?;
+
+    // Apply async function transformation (convert to state machines)
+    let hir = async_lowering::transform_async_functions(hir);
+
     stats.lowering_time_ms += lower_start.elapsed().as_millis();
 
     Ok((hir, loc))
@@ -377,7 +521,10 @@ fn compile_single_file(
 fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     let output_path = config.output_path_with_extension();
-    let output_dir = config.output_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let output_dir = config
+        .output_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
 
     match config.output_format {
         OutputFormat::Assembly => {
@@ -389,10 +536,10 @@ fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBu
             let asm_file = format!("{}.s", config.output_path.display());
             fs::write(&asm_file, assembly)
                 .map_err(|e| format!("Failed to write assembly file: {}", e))?;
-            
+
             let assembler = Assembler::new(output_dir);
             assembler.assemble_to_object(assembly, &output_path)?;
-            
+
             files.push(PathBuf::from(&asm_file));
             files.push(output_path);
         }
@@ -400,13 +547,13 @@ fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBu
             let asm_file = format!("{}.s", config.output_path.display());
             fs::write(&asm_file, assembly)
                 .map_err(|e| format!("Failed to write assembly file: {}", e))?;
-            
+
             let assembler = Assembler::new(output_dir);
             assembler.compile_to_executable(assembly, &output_path)?;
-            
+
             fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("Failed to set executable permissions: {}", e))?;
-            
+
             files.push(PathBuf::from(&asm_file));
             files.push(output_path);
         }
@@ -423,14 +570,14 @@ fn write_output(config: &CompilationConfig, assembly: &str) -> Result<Vec<PathBu
             let asm_file = format!("{}.s", config.output_path.display());
             fs::write(&asm_file, assembly)
                 .map_err(|e| format!("Failed to write assembly file: {}", e))?;
-            
+
             let assembler = Assembler::new(output_dir);
             let obj_file = format!("{}.o", config.output_path.display());
             assembler.assemble_to_object(assembly, &PathBuf::from(&obj_file))?;
-            
+
             let lib_file = format!("{}.a", config.output_path.display());
             create_static_library(&obj_file, &lib_file)?;
-            
+
             files.push(PathBuf::from(&asm_file));
             files.push(PathBuf::from(&obj_file));
             files.push(PathBuf::from(&lib_file));
@@ -449,7 +596,7 @@ fn generate_bash_script(
 ) -> Result<(), String> {
     let binary_name = binary_file.display().to_string();
     let obj_file = format!("{}.o", binary_name);
-    
+
     let script = format!(
         "#!/bin/bash\n\
         # Auto-generated build script by GiaRusted\n\
@@ -470,17 +617,10 @@ fn generate_bash_script(
         \n\
         echo \"✅ Build complete! Run with: ./{}\"\n\
         ",
-        binary_name,
-        asm_file,
-        obj_file,
-        obj_file,
-        binary_name,
-        binary_name,
-        binary_name
+        binary_name, asm_file, obj_file, obj_file, binary_name, binary_name, binary_name
     );
 
-    fs::write(script_path, script)
-        .map_err(|e| format!("Failed to write bash script: {}", e))?;
+    fs::write(script_path, script).map_err(|e| format!("Failed to write bash script: {}", e))?;
 
     Ok(())
 }
@@ -509,11 +649,11 @@ fn generate_build_script(
 }
 
 /// Merge modules with the same name to fix qualified name resolution
-/// 
+///
 /// When compiling multi-file projects:
 /// - File 1 might have `mod utils;` declaration (creates empty Module)
 /// - File 2 might be utils.rs (creates Module with content)
-/// 
+///
 /// This causes two Module items with the same name. We merge them so that
 /// the empty declaration doesn't override the actual module content.
 fn merge_duplicate_modules(items: Vec<crate::lowering::HirItem>) -> Vec<crate::lowering::HirItem> {
@@ -529,11 +669,26 @@ fn merge_duplicate_modules(items: Vec<crate::lowering::HirItem>) -> Vec<crate::l
 
     for item in items {
         match &item {
-            HirItem::Module { name, items: module_items, .. } => {
+            HirItem::Module {
+                name,
+                items: module_items,
+                ..
+            } => {
                 // Collect modules by name
-                let _ = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/merge_debug.log")
-                    .and_then(|mut f| writeln!(f, "[MERGE] Found module '{}' with {} items", name, module_items.len()));
-                module_map.entry(name.clone())
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/merge_debug.log")
+                    .and_then(|mut f| {
+                        writeln!(
+                            f,
+                            "[MERGE] Found module '{}' with {} items",
+                            name,
+                            module_items.len()
+                        )
+                    });
+                module_map
+                    .entry(name.clone())
                     .or_insert_with(Vec::new)
                     .push(item);
             }
@@ -555,7 +710,12 @@ fn merge_duplicate_modules(items: Vec<crate::lowering::HirItem>) -> Vec<crate::l
             let mut is_public = false;
 
             for module in modules {
-                if let HirItem::Module { items: module_items, is_public: pub_flag, .. } = module {
+                if let HirItem::Module {
+                    items: module_items,
+                    is_public: pub_flag,
+                    ..
+                } = module
+                {
                     merged_items.extend(module_items);
                     is_public = is_public || pub_flag;
                 }

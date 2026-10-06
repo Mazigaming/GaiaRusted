@@ -210,7 +210,10 @@ impl VecMethodRegistry {
         methods.insert("pop".to_string(), "(&mut self) -> Option<T>".to_string());
         methods.insert("clear".to_string(), "(&mut self)".to_string());
         methods.insert("insert".to_string(), "(&mut self, usize, T)".to_string());
-        methods.insert("remove".to_string(), "(&mut self, usize) -> Option<T>".to_string());
+        methods.insert(
+            "remove".to_string(),
+            "(&mut self, usize) -> Option<T>".to_string(),
+        );
         methods.insert("swap".to_string(), "(&mut self, usize, usize)".to_string());
 
         // Memory methods
@@ -218,16 +221,31 @@ impl VecMethodRegistry {
         methods.insert("shrink_to_fit".to_string(), "(&mut self)".to_string());
 
         // Access methods
-        methods.insert("get".to_string(), "(&self, usize) -> Option<&T>".to_string());
-        methods.insert("get_mut".to_string(), "(&mut self, usize) -> Option<&mut T>".to_string());
+        methods.insert(
+            "get".to_string(),
+            "(&self, usize) -> Option<&T>".to_string(),
+        );
+        methods.insert(
+            "get_mut".to_string(),
+            "(&mut self, usize) -> Option<&mut T>".to_string(),
+        );
         methods.insert("first".to_string(), "(&self) -> Option<&T>".to_string());
-        methods.insert("first_mut".to_string(), "(&mut self) -> Option<&mut T>".to_string());
+        methods.insert(
+            "first_mut".to_string(),
+            "(&mut self) -> Option<&mut T>".to_string(),
+        );
         methods.insert("last".to_string(), "(&self) -> Option<&T>".to_string());
-        methods.insert("last_mut".to_string(), "(&mut self) -> Option<&mut T>".to_string());
+        methods.insert(
+            "last_mut".to_string(),
+            "(&mut self) -> Option<&mut T>".to_string(),
+        );
 
         // Search methods
         methods.insert("contains".to_string(), "(&self, &T) -> bool".to_string());
-        methods.insert("index_of".to_string(), "(&self, &T) -> Option<usize>".to_string());
+        methods.insert(
+            "index_of".to_string(),
+            "(&self, &T) -> Option<usize>".to_string(),
+        );
 
         // Sorting methods
         methods.insert("sort".to_string(), "(&mut self)".to_string());
@@ -235,7 +253,10 @@ impl VecMethodRegistry {
 
         // Slice methods
         methods.insert("as_slice".to_string(), "(&self) -> &[T]".to_string());
-        methods.insert("as_mut_slice".to_string(), "(&mut self) -> &mut [T]".to_string());
+        methods.insert(
+            "as_mut_slice".to_string(),
+            "(&mut self) -> &mut [T]".to_string(),
+        );
 
         methods
     }

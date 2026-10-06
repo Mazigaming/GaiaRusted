@@ -274,7 +274,10 @@ impl LoopOwnershipTracker {
             .ok_or_else(|| format!("Loop scope {} not found", loop_id))?;
 
         let var_info = scope.variables.get_mut(var_name).ok_or_else(|| {
-            format!("Variable '{}' not found in loop scope '{}'", var_name, loop_id)
+            format!(
+                "Variable '{}' not found in loop scope '{}'",
+                var_name, loop_id
+            )
         })?;
 
         // Check accessibility
@@ -317,9 +320,9 @@ impl LoopOwnershipTracker {
     /// Check if variable exists in outer scope
     fn variable_in_outer_scope(&self, var_name: &str) -> bool {
         let current_depth = self.scopes.len();
-        self.scopes.iter().any(|s| {
-            s.depth < current_depth && s.variables.contains_key(var_name)
-        })
+        self.scopes
+            .iter()
+            .any(|s| s.depth < current_depth && s.variables.contains_key(var_name))
     }
 
     /// Get current scope
@@ -328,11 +331,7 @@ impl LoopOwnershipTracker {
     }
 
     /// Get variable info
-    pub fn get_variable_info(
-        &self,
-        loop_id: &str,
-        var_name: &str,
-    ) -> Option<LoopVariableInfo> {
+    pub fn get_variable_info(&self, loop_id: &str, var_name: &str) -> Option<LoopVariableInfo> {
         self.scopes
             .iter()
             .rev()
@@ -457,7 +456,9 @@ mod tests {
     fn test_access_read() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", false)
+            .ok();
         let result = tracker.access_read("loop1", "item");
         assert!(result.is_ok());
     }
@@ -466,7 +467,9 @@ mod tests {
     fn test_access_write_immutable_fails() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", false)
+            .ok();
         let result = tracker.access_write("loop1", "item");
         assert!(result.is_err());
     }
@@ -475,7 +478,9 @@ mod tests {
     fn test_access_write_mutable() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", true).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", true)
+            .ok();
         let result = tracker.access_write("loop1", "item");
         assert!(result.is_ok());
     }
@@ -484,7 +489,9 @@ mod tests {
     fn test_access_moved_variable_fails() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", false)
+            .ok();
         tracker.access_move("loop1", "item").ok();
         let result = tracker.access_read("loop1", "item");
         assert!(result.is_err());
@@ -494,9 +501,13 @@ mod tests {
     fn test_nested_loops() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("outer", "Vec<Vec<i32>>").ok();
-        tracker.bind_loop_variable("outer", "row", "Vec<i32>", false).ok();
+        tracker
+            .bind_loop_variable("outer", "row", "Vec<i32>", false)
+            .ok();
         tracker.enter_loop("inner", "Vec<i32>").ok();
-        tracker.bind_loop_variable("inner", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("inner", "item", "i32", false)
+            .ok();
 
         assert_eq!(tracker.scopes.len(), 2);
         assert_eq!(tracker.current_scope().unwrap().id, "inner");
@@ -529,7 +540,9 @@ mod tests {
     fn test_get_variable_info() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", false)
+            .ok();
 
         let info = tracker.get_variable_info("loop1", "item");
         assert!(info.is_some());
@@ -540,7 +553,9 @@ mod tests {
     fn test_is_accessible() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", false)
+            .ok();
 
         assert!(tracker.is_accessible("loop1", "item"));
 
@@ -552,7 +567,9 @@ mod tests {
     fn test_generate_report() {
         let mut tracker = LoopOwnershipTracker::new();
         tracker.enter_loop("loop1", "Vec<i32>").ok();
-        tracker.bind_loop_variable("loop1", "item", "i32", false).ok();
+        tracker
+            .bind_loop_variable("loop1", "item", "i32", false)
+            .ok();
 
         let report = tracker.generate_report();
         assert_eq!(report.total_scopes, 1);

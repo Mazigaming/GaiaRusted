@@ -1,0 +1,17 @@
+Rect { w: 3, h: 4, id: 101 } 12 101 1
+10 100
+[1, 10, 100] hi 111
+10
+("b", "a")
+[21] 42 [s]
+true true false 2
+[1, 4, 9] 9
+Config { verbose: true, level: 3 }
+2 4
+60000
+21474836470
+a1true
+x + y * 2
+[1, 2] [1, 2]
+5
+true

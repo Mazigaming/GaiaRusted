@@ -23,8 +23,8 @@
 //! }
 //! ```
 
+use crate::typesystem::types::{StructId, TraitId, Type};
 use std::collections::{HashMap, HashSet};
-use crate::typesystem::types::{Type, StructId, TraitId};
 
 /// Configuration for associated constants and type aliases analysis
 #[derive(Debug, Clone)]
@@ -253,14 +253,8 @@ impl AssociatedConstAnalyzer {
             impl_name: impl_name.clone(),
             struct_name,
             trait_name,
-            constants: constants
-                .into_iter()
-                .map(|c| (c.name.clone(), c))
-                .collect(),
-            type_aliases: aliases
-                .into_iter()
-                .map(|a| (a.name.clone(), a))
-                .collect(),
+            constants: constants.into_iter().map(|c| (c.name.clone(), c)).collect(),
+            type_aliases: aliases.into_iter().map(|a| (a.name.clone(), a)).collect(),
         };
 
         self.impl_consts.insert(impl_name, impl_info);
@@ -436,12 +430,8 @@ mod tests {
     fn test_register_simple_const() {
         let mut analyzer = create_test_analyzer();
 
-        let result = analyzer.register_const(
-            "MAX_VALUE".to_string(),
-            Type::I32,
-            "100".to_string(),
-            false,
-        );
+        let result =
+            analyzer.register_const("MAX_VALUE".to_string(), Type::I32, "100".to_string(), false);
 
         assert!(result.is_ok());
         assert!(analyzer.has_const("MAX_VALUE"));
@@ -470,7 +460,8 @@ mod tests {
             .register_const("VALUE".to_string(), Type::I32, "42".to_string(), false)
             .unwrap();
 
-        let result = analyzer.register_const("VALUE".to_string(), Type::I32, "99".to_string(), false);
+        let result =
+            analyzer.register_const("VALUE".to_string(), Type::I32, "99".to_string(), false);
         assert!(result.is_err());
     }
 

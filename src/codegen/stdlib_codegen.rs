@@ -164,8 +164,17 @@ mov rcx, [rax+8]         ; reload length
 mov byte [rax+rcx], {}   ; store char at [ptr + len]
 inc qword [rax+8]        ; increment length
 "#,
-            string_ptr, char_val, string_ptr, string_ptr, string_ptr, string_ptr,
-            string_ptr, string_ptr, string_ptr, string_ptr, char_val
+            string_ptr,
+            char_val,
+            string_ptr,
+            string_ptr,
+            string_ptr,
+            string_ptr,
+            string_ptr,
+            string_ptr,
+            string_ptr,
+            string_ptr,
+            char_val
         )
     }
 
@@ -231,9 +240,7 @@ lea rax, [rsp]           ; load address into RAX
             format!("vec_{}", alloc_id),
             AllocationInfo {
                 name: format!("vec_{}", alloc_id),
-                alloc_type: AllocType::Vec {
-                    element_size,
-                },
+                alloc_type: AllocType::Vec { element_size },
                 active: true,
                 location: "rax".to_string(),
             },
@@ -280,8 +287,19 @@ imul rcx, {}             ; offset = length * element_size
 mov qword [rax+rcx], {}  ; store element
 inc qword [rax+8]        ; increment length
 "#,
-            vec_ptr, elem_val, vec_ptr, elem_size, vec_ptr, vec_ptr, elem_size, vec_ptr,
-            vec_ptr, vec_ptr, vec_ptr, elem_size, elem_val
+            vec_ptr,
+            elem_val,
+            vec_ptr,
+            elem_size,
+            vec_ptr,
+            vec_ptr,
+            elem_size,
+            vec_ptr,
+            vec_ptr,
+            vec_ptr,
+            vec_ptr,
+            elem_size,
+            elem_val
         )
     }
 
@@ -302,11 +320,10 @@ mov rax, [rax+8]         ; load length field
     /// Generate code for cleanup/drop
     pub fn generate_cleanup(&self, alloc_name: &str) -> String {
         match self.allocations.get(alloc_name) {
-            Some(info) => {
-                match &info.alloc_type {
-                    AllocType::String | AllocType::Vec { .. } => {
-                        format!(
-                            r#"
+            Some(info) => match &info.alloc_type {
+                AllocType::String | AllocType::Vec { .. } => {
+                    format!(
+                        r#"
 ; Cleanup allocation: {}
 ; Free heap memory
 mov rax, [{}+0]          ; load pointer
@@ -317,12 +334,11 @@ call free                ; free memory
 
 .cleanup_skip:
 "#,
-                            alloc_name, &info.location
-                        )
-                    }
-                    AllocType::Other(_) => String::new(),
+                        alloc_name, &info.location
+                    )
                 }
-            }
+                AllocType::Other(_) => String::new(),
+            },
             None => String::new(),
         }
     }

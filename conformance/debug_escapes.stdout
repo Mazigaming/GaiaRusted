@@ -1,0 +1,37 @@
+"plain ascii"
+"tab\there"
+"quote \" and ' apostrophe"
+"back\\slash"
+"nul\0"
+"nbsp\u{a0}x"
+"ideographic\u{3000}space"
+"e\u{301} combining"
+"\u{301}leading mark"
+"emoji 😀 ok"
+"zero\u{200b}width"
+"bidi\u{202e}x"
+"private\u{e000}use"
+"unassigned\u{378}"
+"max\u{10ffff}"
+"cjk 漢字"
+"rtl עברית"
+"del\u{7f}"
+"c1\u{85}x"
+"soft\u{ad}hyphen"
+"bom\u{feff}"
+"variation\u{fe0f}"
+"tag\u{e0041}"
+'\u{a0}' \u{a0}
+'\'' \'
+'"' \"
+'\u{301}' \u{301}
+'é' é
+'\u{2028}' \u{2028}
+'\u{e000}' \u{e000}
+'😀' 😀
+'\u{10fffe}' \u{10fffe}
+' '  
+["a\u{a0}b", "c"]
+Some('\u{3000}')
+\u{301}á\t\"\u{a0} \u{e9}\n\u{1} \u{61}\u{62}
+12

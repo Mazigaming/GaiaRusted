@@ -160,7 +160,8 @@ impl PatternMatchingAnalyzer {
             return Err("Match expression name cannot be empty".to_string());
         }
 
-        self.matches.insert(name.to_string(), MatchExpression::new(name.to_string()));
+        self.matches
+            .insert(name.to_string(), MatchExpression::new(name.to_string()));
         Ok(())
     }
 
@@ -307,12 +308,9 @@ impl PatternMatchingAnalyzer {
 
     /// Get all patterns for a match expression
     pub fn get_patterns(&self, match_name: &str) -> Option<Vec<String>> {
-        self.matches.get(match_name).map(|m| {
-            m.arms
-                .iter()
-                .map(|arm| arm.pattern.clone())
-                .collect()
-        })
+        self.matches
+            .get(match_name)
+            .map(|m| m.arms.iter().map(|arm| arm.pattern.clone()).collect())
     }
 
     /// Validate guards in a match expression

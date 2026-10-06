@@ -160,11 +160,7 @@ impl GuardChecker {
     }
 
     /// Register a match expression
-    pub fn register_match(
-        &mut self,
-        name: &str,
-        scrutinee_type: &str,
-    ) -> Result<(), String> {
+    pub fn register_match(&mut self, name: &str, scrutinee_type: &str) -> Result<(), String> {
         if name.is_empty() {
             return Err("Match name cannot be empty".to_string());
         }
@@ -236,10 +232,7 @@ impl GuardChecker {
                     report.valid_guards += 1;
                 } else {
                     guard.is_valid = false;
-                    guard.error = Some(format!(
-                        "Guard must be bool, found {}",
-                        inferred_type
-                    ));
+                    guard.error = Some(format!("Guard must be bool, found {}", inferred_type));
                     report.invalid_guards += 1;
                     report.errors.push(GuardError {
                         pattern: arm.pattern.clone(),
@@ -362,9 +355,10 @@ impl GuardChecker {
     /// Check if guard is valid
     pub fn is_guard_valid(&self, match_name: &str, pattern: &str) -> Option<bool> {
         self.matches.get(match_name).and_then(|m| {
-            m.arms.iter().find(|a| a.pattern == pattern).and_then(|a| {
-                a.guard.as_ref().map(|g| g.is_valid)
-            })
+            m.arms
+                .iter()
+                .find(|a| a.pattern == pattern)
+                .and_then(|a| a.guard.as_ref().map(|g| g.is_valid))
         })
     }
 
@@ -526,12 +520,8 @@ mod tests {
     fn test_validate_guards_all_valid() {
         let mut checker = create_test_checker();
         checker.register_match("test_match", "i32").ok();
-        checker
-            .register_arm("test_match", "x", Some("x > 0"))
-            .ok();
-        checker
-            .register_arm("test_match", "x", Some("x == 5"))
-            .ok();
+        checker.register_arm("test_match", "x", Some("x > 0")).ok();
+        checker.register_arm("test_match", "x", Some("x == 5")).ok();
 
         let report = checker.validate_guards("test_match").unwrap();
         assert_eq!(report.total_guards, 2);
@@ -558,9 +548,7 @@ mod tests {
         let mut checker = create_test_checker();
         checker.register_match("test_match", "i32").ok();
         checker.register_arm("test_match", "0", None).ok();
-        checker
-            .register_arm("test_match", "x", Some("x > 0"))
-            .ok();
+        checker.register_arm("test_match", "x", Some("x > 0")).ok();
         checker.register_arm("test_match", "_", None).ok();
 
         assert_eq!(checker.guard_count("test_match"), 1);
@@ -570,28 +558,19 @@ mod tests {
     fn test_is_guard_valid() {
         let mut checker = create_test_checker();
         checker.register_match("test_match", "i32").ok();
-        checker
-            .register_arm("test_match", "x", Some("x > 0"))
-            .ok();
+        checker.register_arm("test_match", "x", Some("x > 0")).ok();
         checker.validate_guards("test_match").ok();
 
-        assert_eq!(
-            checker.is_guard_valid("test_match", "x"),
-            Some(true)
-        );
+        assert_eq!(checker.is_guard_valid("test_match", "x"), Some(true));
     }
 
     #[test]
     fn test_generate_report() {
         let mut checker = create_test_checker();
         checker.register_match("match1", "i32").ok();
-        checker
-            .register_arm("match1", "x", Some("x > 0"))
-            .ok();
+        checker.register_arm("match1", "x", Some("x > 0")).ok();
         checker.register_match("match2", "bool").ok();
-        checker
-            .register_arm("match2", "true", Some("true"))
-            .ok();
+        checker.register_arm("match2", "true", Some("true")).ok();
 
         checker.validate_guards("match1").ok();
         checker.validate_guards("match2").ok();

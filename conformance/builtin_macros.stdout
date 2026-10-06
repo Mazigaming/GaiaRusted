@@ -1,0 +1,7 @@
+x + 1 | Vec::new()
+v2.0-1false1.5
+15 32
+builtin_macros builtin_macros::shapes
+["1", "2", "3"]
+[2, 4] [3, 4] [2.0, 3.0]
+[2, 1] Some(8)

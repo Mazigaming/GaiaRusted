@@ -191,7 +191,7 @@ impl ModuleLoader {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::TempDir;
+    // use tempfile::TempDir;
     
     #[test]
     fn test_module_path_resolution() {

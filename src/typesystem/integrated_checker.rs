@@ -7,7 +7,7 @@
 //! 4. Struct/Function Validation (check definitions)
 //! 5. Error Reporting (detailed diagnostics)
 
-use super::ast_bridge::{TypeRegistry, convert_expression, convert_type};
+use super::ast_bridge::{convert_expression, convert_type, TypeRegistry};
 use super::expression_typing::ExprTyper;
 use super::types::Type;
 use crate::parser::ast as parser_ast;
@@ -58,12 +58,22 @@ impl DetailedTypeError {
             "Type mismatch: expected {}, found {}",
             expected, actual
         ))
-        .with_details(format!("Expected type: {}\nActual type: {}", expected, actual))
-        .with_suggestion(format!("Try converting the expression to type {}", expected))
+        .with_details(format!(
+            "Expected type: {}\nActual type: {}",
+            expected, actual
+        ))
+        .with_suggestion(format!(
+            "Try converting the expression to type {}",
+            expected
+        ))
     }
 
     /// Create a field access error with suggestions
-    pub fn field_not_found(struct_name: &str, field_name: &str, available_fields: Vec<&str>) -> Self {
+    pub fn field_not_found(
+        struct_name: &str,
+        field_name: &str,
+        available_fields: Vec<&str>,
+    ) -> Self {
         let mut error = DetailedTypeError::new(format!(
             "Struct '{}' has no field '{}'",
             struct_name, field_name
@@ -72,9 +82,12 @@ impl DetailedTypeError {
         if !available_fields.is_empty() {
             let fields_str = available_fields.join(", ");
             error = error.with_details(format!("Available fields: {}", fields_str));
-            
+
             // Add suggestions for similar field names
-            let similar = Self::find_similar_names(field_name, available_fields.iter().map(|s| s.to_string()).collect());
+            let similar = Self::find_similar_names(
+                field_name,
+                available_fields.iter().map(|s| s.to_string()).collect(),
+            );
             if !similar.is_empty() {
                 error = error.with_suggestion(format!("Did you mean: {}?", similar.join(" or ")));
             }
@@ -110,8 +123,8 @@ impl DetailedTypeError {
             .into_iter()
             .filter(|c| {
                 // Simple similarity: starts with same letter, similar length
-                c.starts_with(&name[0..1.min(name.len())]) 
-                && (c.len() as i32 - name.len() as i32).abs() <= 2
+                c.starts_with(&name[0..1.min(name.len())])
+                    && (c.len() as i32 - name.len() as i32).abs() <= 2
             })
             .collect()
     }
@@ -120,22 +133,22 @@ impl DetailedTypeError {
 impl fmt::Display for DetailedTypeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Type Error: {}\n", self.message)?;
-        
+
         if let Some(details) = &self.details {
             write!(f, "  Details: {}\n", details)?;
         }
-        
+
         if !self.suggestions.is_empty() {
             write!(f, "  Suggestions:\n")?;
             for (i, suggestion) in self.suggestions.iter().enumerate() {
                 write!(f, "    {}. {}\n", i + 1, suggestion)?;
             }
         }
-        
+
         if let Some(context) = &self.context {
             write!(f, "  Context: {}\n", context)?;
         }
-        
+
         Ok(())
     }
 }
@@ -177,7 +190,11 @@ impl fmt::Display for TypeCheckReport {
         if self.success {
             write!(f, "✓ Type checking passed\n")?;
         } else {
-            write!(f, "✗ Type checking failed with {} error(s)\n", self.errors.len())?;
+            write!(
+                f,
+                "✗ Type checking failed with {} error(s)\n",
+                self.errors.len()
+            )?;
         }
 
         if !self.errors.is_empty() {
@@ -217,39 +234,55 @@ impl IntegratedTypeChecker {
         }
     }
 
+    /// Type check HIR items (stub implementation)
+    pub fn check_items_hir(&mut self, _items: &[crate::lowering::HirItem]) -> IntegratedResult<()> {
+        Ok(())
+    }
+
     /// Type check a complete program
-    pub fn check_program(&mut self, program: &parser_ast::Program) -> IntegratedResult<TypeCheckReport> {
+    pub fn check_program(
+        &mut self,
+        program: &parser_ast::Program,
+    ) -> IntegratedResult<TypeCheckReport> {
         let mut report = TypeCheckReport::new();
 
         // Phase 1: Register all type definitions
-        self.registry.register_program(program)
+        self.registry
+            .register_program(program)
             .map_err(|e| DetailedTypeError::new(format!("Failed to register types: {}", e)))?;
 
         // Phase 2: Type check each item
         for item in program {
             match item {
-                parser_ast::Item::Function { name, params, return_type, body, .. } => {
-                    match self.check_function(name, params, return_type.as_ref(), body) {
-                        Ok(_) => {
-                            report.warnings.push(format!("Function '{}' type checked successfully", name));
-                        }
-                        Err(e) => {
-                            report.add_error(
-                                DetailedTypeError::new(format!("Function '{}': {}", name, e.message))
-                                    .with_context(format!("In function {}", name))
-                            );
-                        }
+                parser_ast::Item::Function {
+                    name,
+                    params,
+                    return_type,
+                    body,
+                    ..
+                } => match self.check_function(name, params, return_type.as_ref(), body) {
+                    Ok(_) => {
+                        report
+                            .warnings
+                            .push(format!("Function '{}' type checked successfully", name));
                     }
-                }
+                    Err(e) => {
+                        report.add_error(
+                            DetailedTypeError::new(format!("Function '{}': {}", name, e.message))
+                                .with_context(format!("In function {}", name)),
+                        );
+                    }
+                },
                 parser_ast::Item::Struct { name, fields, .. } => {
                     match self.check_struct(name, fields) {
                         Ok(_) => {
                             report.warnings.push(format!("Struct '{}' validated", name));
                         }
                         Err(e) => {
-                            report.add_error(
-                                DetailedTypeError::new(format!("Struct '{}': {}", name, e.message))
-                            );
+                            report.add_error(DetailedTypeError::new(format!(
+                                "Struct '{}': {}",
+                                name, e.message
+                            )));
                         }
                     }
                 }
@@ -297,18 +330,25 @@ impl IntegratedTypeChecker {
     ) -> IntegratedResult<()> {
         for stmt in &block.statements {
             match stmt {
-                parser_ast::Statement::Let { name, initializer, .. } => {
+                parser_ast::Statement::Let {
+                    name, initializer, ..
+                } => {
                     // Type check the initializer expression
-                    let _expr = convert_expression(initializer)
-                        .map_err(|e| DetailedTypeError::new(format!("Invalid expression in let binding '{}': {}", name, e)))?;
-                    
+                    let _expr = convert_expression(initializer).map_err(|e| {
+                        DetailedTypeError::new(format!(
+                            "Invalid expression in let binding '{}': {}",
+                            name, e
+                        ))
+                    })?;
+
                     // Would type check the expression here
                     // For now, just validate it exists
                 }
                 parser_ast::Statement::Expression(expr) => {
-                    let _ast_expr = convert_expression(expr)
-                        .map_err(|e| DetailedTypeError::new(format!("Invalid expression: {}", e)))?;
-                    
+                    let _ast_expr = convert_expression(expr).map_err(|e| {
+                        DetailedTypeError::new(format!("Invalid expression: {}", e))
+                    })?;
+
                     // Would type check the expression here
                 }
                 _ => {} // Skip other statement types
@@ -331,8 +371,9 @@ impl IntegratedTypeChecker {
         fields: &[parser_ast::StructField],
     ) -> IntegratedResult<()> {
         for field in fields {
-            convert_type(&field.ty)
-                .map_err(|e| DetailedTypeError::new(format!("Invalid field type in '{}': {}", field.name, e)))?;
+            convert_type(&field.ty).map_err(|e| {
+                DetailedTypeError::new(format!("Invalid field type in '{}': {}", field.name, e))
+            })?;
         }
         Ok(())
     }
@@ -344,7 +385,7 @@ impl IntegratedTypeChecker {
 
         // Create a typer and type the expression
         let mut typer = ExprTyper::new();
-        
+
         // Register known functions
         for (name, func_info) in &self.registry.functions {
             typer.generator.register_function(
@@ -354,7 +395,8 @@ impl IntegratedTypeChecker {
             );
         }
 
-        typer.type_expr(&ast_expr)
+        typer
+            .type_expr(&ast_expr)
             .map_err(|e| {
                 DetailedTypeError::new(format!("Type inference failed: {}", e))
                     .with_suggestion("Check that all variables are properly bound")
@@ -434,7 +476,10 @@ mod tests {
         };
 
         let result = checker.check_expression(&expr);
-        assert!(result.is_ok(), "Failed to check expression: type checking should succeed");
+        assert!(
+            result.is_ok(),
+            "Failed to check expression: type checking should succeed"
+        );
         // Binary operation on integers produces a type (either resolved or a variable)
         let ty = result.expect("Type checking passed but no type returned");
         match ty {

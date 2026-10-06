@@ -6,7 +6,7 @@
 //! 3. Type traits/bounds: T: Clone + Send
 //! 4. Type predicates: constraints on types
 
-use super::types::{Type, TypeVar, LifetimeVar, TraitId};
+use super::types::{LifetimeVar, TraitId, Type, TypeVar};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -135,10 +135,7 @@ pub enum TypePredicate {
         shorter: LifetimeVar,
     },
     /// Type equality: T = U
-    Equality {
-        left: Box<Type>,
-        right: Box<Type>,
-    },
+    Equality { left: Box<Type>, right: Box<Type> },
     /// Projection equality: <T as Trait>::Assoc = U
     ProjectionEquality {
         projection: AssociatedType,
@@ -347,7 +344,10 @@ impl TypeConstraintChecker {
             match constraint {
                 TypePredicate::TraitBound(bound) => {
                     if !self.satisfies_bound(&bound.subject, bound) {
-                        return Err(format!("Type {} does not satisfy trait bound", bound.subject));
+                        return Err(format!(
+                            "Type {} does not satisfy trait bound",
+                            bound.subject
+                        ));
                     }
                 }
                 TypePredicate::Equality { left, right } => {
@@ -428,11 +428,7 @@ mod tests {
 
     #[test]
     fn test_trait_method() {
-        let mut method = TraitMethod::new(
-            "new".to_string(),
-            vec![],
-            Type::I32,
-        );
+        let mut method = TraitMethod::new("new".to_string(), vec![], Type::I32);
         assert_eq!(method.name, "new");
         assert!(method.predicates.is_empty());
 
@@ -462,18 +458,10 @@ mod tests {
 
     #[test]
     fn test_higher_ranked_type_validity() {
-        let hrt_valid = HigherRankedType::new(
-            vec![LifetimeVar(0)],
-            vec![],
-            Type::I32,
-        );
+        let hrt_valid = HigherRankedType::new(vec![LifetimeVar(0)], vec![], Type::I32);
         assert!(hrt_valid.is_valid());
 
-        let hrt_invalid = HigherRankedType::new(
-            vec![],
-            vec![],
-            Type::I32,
-        );
+        let hrt_invalid = HigherRankedType::new(vec![], vec![], Type::I32);
         assert!(!hrt_invalid.is_valid());
     }
 

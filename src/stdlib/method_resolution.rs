@@ -296,15 +296,28 @@ impl StdlibMethodResolver {
 pub fn get_available_methods(type_: &Type) -> Vec<String> {
     match type_ {
         Type::String => vec![
-            "new", "from", "len", "is_empty", "push", "push_str", "pop", "clear",
-            "contains", "starts_with", "ends_with", "find", "to_uppercase", "to_lowercase", "trim",
+            "new",
+            "from",
+            "len",
+            "is_empty",
+            "push",
+            "push_str",
+            "pop",
+            "clear",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "find",
+            "to_uppercase",
+            "to_lowercase",
+            "trim",
         ]
         .iter()
         .map(|s| s.to_string())
         .collect(),
         Type::Vec(_) => vec![
-            "new", "len", "is_empty", "push", "pop", "clear", "get", "first", "last",
-            "sort", "reverse",
+            "new", "len", "is_empty", "push", "pop", "clear", "get", "first", "last", "sort",
+            "reverse",
         ]
         .iter()
         .map(|s| s.to_string())

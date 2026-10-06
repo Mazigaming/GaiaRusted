@@ -14,10 +14,10 @@
 //! - Converts function signatures with generics support
 //! - Registers struct fields and methods from impl blocks
 
+use super::constraints::{FunctionDef, StructDef};
+use super::expression_typing::{AstBinaryOp, AstExpr, AstUnaryOp};
+use super::types::{GenericId, StructId, Type};
 use crate::parser::ast as parser_ast;
-use super::types::{Type, GenericId, StructId};
-use super::constraints::{StructDef, FunctionDef};
-use super::expression_typing::{AstExpr, AstBinaryOp, AstUnaryOp};
 use std::collections::HashMap;
 
 /// Error type for AST conversion
@@ -28,7 +28,9 @@ pub struct BridgeError {
 
 impl BridgeError {
     pub fn new(msg: impl Into<String>) -> Self {
-        BridgeError { message: msg.into() }
+        BridgeError {
+            message: msg.into(),
+        }
     }
 }
 
@@ -110,38 +112,43 @@ pub fn convert_type(parser_type: &parser_ast::Type) -> BridgeResult<Type> {
 }
 
 /// Converts parser's Type to type system's Type (with context)
-pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut ConversionContext) -> BridgeResult<Type> {
+pub fn convert_type_with_context(
+    parser_type: &parser_ast::Type,
+    ctx: &mut ConversionContext,
+) -> BridgeResult<Type> {
     match parser_type {
-        parser_ast::Type::Named(name) => {
-            Ok(match name.as_str() {
-                "i8" => Type::I8,
-                "i16" => Type::I16,
-                "i32" => Type::I32,
-                "i64" => Type::I64,
-                "isize" => Type::Isize,
-                "u8" => Type::U8,
-                "u16" => Type::U16,
-                "u32" => Type::U32,
-                "u64" => Type::U64,
-                "usize" => Type::Usize,
-                "f32" => Type::F32,
-                "f64" => Type::F64,
-                "bool" => Type::Bool,
-                "char" => Type::Char,
-                "str" => Type::Str,
-                "String" => Type::Unit,
-                _ => {
-                    if let Some(&struct_id) = ctx.known_structs.get(name) {
-                        Type::Struct(struct_id)
-                    } else if let Some(&generic_id) = ctx.generic_bindings.get(name) {
-                        Type::Generic(generic_id)
-                    } else {
-                        Type::Unit
-                    }
+        parser_ast::Type::Named(name) => Ok(match name.as_str() {
+            "i8" => Type::I8,
+            "i16" => Type::I16,
+            "i32" => Type::I32,
+            "i64" => Type::I64,
+            "isize" => Type::Isize,
+            "u8" => Type::U8,
+            "u16" => Type::U16,
+            "u32" => Type::U32,
+            "u64" => Type::U64,
+            "usize" => Type::Usize,
+            "f32" => Type::F32,
+            "f64" => Type::F64,
+            "bool" => Type::Bool,
+            "char" => Type::Char,
+            "str" => Type::Str,
+            "String" => Type::Unit,
+            _ => {
+                if let Some(&struct_id) = ctx.known_structs.get(name) {
+                    Type::Struct(struct_id)
+                } else if let Some(&generic_id) = ctx.generic_bindings.get(name) {
+                    Type::Generic(generic_id)
+                } else {
+                    Type::Unit
                 }
-            })
-        }
-        parser_ast::Type::Reference { lifetime: _, mutable, inner } => {
+            }
+        }),
+        parser_ast::Type::Reference {
+            lifetime: _,
+            mutable,
+            inner,
+        } => {
             let inner_type = convert_type_with_context(inner, ctx)?;
             Ok(Type::Reference {
                 lifetime: None,
@@ -165,13 +172,20 @@ pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut Conve
             })
         }
         parser_ast::Type::Tuple(elements) => {
-            let element_types: BridgeResult<Vec<_>> = elements.iter()
+            let element_types: BridgeResult<Vec<_>> = elements
+                .iter()
                 .map(|e| convert_type_with_context(e, ctx))
                 .collect();
             Ok(Type::Tuple(element_types?))
         }
-        parser_ast::Type::Function { params, return_type, is_unsafe: _, abi: _ } => {
-            let param_types: BridgeResult<Vec<_>> = params.iter()
+        parser_ast::Type::Function {
+            params,
+            return_type,
+            is_unsafe: _,
+            abi: _,
+        } => {
+            let param_types: BridgeResult<Vec<_>> = params
+                .iter()
                 .map(|p| convert_type_with_context(p, ctx))
                 .collect();
             let ret_type = convert_type_with_context(return_type, ctx)?;
@@ -185,7 +199,8 @@ pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut Conve
                 if type_args.is_empty() {
                     Ok(Type::Generic(generic_id))
                 } else {
-                    let _args: BridgeResult<Vec<_>> = type_args.iter()
+                    let _args: BridgeResult<Vec<_>> = type_args
+                        .iter()
                         .map(|a| convert_type_with_context(a, ctx))
                         .collect();
                     if let Some(&struct_id) = ctx.known_structs.get(name) {
@@ -200,22 +215,33 @@ pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut Conve
                 Ok(Type::Unit)
             }
         }
-        parser_ast::Type::TraitObject { bounds: _, lifetime: _ } => {
-            Err(BridgeError::new("E084: Trait objects not yet supported - use generic parameters instead"))
-        }
-        parser_ast::Type::ImplTrait { bounds: _ } => {
-            Err(BridgeError::new("E085: Impl trait not yet supported - use concrete return types instead"))
-        }
+        parser_ast::Type::TraitObject {
+            bounds: _,
+            lifetime: _,
+        } => Err(BridgeError::new(
+            "E084: Trait objects not yet supported - use generic parameters instead",
+        )),
+        parser_ast::Type::ImplTrait { bounds: _ } => Err(BridgeError::new(
+            "E085: Impl trait not yet supported - use concrete return types instead",
+        )),
         parser_ast::Type::AssociatedType { ty: _, name: _ } => {
             // For simplicity, treat associated types as unit
             Ok(Type::Unit)
         }
-        parser_ast::Type::QualifiedPath { ty: _, trait_name: _, name: _ } => {
+        parser_ast::Type::QualifiedPath {
+            ty: _,
+            trait_name: _,
+            name: _,
+        } => {
             // For simplicity, treat qualified paths as unit
             Ok(Type::Unit)
         }
-        parser_ast::Type::Closure { params, return_type } => {
-            let param_types: BridgeResult<Vec<_>> = params.iter()
+        parser_ast::Type::Closure {
+            params,
+            return_type,
+        } => {
+            let param_types: BridgeResult<Vec<_>> = params
+                .iter()
                 .map(|p| convert_type_with_context(p, ctx))
                 .collect();
             let ret_type = convert_type_with_context(return_type, ctx)?;
@@ -231,9 +257,7 @@ pub fn convert_type_with_context(parser_type: &parser_ast::Type, ctx: &mut Conve
                 Ok(Type::Unit)
             }
         }
-        parser_ast::Type::Never => {
-            Ok(Type::Never)
-        }
+        parser_ast::Type::Never => Ok(Type::Never),
     }
 }
 
@@ -394,29 +418,18 @@ pub fn convert_unary_op(op: &parser_ast::UnaryOp) -> AstUnaryOp {
 /// Converts parser's Expression to AstExpr
 pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr> {
     match expr {
-        parser_ast::Expression::Integer(n) => {
-            Ok(AstExpr::Integer(*n))
-        }
-        parser_ast::Expression::Float(f) => {
-            Ok(AstExpr::Float(*f))
-        }
-        parser_ast::Expression::String(s) => {
-            Ok(AstExpr::String(s.clone()))
-        }
-        parser_ast::Expression::Bool(b) => {
-            Ok(AstExpr::Bool(*b))
-        }
+        parser_ast::Expression::Integer(n) => Ok(AstExpr::Integer(*n)),
+        parser_ast::Expression::Float(f) => Ok(AstExpr::Float(*f)),
+        parser_ast::Expression::String(s) => Ok(AstExpr::String(s.clone())),
+        parser_ast::Expression::Bool(b) => Ok(AstExpr::Bool(*b)),
         parser_ast::Expression::Char(_c) => {
             // Character literals not yet in AstExpr, convert to unit
             Ok(AstExpr::Integer(0))
         }
-        parser_ast::Expression::Variable(name) => {
-            Ok(AstExpr::Variable(name.clone()))
-        }
+        parser_ast::Expression::Variable(name) => Ok(AstExpr::Variable(name.clone())),
         parser_ast::Expression::FunctionCall { name, args } => {
-            let converted_args: BridgeResult<Vec<_>> = args.iter()
-                .map(convert_expression)
-                .collect();
+            let converted_args: BridgeResult<Vec<_>> =
+                args.iter().map(convert_expression).collect();
             Ok(AstExpr::FunctionCall {
                 name: name.clone(),
                 args: converted_args?,
@@ -449,15 +462,13 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
             })
         }
         parser_ast::Expression::Array(elements) => {
-            let converted_elements: BridgeResult<Vec<_>> = elements.iter()
-                .map(convert_expression)
-                .collect();
+            let converted_elements: BridgeResult<Vec<_>> =
+                elements.iter().map(convert_expression).collect();
             Ok(AstExpr::Array(converted_elements?))
         }
         parser_ast::Expression::Tuple(elements) => {
-            let converted_elements: BridgeResult<Vec<_>> = elements.iter()
-                .map(convert_expression)
-                .collect();
+            let converted_elements: BridgeResult<Vec<_>> =
+                elements.iter().map(convert_expression).collect();
             Ok(AstExpr::Tuple(converted_elements?))
         }
         parser_ast::Expression::Block(block) => {
@@ -467,7 +478,14 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
                     parser_ast::Statement::Expression(e) => {
                         exprs.push(convert_expression(e)?);
                     }
-                    parser_ast::Statement::Let { name, ty: _, mutable: _, initializer, attributes: _, pattern: _ } => {
+                    parser_ast::Statement::Let {
+                        name,
+                        ty: _,
+                        mutable: _,
+                        initializer,
+                        attributes: _,
+                        pattern: _,
+                    } => {
                         exprs.push(AstExpr::Variable(name.clone()));
                         exprs.push(convert_expression(initializer)?);
                     }
@@ -481,7 +499,10 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
                 Ok(AstExpr::Integer(0)) // Default to unit-like value
             } else if exprs.len() == 1 {
                 // Safe because we checked len() == 1
-                Ok(exprs.into_iter().next().expect("Expression vector has length 1"))
+                Ok(exprs
+                    .into_iter()
+                    .next()
+                    .expect("Expression vector has length 1"))
             } else {
                 Ok(AstExpr::Tuple(exprs))
             }
@@ -501,43 +522,58 @@ pub fn convert_expression(expr: &parser_ast::Expression) -> BridgeResult<AstExpr
                 index: Box::new(index_expr),
             })
         }
-        parser_ast::Expression::If { condition, then_body, else_body: _ } => {
+        parser_ast::Expression::If {
+            condition,
+            then_body,
+            else_body: _,
+        } => {
             // Simplified: convert condition and then body, return tuple
             let cond_expr = convert_expression(condition)?;
             let then_expr = convert_block_to_expr(then_body)?;
             Ok(AstExpr::Tuple(vec![cond_expr, then_expr]))
         }
-        _ => {
-            Err(BridgeError::new(format!("E087: Expression type not yet supported: {:?} - use simpler expressions", expr)))
-        }
+        _ => Err(BridgeError::new(format!(
+            "E087: Expression type not yet supported: {:?} - use simpler expressions",
+            expr
+        ))),
     }
 }
 
 /// Helper to convert a block to a single expression
 fn convert_block_to_expr(block: &parser_ast::Block) -> BridgeResult<AstExpr> {
     let mut exprs = Vec::new();
-    
+
     for stmt in &block.statements {
         match stmt {
             parser_ast::Statement::Expression(e) => {
                 exprs.push(convert_expression(e)?);
             }
-            parser_ast::Statement::Let { name: _, ty: _, mutable: _, initializer, attributes: _, pattern: _ } => {
+            parser_ast::Statement::Let {
+                name: _,
+                ty: _,
+                mutable: _,
+                initializer,
+                attributes: _,
+                pattern: _,
+            } => {
                 exprs.push(convert_expression(initializer)?);
             }
             _ => {}
         }
     }
-    
+
     if let Some(final_expr) = &block.expression {
         exprs.push(convert_expression(final_expr)?);
     }
-    
+
     if exprs.is_empty() {
         Ok(AstExpr::Integer(0))
     } else if exprs.len() == 1 {
         // Safe because we checked len() == 1
-        Ok(exprs.into_iter().next().expect("Expression vector has length 1"))
+        Ok(exprs
+            .into_iter()
+            .next()
+            .expect("Expression vector has length 1"))
     } else {
         Ok(AstExpr::Tuple(exprs))
     }
@@ -593,7 +629,8 @@ impl TypeRegistry {
 
                 let mut field_types = HashMap::new();
                 for field in fields {
-                    let field_type = convert_type_with_context(&field.ty, &mut self.conversion_context)?;
+                    let field_type =
+                        convert_type_with_context(&field.ty, &mut self.conversion_context)?;
                     field_types.insert(field.name.clone(), field_type);
                 }
 
@@ -699,8 +736,7 @@ mod tests {
     #[test]
     fn test_convert_simple_expression() {
         let expr = parser_ast::Expression::Integer(42);
-        let converted = convert_expression(&expr)
-            .expect("Failed to convert integer expression");
+        let converted = convert_expression(&expr).expect("Failed to convert integer expression");
         assert_eq!(
             converted,
             AstExpr::Integer(42),
@@ -719,7 +755,11 @@ mod tests {
             .expect("Failed to convert binary expression. AST bridge should handle parser AST");
         match converted {
             AstExpr::BinaryOp { op, .. } => {
-                assert_eq!(op, AstBinaryOp::Add, "Binary operation should convert Add to Add");
+                assert_eq!(
+                    op,
+                    AstBinaryOp::Add,
+                    "Binary operation should convert Add to Add"
+                );
             }
             other => {
                 panic!(
@@ -762,7 +802,8 @@ mod tests {
             abi: None,
         };
 
-        registry.register_item(&func)
+        registry
+            .register_item(&func)
             .expect("Failed to register function in type registry");
         assert!(registry.functions.contains_key("add"));
         assert_eq!(registry.functions["add"].params.len(), 2);
@@ -799,7 +840,11 @@ mod tests {
         let (name, def) = extract_function_signature(&func, &mut ctx)
             .expect("Failed to extract function signature for generic function");
         assert_eq!(name, "identity", "Function name should be 'identity'");
-        assert_eq!(def.generics.len(), 1, "Function should have one generic parameter");
+        assert_eq!(
+            def.generics.len(),
+            1,
+            "Function should have one generic parameter"
+        );
     }
 
     #[test]
@@ -838,7 +883,7 @@ mod tests {
         let mut ctx = ConversionContext::new();
         let g1 = ctx.register_generic("T".to_string());
         let g2 = ctx.register_generic("U".to_string());
-        
+
         assert_ne!(g1, g2);
         assert_eq!(ctx.generic_bindings.len(), 2);
     }
@@ -847,11 +892,15 @@ mod tests {
     fn test_struct_type_in_context() {
         let mut ctx = ConversionContext::new();
         let struct_id = ctx.register_struct("Vec".to_string());
-        
+
         let named_type = parser_ast::Type::Named("Vec".to_string());
         let converted = convert_type_with_context(&named_type, &mut ctx)
             .expect("Failed to convert struct type in context");
-        
-        assert_eq!(converted, Type::Struct(struct_id), "Named type should convert to Struct");
+
+        assert_eq!(
+            converted,
+            Type::Struct(struct_id),
+            "Named type should convert to Struct"
+        );
     }
 }

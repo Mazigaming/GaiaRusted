@@ -184,12 +184,27 @@ impl TraitDefaultResolver {
 
     /// Get builtin trait implementations for primitive types
     /// Primitive types (i64, f64, bool, char) have builtin implementations of common traits
-    fn get_builtin_methods(&self, trait_name: &str, type_name: &str) -> Option<HashMap<String, String>> {
+    fn get_builtin_methods(
+        &self,
+        trait_name: &str,
+        type_name: &str,
+    ) -> Option<HashMap<String, String>> {
         // Check if type is a primitive
-        let is_primitive = matches!(type_name,
-            "i8" | "i16" | "i32" | "i64" | "i128" |
-            "u8" | "u16" | "u32" | "u64" | "u128" |
-            "f32" | "f64" | "bool" | "char"
+        let is_primitive = matches!(
+            type_name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "char"
         );
 
         // Check if type is a builtin collection
@@ -255,49 +270,43 @@ impl TraitDefaultResolver {
             _ => {
                 // Handle collection types (Vec, String, HashMap, HashSet)
                 match type_name {
-                    "Vec" => {
-                        match trait_name {
-                            "Default" => {
-                                methods.insert("new".to_string(), "new".to_string());
-                                Some(methods)
-                            }
-                            "Clone" => {
-                                methods.insert("clone".to_string(), "clone".to_string());
-                                Some(methods)
-                            }
-                            _ => None,
+                    "Vec" => match trait_name {
+                        "Default" => {
+                            methods.insert("new".to_string(), "new".to_string());
+                            Some(methods)
                         }
-                    }
-                    "String" => {
-                        match trait_name {
-                            "Default" => {
-                                methods.insert("new".to_string(), "new".to_string());
-                                Some(methods)
-                            }
-                            "Clone" => {
-                                methods.insert("clone".to_string(), "clone".to_string());
-                                Some(methods)
-                            }
-                            "Display" => {
-                                methods.insert("fmt".to_string(), "fmt".to_string());
-                                Some(methods)
-                            }
-                            _ => None,
+                        "Clone" => {
+                            methods.insert("clone".to_string(), "clone".to_string());
+                            Some(methods)
                         }
-                    }
-                    "HashMap" | "HashSet" => {
-                        match trait_name {
-                            "Default" => {
-                                methods.insert("new".to_string(), "new".to_string());
-                                Some(methods)
-                            }
-                            "Clone" => {
-                                methods.insert("clone".to_string(), "clone".to_string());
-                                Some(methods)
-                            }
-                            _ => None,
+                        _ => None,
+                    },
+                    "String" => match trait_name {
+                        "Default" => {
+                            methods.insert("new".to_string(), "new".to_string());
+                            Some(methods)
                         }
-                    }
+                        "Clone" => {
+                            methods.insert("clone".to_string(), "clone".to_string());
+                            Some(methods)
+                        }
+                        "Display" => {
+                            methods.insert("fmt".to_string(), "fmt".to_string());
+                            Some(methods)
+                        }
+                        _ => None,
+                    },
+                    "HashMap" | "HashSet" => match trait_name {
+                        "Default" => {
+                            methods.insert("new".to_string(), "new".to_string());
+                            Some(methods)
+                        }
+                        "Clone" => {
+                            methods.insert("clone".to_string(), "clone".to_string());
+                            Some(methods)
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 }
             }
@@ -392,7 +401,11 @@ impl TraitDefaultResolver {
     }
 
     /// Get default for a method
-    pub fn get_default_method(&self, trait_name: &str, method_name: &str) -> Option<&DefaultMethod> {
+    pub fn get_default_method(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+    ) -> Option<&DefaultMethod> {
         self.traits
             .get(trait_name)
             .and_then(|t| t.get_method(method_name))
@@ -459,10 +472,8 @@ impl TraitDefaultResolver {
         method.add_specialization_ref(format!("{}: {}", type_param, specialized_impl));
 
         let spec_key = format!("{}:{}:{}", trait_name, method_name, type_param);
-        self.specialization_cache.insert(
-            spec_key,
-            vec![type_param.to_string(), specialized_impl],
-        );
+        self.specialization_cache
+            .insert(spec_key, vec![type_param.to_string(), specialized_impl]);
 
         Ok(())
     }
@@ -569,13 +580,12 @@ mod tests {
     fn test_resolve_methods_simple() {
         let mut resolver = TraitDefaultResolver::new();
 
-        let trait_def = TraitWithDefaults::new("Clone".to_string())
-            .add_method(DefaultMethod::new(
-                "clone".to_string(),
-                "Self".to_string(),
-                "Self".to_string(),
-                vec![("self".to_string(), "&Self".to_string())],
-            ));
+        let trait_def = TraitWithDefaults::new("Clone".to_string()).add_method(DefaultMethod::new(
+            "clone".to_string(),
+            "Self".to_string(),
+            "Self".to_string(),
+            vec![("self".to_string(), "&Self".to_string())],
+        ));
 
         resolver.register_trait(trait_def);
 
@@ -607,8 +617,8 @@ mod tests {
     fn test_method_override() {
         let mut resolver = TraitDefaultResolver::new();
 
-        let trait_def = TraitWithDefaults::new("Display".to_string())
-            .add_method(DefaultMethod::new(
+        let trait_def =
+            TraitWithDefaults::new("Display".to_string()).add_method(DefaultMethod::new(
                 "fmt".to_string(),
                 "default implementation".to_string(),
                 "()".to_string(),
@@ -623,7 +633,10 @@ mod tests {
         resolver.register_impl(impl_def);
 
         let methods = resolver.resolve_methods("Display", "String").unwrap();
-        assert_eq!(methods.get("fmt"), Some(&"custom implementation".to_string()));
+        assert_eq!(
+            methods.get("fmt"),
+            Some(&"custom implementation".to_string())
+        );
     }
 
     #[test]
@@ -646,9 +659,18 @@ mod tests {
     fn test_find_implementations() {
         let mut resolver = TraitDefaultResolver::new();
 
-        resolver.register_impl(ImplWithDefaults::new("Trait1".to_string(), "Type1".to_string()));
-        resolver.register_impl(ImplWithDefaults::new("Trait1".to_string(), "Type2".to_string()));
-        resolver.register_impl(ImplWithDefaults::new("Trait2".to_string(), "Type1".to_string()));
+        resolver.register_impl(ImplWithDefaults::new(
+            "Trait1".to_string(),
+            "Type1".to_string(),
+        ));
+        resolver.register_impl(ImplWithDefaults::new(
+            "Trait1".to_string(),
+            "Type2".to_string(),
+        ));
+        resolver.register_impl(ImplWithDefaults::new(
+            "Trait2".to_string(),
+            "Type1".to_string(),
+        ));
 
         let impls = resolver.find_implementations("Trait1");
         assert_eq!(impls.len(), 2);
@@ -742,8 +764,8 @@ mod tests {
     fn test_method_cache() {
         let mut resolver = TraitDefaultResolver::new();
 
-        let trait_def = TraitWithDefaults::new("Trait1".to_string())
-            .add_method(DefaultMethod::new(
+        let trait_def =
+            TraitWithDefaults::new("Trait1".to_string()).add_method(DefaultMethod::new(
                 "method".to_string(),
                 "impl".to_string(),
                 "()".to_string(),
@@ -752,8 +774,7 @@ mod tests {
 
         resolver.register_trait(trait_def);
 
-        let impl_def =
-            ImplWithDefaults::new("Trait1".to_string(), "Type1".to_string());
+        let impl_def = ImplWithDefaults::new("Trait1".to_string(), "Type1".to_string());
         resolver.register_impl(impl_def);
 
         // First call
@@ -770,10 +791,9 @@ mod tests {
 
         let trait_eq = TraitWithDefaults::new("Eq".to_string());
         let trait_partial_eq = TraitWithDefaults::new("PartialEq".to_string());
-        let trait_ord =
-            TraitWithDefaults::new("Ord".to_string())
-                .add_supertrait("Eq".to_string())
-                .add_supertrait("PartialEq".to_string());
+        let trait_ord = TraitWithDefaults::new("Ord".to_string())
+            .add_supertrait("Eq".to_string())
+            .add_supertrait("PartialEq".to_string());
 
         resolver.register_trait(trait_eq);
         resolver.register_trait(trait_partial_eq);

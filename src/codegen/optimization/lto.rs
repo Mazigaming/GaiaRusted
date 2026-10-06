@@ -107,7 +107,10 @@ impl DeadCodeAnalyzer {
     /// Find all reachable functions starting from entry points
     pub fn find_reachable_functions(&self, entry_points: &[&str]) -> HashSet<String> {
         let mut reachable = HashSet::new();
-        let mut worklist = entry_points.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut worklist = entry_points
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
 
         while let Some(func) = worklist.pop() {
             if reachable.contains(&func) {
@@ -130,13 +133,12 @@ impl DeadCodeAnalyzer {
     /// Find dead functions (unreachable and not exported)
     pub fn find_dead_functions(&self, entry_points: &[&str]) -> Vec<String> {
         let reachable = self.find_reachable_functions(entry_points);
-        
+
         self.symbol_table
             .functions
             .values()
             .filter(|func| {
-                !reachable.contains(&func.name)
-                    && func.visibility == SymbolVisibility::Internal
+                !reachable.contains(&func.name) && func.visibility == SymbolVisibility::Internal
             })
             .map(|f| f.name.clone())
             .collect()
@@ -257,11 +259,7 @@ impl ConstantPropagationAnalyzer {
         self.symbol_table
             .globals
             .values()
-            .filter(|global| {
-                global.write_count == 1
-                    && global.read_count > 0
-                    && global.is_constant
-            })
+            .filter(|global| global.write_count == 1 && global.read_count > 0 && global.is_constant)
             .map(|g| g.name.clone())
             .collect()
     }

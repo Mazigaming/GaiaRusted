@@ -1,0 +1,26 @@
+make a
+make b
+a b
+drop b
+drop a
+after print
+make c
+drop c
+length 1
+make d
+kept d
+[inner] [PADDED]
+make e
+matched e
+drop e
+after match
+make f
+make g
+drop g
+drop f
+f-g
+make h
+drop h
+in if
+end
+drop d

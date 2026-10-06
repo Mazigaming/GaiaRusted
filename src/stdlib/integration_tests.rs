@@ -5,8 +5,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::typesystem::types::Type;
     use crate::stdlib::method_resolution::StdlibMethodResolver;
+    use crate::typesystem::types::Type;
 
     #[test]
     fn test_string_type_creation() {
@@ -134,47 +134,70 @@ mod tests {
     #[test]
     fn test_string_methods_are_resolvable() {
         let string_type = Type::String;
-        
+
         // Test that all common methods are resolvable
-        let methods = vec!["new", "from", "len", "is_empty", "push", "pop", "clear",
-                          "contains", "starts_with", "ends_with", "find",
-                          "to_uppercase", "to_lowercase", "trim"];
-        
+        let methods = vec![
+            "new",
+            "from",
+            "len",
+            "is_empty",
+            "push",
+            "pop",
+            "clear",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "find",
+            "to_uppercase",
+            "to_lowercase",
+            "trim",
+        ];
+
         for method_name in methods {
             let result = StdlibMethodResolver::resolve_method(&string_type, method_name);
-            assert!(result.is_some(), "Method {} should be resolvable", method_name);
+            assert!(
+                result.is_some(),
+                "Method {} should be resolvable",
+                method_name
+            );
         }
     }
 
     #[test]
     fn test_vec_methods_are_resolvable() {
         let vec_i32 = Type::Vec(Box::new(Type::I32));
-        
+
         // Test that all common methods are resolvable
-        let methods = vec!["new", "len", "is_empty", "push", "pop", "clear",
-                          "get", "first", "last", "sort", "reverse"];
-        
+        let methods = vec![
+            "new", "len", "is_empty", "push", "pop", "clear", "get", "first", "last", "sort",
+            "reverse",
+        ];
+
         for method_name in methods {
             let result = StdlibMethodResolver::resolve_method(&vec_i32, method_name);
-            assert!(result.is_some(), "Method {} should be resolvable on Vec<i32>", method_name);
+            assert!(
+                result.is_some(),
+                "Method {} should be resolvable on Vec<i32>",
+                method_name
+            );
         }
     }
 
     #[test]
     fn test_string_method_mutability() {
         let string_type = Type::String;
-        
+
         // Methods that don't modify
         let len = StdlibMethodResolver::resolve_method(&string_type, "len").unwrap();
         assert!(!len.is_mutable);
-        
+
         let contains = StdlibMethodResolver::resolve_method(&string_type, "contains").unwrap();
         assert!(!contains.is_mutable);
-        
+
         // Methods that do modify
         let push = StdlibMethodResolver::resolve_method(&string_type, "push").unwrap();
         assert!(push.is_mutable);
-        
+
         let clear = StdlibMethodResolver::resolve_method(&string_type, "clear").unwrap();
         assert!(clear.is_mutable);
     }
@@ -182,18 +205,18 @@ mod tests {
     #[test]
     fn test_vec_method_mutability() {
         let vec_i32 = Type::Vec(Box::new(Type::I32));
-        
+
         // Methods that don't modify
         let len = StdlibMethodResolver::resolve_method(&vec_i32, "len").unwrap();
         assert!(!len.is_mutable);
-        
+
         let first = StdlibMethodResolver::resolve_method(&vec_i32, "first").unwrap();
         assert!(!first.is_mutable);
-        
+
         // Methods that do modify
         let push = StdlibMethodResolver::resolve_method(&vec_i32, "push").unwrap();
         assert!(push.is_mutable);
-        
+
         let sort = StdlibMethodResolver::resolve_method(&vec_i32, "sort").unwrap();
         assert!(sort.is_mutable);
     }

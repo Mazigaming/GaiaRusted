@@ -159,7 +159,10 @@ impl HRTBAnalyzer {
         }
 
         // Detect if this is a function pointer
-        if trait_bound.contains("Fn") || trait_bound.contains("FnMut") || trait_bound.contains("FnOnce") {
+        if trait_bound.contains("Fn")
+            || trait_bound.contains("FnMut")
+            || trait_bound.contains("FnOnce")
+        {
             hrtb.is_function_pointer = true;
         }
 
@@ -351,7 +354,9 @@ mod tests {
     #[test]
     fn test_get_bound_variables() {
         let mut analyzer = create_test_analyzer();
-        analyzer.register_hrtb("foo", vec!["'a", "'b"], "Fn(&'a T)").ok();
+        analyzer
+            .register_hrtb("foo", vec!["'a", "'b"], "Fn(&'a T)")
+            .ok();
         let vars = analyzer.get_bound_variables("foo");
         assert_eq!(vars, Some(vec!["'a".to_string(), "'b".to_string()]));
     }
@@ -368,7 +373,9 @@ mod tests {
     fn test_get_variance() {
         let mut analyzer = create_test_analyzer();
         analyzer.register_hrtb("foo", vec!["'a"], "Fn(&'a T)").ok();
-        analyzer.register_variance("foo", "T", Variance::Contravariant).ok();
+        analyzer
+            .register_variance("foo", "T", Variance::Contravariant)
+            .ok();
         let var = analyzer.get_variance("foo", "T");
         assert_eq!(var, Some(Variance::Contravariant));
     }
@@ -384,7 +391,9 @@ mod tests {
     #[test]
     fn test_function_pointer_detection() {
         let mut analyzer = create_test_analyzer();
-        analyzer.register_hrtb("fn_ptr", vec!["'a"], "Fn(&'a T)").ok();
+        analyzer
+            .register_hrtb("fn_ptr", vec!["'a"], "Fn(&'a T)")
+            .ok();
         assert!(analyzer.hrtbs["fn_ptr"].is_function_pointer);
     }
 

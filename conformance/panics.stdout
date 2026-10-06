@@ -1,0 +1,17 @@
+ok 10
+hook: too big: 3
+caught string too big: 3
+hook: negative
+caught str negative
+hook: ?
+inner code 42
+hook: index out of bounds: the len is 0 but the index is 11
+counter 11 true
+hook: called `Option::unwrap()` on a `None` value
+true
+joined 0
+thread failed: string thread 1
+joined 200
+thread failed: string thread 3
+428429
+string resumed main

@@ -54,41 +54,33 @@ impl Substitution {
             }
 
             // Recursively apply to array element type
-            Type::Array { element, size } => {
-                Type::Array {
-                    element: Box::new(self.apply(element)),
-                    size: *size,
-                }
-            }
+            Type::Array { element, size } => Type::Array {
+                element: Box::new(self.apply(element)),
+                size: *size,
+            },
 
             // Recursively apply to reference inner type
             Type::Reference {
                 lifetime,
                 mutable,
                 inner,
-            } => {
-                Type::Reference {
-                    lifetime: *lifetime,
-                    mutable: *mutable,
-                    inner: Box::new(self.apply(inner)),
-                }
-            }
+            } => Type::Reference {
+                lifetime: *lifetime,
+                mutable: *mutable,
+                inner: Box::new(self.apply(inner)),
+            },
 
             // Recursively apply to raw pointer inner type
-            Type::RawPointer { mutable, inner } => {
-                Type::RawPointer {
-                    mutable: *mutable,
-                    inner: Box::new(self.apply(inner)),
-                }
-            }
+            Type::RawPointer { mutable, inner } => Type::RawPointer {
+                mutable: *mutable,
+                inner: Box::new(self.apply(inner)),
+            },
 
             // Recursively apply to function parameter and return types
-            Type::Function { params, ret } => {
-                Type::Function {
-                    params: params.iter().map(|t| self.apply(t)).collect(),
-                    ret: Box::new(self.apply(ret)),
-                }
-            }
+            Type::Function { params, ret } => Type::Function {
+                params: params.iter().map(|t| self.apply(t)).collect(),
+                ret: Box::new(self.apply(ret)),
+            },
 
             // Other types are left unchanged
             other => other.clone(),
@@ -141,8 +133,7 @@ impl Substitution {
             Type::RawPointer { inner, .. } => self.occurs_check(var, inner),
 
             Type::Function { params, ret } => {
-                params.iter().any(|t| self.occurs_check(var, t))
-                    || self.occurs_check(var, ret)
+                params.iter().any(|t| self.occurs_check(var, t)) || self.occurs_check(var, ret)
             }
 
             _ => false,
@@ -255,10 +246,7 @@ mod tests {
         subst.bind(TypeVar(0), Type::I32).unwrap();
         subst.bind(TypeVar(1), Type::Bool).unwrap();
 
-        let tuple = Type::Tuple(vec![
-            Type::Variable(TypeVar(0)),
-            Type::Variable(TypeVar(1)),
-        ]);
+        let tuple = Type::Tuple(vec![Type::Variable(TypeVar(0)), Type::Variable(TypeVar(1))]);
 
         let result = subst.apply(&tuple);
         assert_eq!(result, Type::Tuple(vec![Type::I32, Type::Bool]));
@@ -500,9 +488,6 @@ mod tests {
 
         let subst2 = subst1.clone();
 
-        assert_eq!(
-            subst2.apply(&Type::Variable(TypeVar(0))),
-            Type::I32
-        );
+        assert_eq!(subst2.apply(&Type::Variable(TypeVar(0))), Type::I32);
     }
 }

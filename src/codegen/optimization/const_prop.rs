@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,9 +15,7 @@ impl ConstantValue {
             (ConstantValue::Integer(a), ConstantValue::Integer(b)) => {
                 Some(ConstantValue::Integer(a + b))
             }
-            (ConstantValue::Float(a), ConstantValue::Float(b)) => {
-                Some(ConstantValue::Float(a + b))
-            }
+            (ConstantValue::Float(a), ConstantValue::Float(b)) => Some(ConstantValue::Float(a + b)),
             _ => None,
         }
     }
@@ -28,9 +25,7 @@ impl ConstantValue {
             (ConstantValue::Integer(a), ConstantValue::Integer(b)) => {
                 Some(ConstantValue::Integer(a - b))
             }
-            (ConstantValue::Float(a), ConstantValue::Float(b)) => {
-                Some(ConstantValue::Float(a - b))
-            }
+            (ConstantValue::Float(a), ConstantValue::Float(b)) => Some(ConstantValue::Float(a - b)),
             _ => None,
         }
     }
@@ -40,9 +35,7 @@ impl ConstantValue {
             (ConstantValue::Integer(a), ConstantValue::Integer(b)) => {
                 Some(ConstantValue::Integer(a * b))
             }
-            (ConstantValue::Float(a), ConstantValue::Float(b)) => {
-                Some(ConstantValue::Float(a * b))
-            }
+            (ConstantValue::Float(a), ConstantValue::Float(b)) => Some(ConstantValue::Float(a * b)),
             _ => None,
         }
     }
@@ -210,8 +203,7 @@ impl ConstantPropagator {
             let right = parts[assign_idx + 3];
 
             if let Some(result) = self.fold_binary_op(left, op, right) {
-                self.constants
-                    .insert(var_name.to_string(), result.clone());
+                self.constants.insert(var_name.to_string(), result.clone());
                 return Some(format!("{} = {}", var_name, result.to_string()));
             }
         }
@@ -256,10 +248,7 @@ mod tests {
     fn test_propagator_register() {
         let mut prop = ConstantPropagator::new();
         prop.register_constant("x".to_string(), ConstantValue::Integer(42));
-        assert_eq!(
-            prop.get_constant("x"),
-            Some(ConstantValue::Integer(42))
-        );
+        assert_eq!(prop.get_constant("x"), Some(ConstantValue::Integer(42)));
     }
 
     #[test]

@@ -4,11 +4,13 @@
 //!
 //! ## Components:
 //! - **Lifetime tracking** (lifetimes.rs): Lifetime variables, constraints, elision rules
+//! - **Lifetime elision** (lifetime_elision.rs): Automatic lifetime inference
 //! - **Scope management** (scopes.rs): Lexical scope tracking and binding visibility
 //! - **Borrow checking** (mod.rs): Ownership, move semantics, reference validation
 //!
 //! ## What we do:
 //! - Lifetime representation and inference
+//! - Lifetime elision (automatic lifetime inference)
 //! - Ownership tracking (each value has one owner)
 //! - Borrow analysis (multiple immutable or one mutable)
 //! - Use-after-move detection
@@ -18,33 +20,42 @@
 //!
 //! ## Algorithm:
 //! 1. Register all lifetime parameters and create fresh lifetimes
-//! 2. Build scope hierarchy as we traverse the program
-//! 3. Track moves and borrows through each scope
-//! 4. Verify no value is used after move
-//! 5. Verify no multiple mutable borrows of same value
-//! 6. Verify all borrows respect their lifetime constraints
+//! 2. Apply lifetime elision rules where appropriate
+//! 3. Build scope hierarchy as we traverse the program
+//! 4. Track moves and borrows through each scope
+//! 5. Verify no value is used after move
+//! 6. Verify no multiple mutable borrows of same value
+//! 7. Verify all borrows respect their lifetime constraints
 
-pub mod lifetimes;
-pub mod scopes;
-pub mod nll;
 pub mod function_lifetimes;
-pub mod struct_lifetimes;
-pub mod self_lifetimes;
 pub mod impl_lifetimes;
 pub mod interior_mutability;
-pub mod smart_pointers;
-pub mod reference_cycles;
+pub mod lifetime_elision;
 pub mod lifetime_solver;
+pub mod lifetime_validation;
+pub mod lifetimes;
+pub mod loop_ownership;
+pub mod nll;
+pub mod reference_cycles;
+pub mod scopes;
+pub mod self_lifetimes;
+pub mod smart_pointers;
+pub mod struct_lifetimes;
 pub mod unsafe_checking;
 pub mod unsafe_checking_enhanced;
-pub mod lifetime_validation;
-pub mod loop_ownership;
 
-pub use lifetimes::{Lifetime, LifetimeContext, LifetimeConstraint, LifetimeId, LifetimeElision};
-pub use scopes::{Scope, ScopeId, ScopeStack, ScopeBinding};
-pub use nll::{BorrowTracker, Location, BorrowId, UsageAnalyzer, BorrowInfo};
-pub use lifetime_validation::{LifetimeValidator, FunctionLifetimeValidator, StructLifetimeValidator};
-pub use impl_lifetimes::{SelfKind, ImplMethodValidator, ImplLifetimeError, MethodLifetimeLocation};
+pub use impl_lifetimes::{
+    ImplLifetimeError, ImplMethodValidator, MethodLifetimeLocation, SelfKind,
+};
+pub use lifetime_elision::{
+    ElisionResult, ElisionRule, LifetimeElisionAnalyzer, LifetimeElisionConfig,
+};
+pub use lifetime_validation::{
+    FunctionLifetimeValidator, LifetimeValidator, StructLifetimeValidator,
+};
+pub use lifetimes::{Lifetime, LifetimeConstraint, LifetimeContext, LifetimeElision, LifetimeId};
+pub use nll::{BorrowId, BorrowInfo, BorrowTracker, Location, UsageAnalyzer};
+pub use scopes::{Scope, ScopeBinding, ScopeId, ScopeStack};
 
 use crate::lowering::{HirExpression, HirItem, HirStatement, HirType};
 use std::collections::HashMap;
@@ -252,7 +263,10 @@ impl BorrowEnv {
     pub fn move_binding(&mut self, name: &str) -> BorrowCheckResult<()> {
         // Check if binding exists
         if !self.scopes.contains(name) {
-            return Err(BorrowCheckError::simple(format!("Undefined variable: {}", name)));
+            return Err(BorrowCheckError::simple(format!(
+                "Undefined variable: {}",
+                name
+            )));
         }
 
         // Check current state
@@ -264,18 +278,28 @@ impl BorrowEnv {
 
         match current_state {
             OwnershipState::Moved => {
-                return Err(BorrowCheckError::simple(format!("Value {} used after move", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Value {} used after move",
+                    name
+                )));
             }
             OwnershipState::BorrowedMutable => {
-                return Err(BorrowCheckError::simple(format!("Cannot move borrowed value {}", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot move borrowed value {}",
+                    name
+                )));
             }
             OwnershipState::BorrowedImmutable => {
-                return Err(BorrowCheckError::simple(format!("Cannot move borrowed value {}", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot move borrowed value {}",
+                    name
+                )));
             }
             _ => {}
         }
 
-        self.ownership_states.insert(name.to_string(), OwnershipState::Moved);
+        self.ownership_states
+            .insert(name.to_string(), OwnershipState::Moved);
         Ok(())
     }
 
@@ -283,7 +307,10 @@ impl BorrowEnv {
     pub fn borrow_immutable(&mut self, name: &str) -> BorrowCheckResult<()> {
         // Check if binding exists
         if !self.scopes.contains(name) {
-            return Err(BorrowCheckError::simple(format!("Undefined variable: {}", name)));
+            return Err(BorrowCheckError::simple(format!(
+                "Undefined variable: {}",
+                name
+            )));
         }
 
         // Check current state
@@ -295,10 +322,16 @@ impl BorrowEnv {
 
         match current_state {
             OwnershipState::Moved => {
-                return Err(BorrowCheckError::simple(format!("Cannot borrow moved value {}", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot borrow moved value {}",
+                    name
+                )));
             }
             OwnershipState::BorrowedMutable => {
-                return Err(BorrowCheckError::simple(format!("Cannot immutably borrow mutably borrowed value {}", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot immutably borrow mutably borrowed value {}",
+                    name
+                )));
             }
             _ => {}
         }
@@ -312,16 +345,23 @@ impl BorrowEnv {
     pub fn borrow_mutable(&mut self, name: &str) -> BorrowCheckResult<()> {
         // Check if binding exists
         if !self.scopes.contains(name) {
-            return Err(BorrowCheckError::simple(format!("Undefined variable: {}", name)));
+            return Err(BorrowCheckError::simple(format!(
+                "Undefined variable: {}",
+                name
+            )));
         }
 
         // Get the binding info
-        let scope_binding = self.scopes.lookup(name).ok_or_else(|| {
-            BorrowCheckError::simple(format!("Undefined variable: {}", name))
-        })?;
+        let scope_binding = self
+            .scopes
+            .lookup(name)
+            .ok_or_else(|| BorrowCheckError::simple(format!("Undefined variable: {}", name)))?;
 
         if !scope_binding.is_mutable {
-            return Err(BorrowCheckError::simple(format!("Cannot create mutable borrow of immutable value {}", name)));
+            return Err(BorrowCheckError::simple(format!(
+                "Cannot create mutable borrow of immutable value {}",
+                name
+            )));
         }
 
         // Check current state
@@ -333,7 +373,10 @@ impl BorrowEnv {
 
         match current_state {
             OwnershipState::Moved => {
-                return Err(BorrowCheckError::simple(format!("Cannot borrow moved value {}", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot borrow moved value {}",
+                    name
+                )));
             }
             OwnershipState::BorrowedImmutable => {
                 return Err(BorrowCheckError::simple(format!(
@@ -342,7 +385,10 @@ impl BorrowEnv {
                 )));
             }
             OwnershipState::BorrowedMutable => {
-                return Err(BorrowCheckError::simple(format!("Cannot create multiple mutable borrows of {}", name)));
+                return Err(BorrowCheckError::simple(format!(
+                    "Cannot create multiple mutable borrows of {}",
+                    name
+                )));
             }
             _ => {}
         }
@@ -370,17 +416,14 @@ impl BorrowChecker {
     pub fn check_items(&mut self, items: &[HirItem]) -> BorrowCheckResult<()> {
         for item in items {
             match item {
-                HirItem::Function {
-                    params,
-                    body,
-                    ..
-                } => {
+                HirItem::Function { params, body, .. } => {
                     // Create new scope for function
                     self.env.push_scope();
 
                     // Bind parameters
                     for (param_name, param_type) in params {
-                        self.env.bind(param_name.clone(), param_type.clone(), false)?;
+                        self.env
+                            .bind(param_name.clone(), param_type.clone(), false)?;
                     }
 
                     // Check function body
@@ -389,26 +432,19 @@ impl BorrowChecker {
                     // Pop function scope
                     self.env.pop_scope();
                 }
-                HirItem::Struct { .. } => {
-                }
+                HirItem::Struct { .. } => {}
                 HirItem::Module { items, .. } => {
                     self.check_items(items)?;
                 }
-                HirItem::Const { .. } => {
-                }
-                HirItem::Static { .. } => {
-                }
-                HirItem::AssociatedType { .. } => {
-                }
-                HirItem::Use { .. } => {
-                }
+                HirItem::Const { .. } => {}
+                HirItem::Static { .. } => {}
+                HirItem::AssociatedType { .. } => {}
+                HirItem::Use { .. } => {}
                 HirItem::Impl { methods, .. } => {
                     self.check_items(methods)?;
                 }
-                HirItem::Enum { .. } => {
-                }
-                HirItem::Trait { .. } => {
-                }
+                HirItem::Enum { .. } => {}
+                HirItem::Trait { .. } => {}
             }
         }
         Ok(())
@@ -425,7 +461,12 @@ impl BorrowChecker {
     /// Check a single statement
     fn check_statement(&mut self, stmt: &HirStatement) -> BorrowCheckResult<()> {
         match stmt {
-            HirStatement::Let { name, mutable, ty, init } => {
+            HirStatement::Let {
+                name,
+                mutable,
+                ty,
+                init,
+            } => {
                 // Check the right-hand side expression
                 self.check_expression(init)?;
 
@@ -452,35 +493,28 @@ impl BorrowChecker {
                 // Continue statements don't need borrow checking
             }
 
-            HirStatement::For {
-                var,
-                iter,
-                body,
-            } => {
+            HirStatement::For { var, iter, body } => {
                 // Check the iterator expression
                 self.check_expression(iter)?;
-                
+
                 // Bind the loop variable with proper ownership tracking
                 // The loop variable is immutable by default unless declared with mut
                 self.env.push_scope();
                 self.env.bind(var.clone(), HirType::Unknown, false)?;
-                
+
                 // Check the body with the loop variable in scope
                 for stmt in body {
                     self.check_statement(stmt)?;
                 }
-                
+
                 // Loop variable goes out of scope after loop
                 self.env.pop_scope();
             }
 
-            HirStatement::While {
-                condition,
-                body,
-            } => {
+            HirStatement::While { condition, body } => {
                 // Check the condition expression
                 self.check_expression(condition)?;
-                
+
                 // Check the body
                 for stmt in body {
                     self.check_statement(stmt)?;
@@ -494,12 +528,12 @@ impl BorrowChecker {
             } => {
                 // Check the condition expression
                 self.check_expression(condition)?;
-                
+
                 // Check the then body
                 for stmt in then_body {
                     self.check_statement(stmt)?;
                 }
-                
+
                 // Check the else body if present
                 if let Some(else_stmts) = else_body {
                     for stmt in else_stmts {
@@ -532,7 +566,10 @@ impl BorrowChecker {
                 // Reading a variable - check it hasn't been moved
                 if let Some(binding) = self.env.lookup(name) {
                     if binding.state == OwnershipState::Moved {
-                        return Err(BorrowCheckError::simple(format!("Value {} used after move", name)));
+                        return Err(BorrowCheckError::simple(format!(
+                            "Value {} used after move",
+                            name
+                        )));
                     }
                 }
                 Ok(())
@@ -681,6 +718,17 @@ impl BorrowChecker {
             }
 
             HirExpression::Try { value } => {
+                self.check_expression(value)?;
+                Ok(())
+            }
+
+            HirExpression::AsyncBlock(_) => {
+                // Async blocks create futures - no specific borrow checks needed here
+                Ok(())
+            }
+
+            HirExpression::Await { value } => {
+                // Await expressions - check the future being awaited
                 self.check_expression(value)?;
                 Ok(())
             }

@@ -1,12 +1,12 @@
 [package]
 name = "gaiarusted"
-version = "0.8.0"
+version = "1.1.8"
 edition = "2021"
-description = "A complete Rust compiler implementation built from scratch with advanced features"
+description = "A Rust compiler written in Rust: from source to x86-64 Linux executables, with no dependencies"
 license = "MIT"
 repository = "https://github.com/Mazigaming/GaiaRusted"
 readme = "README.md"
-keywords = ["compiler", "rust", "codegen", "pattern-matching", "modules"]
+keywords = ["compiler", "rust", "x86-64", "codegen", "optimizer"]
 categories = ["development-tools::compiler"]
 
 [lib]

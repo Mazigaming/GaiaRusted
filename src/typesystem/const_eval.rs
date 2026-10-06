@@ -31,8 +31,8 @@
 //! ).ok();
 //! ```
 
-use std::collections::HashMap;
 use crate::typesystem::types::Type;
+use std::collections::HashMap;
 
 /// Configuration for const evaluation
 #[derive(Debug, Clone)]
@@ -161,10 +161,7 @@ impl ConstEvaluator {
             }
             Type::U32 => {
                 if value < 0 {
-                    return Err(format!(
-                        "Const value {} cannot be negative for u32",
-                        value
-                    ));
+                    return Err(format!("Const value {} cannot be negative for u32", value));
                 }
                 if value > u32::MAX as i64 {
                     return Err(format!(
@@ -176,10 +173,7 @@ impl ConstEvaluator {
             }
             Type::U64 => {
                 if value < 0 {
-                    return Err(format!(
-                        "Const value {} cannot be negative for u64",
-                        value
-                    ));
+                    return Err(format!("Const value {} cannot be negative for u64", value));
                 }
             }
             _ => {
@@ -372,7 +366,11 @@ impl ConstEvaluator {
                 if pos > 0 && !self.is_in_parens(expr, pos) {
                     let left = self.parse_expression(&expr[..pos], depth + 1)?;
                     let right = self.parse_expression(&expr[pos + 1..], depth + 1)?;
-                    return Ok(if *op == "+" { left + right } else { left - right });
+                    return Ok(if *op == "+" {
+                        left + right
+                    } else {
+                        left - right
+                    });
                 }
 
                 if pos == 0 {
@@ -707,11 +705,7 @@ mod tests {
     #[test]
     fn test_register_const_value() {
         let mut eval = create_test_evaluator();
-        let result = eval.register_const_value(
-            "ANSWER".to_string(),
-            Type::I32,
-            "42",
-        );
+        let result = eval.register_const_value("ANSWER".to_string(), Type::I32, "42");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
         assert!(eval.has_const_value("ANSWER"));
@@ -720,7 +714,8 @@ mod tests {
     #[test]
     fn test_const_value_reference() {
         let mut eval = create_test_evaluator();
-        eval.register_const_value("X".to_string(), Type::I64, "10").ok();
+        eval.register_const_value("X".to_string(), Type::I64, "10")
+            .ok();
         let result = eval.evaluate_expression("X");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 10);
@@ -729,7 +724,8 @@ mod tests {
     #[test]
     fn test_duplicate_const_value() {
         let mut eval = create_test_evaluator();
-        eval.register_const_value("X".to_string(), Type::I64, "10").ok();
+        eval.register_const_value("X".to_string(), Type::I64, "10")
+            .ok();
         let result = eval.register_const_value("X".to_string(), Type::I64, "20");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("already defined"));
@@ -795,11 +791,7 @@ mod tests {
     fn test_i32_type_overflow() {
         let mut eval = create_test_evaluator();
         let large = (i32::MAX as i64) + 1;
-        let result = eval.register_const_value(
-            "LARGE".to_string(),
-            Type::I32,
-            &large.to_string(),
-        );
+        let result = eval.register_const_value("LARGE".to_string(), Type::I32, &large.to_string());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("doesn't fit in i32 range"));
     }
@@ -807,11 +799,7 @@ mod tests {
     #[test]
     fn test_u32_negative() {
         let mut eval = create_test_evaluator();
-        let result = eval.register_const_value(
-            "NEG".to_string(),
-            Type::U32,
-            "-5",
-        );
+        let result = eval.register_const_value("NEG".to_string(), Type::U32, "-5");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot be negative"));
     }
@@ -819,13 +807,10 @@ mod tests {
     #[test]
     fn test_generate_report() {
         let mut eval = create_test_evaluator();
-        eval.register_const_value("X".to_string(), Type::I64, "42").ok();
-        eval.register_const_fn(
-            "f".to_string(),
-            vec![],
-            Type::I64,
-            "1".to_string(),
-        ).ok();
+        eval.register_const_value("X".to_string(), Type::I64, "42")
+            .ok();
+        eval.register_const_fn("f".to_string(), vec![], Type::I64, "1".to_string())
+            .ok();
         eval.add_warning("test".to_string());
 
         let report = eval.generate_report();

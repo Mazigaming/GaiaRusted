@@ -1,3 +1,4 @@
+use crate::mir::{BasicBlock, MirFunction};
 /// Interprocedural Escape Analysis for v0.13.0
 ///
 /// Extends escape analysis across function boundaries to track:
@@ -5,9 +6,7 @@
 /// - Which return values escape
 /// - Which fields of structs escape
 /// - Flow-sensitive escape information
-
 use std::collections::{HashMap, HashSet};
-use crate::mir::{BasicBlock, MirFunction};
 
 /// Tracks escape information for a function signature
 #[derive(Debug, Clone)]

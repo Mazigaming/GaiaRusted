@@ -11,8 +11,8 @@
 //! - unify(X, i32) + unify(X, f64) → Error (contradiction)
 //! - unify(X, [X]) → Error (occurs check prevents infinite types)
 
-use super::types::{Type, TypeVar};
 use super::substitution::Substitution;
+use super::types::{Type, TypeVar};
 
 /// Performs unification of types using Robinson's algorithm
 pub struct UnificationEngine {
@@ -45,7 +45,7 @@ impl UnificationEngine {
         lt2: &Option<super::types::Lifetime>,
     ) -> Result<(), String> {
         use super::types::Lifetime;
-        
+
         match (lt1, lt2) {
             // Both lifetimes are missing (elided)
             (None, None) => Ok(()),
@@ -100,32 +100,32 @@ impl UnificationEngine {
             }
         }
     }
-    
+
     /// Check if a numeric type can be widened to another numeric type
-    /// 
+    ///
     /// Widening allows smaller types to be converted to larger types:
     /// - i8, i16, i32 can widen to i64, isize
     /// - u8, u16, u32 can widen to u64, usize
     /// - f32 can widen to f64
-    /// 
+    ///
     /// Returns Some(widened_type) if widening is possible, None otherwise
     fn can_widen(from: &Type, to: &Type) -> Option<Type> {
         use Type::*;
-        
+
         match (from, to) {
             // Integer widening rules
             (I8, I16) | (I8, I32) | (I8, I64) | (I8, Isize) => Some(to.clone()),
             (I16, I32) | (I16, I64) | (I16, Isize) => Some(to.clone()),
             (I32, I64) | (I32, Isize) => Some(to.clone()),
-            
+
             // Unsigned integer widening rules
             (U8, U16) | (U8, U32) | (U8, U64) | (U8, Usize) => Some(to.clone()),
             (U16, U32) | (U16, U64) | (U16, Usize) => Some(to.clone()),
             (U32, U64) | (U32, Usize) => Some(to.clone()),
-            
+
             // Float widening rules
             (F32, F64) => Some(to.clone()),
-            
+
             // Cross-category conversions are not allowed
             _ => None,
         }
@@ -177,9 +177,7 @@ impl UnificationEngine {
 
             // Variable unification: bind variable to type
             (Type::Variable(v1), Type::Variable(v2)) if v1 == v2 => Ok(()),
-            (Type::Variable(v), t) | (t, Type::Variable(v)) => {
-                subst.bind(*v, t.clone())
-            }
+            (Type::Variable(v), t) | (t, Type::Variable(v)) => subst.bind(*v, t.clone()),
 
             // Tuple unification: must have same length and unify elements
             (Type::Tuple(tys1), Type::Tuple(tys2)) => {
@@ -209,10 +207,7 @@ impl UnificationEngine {
                 },
             ) => {
                 if s1 != s2 {
-                    return Err(format!(
-                        "Array size mismatch: expected {}, got {}",
-                        s1, s2
-                    ));
+                    return Err(format!("Array size mismatch: expected {}, got {}", s1, s2));
                 }
                 self.unify(e1, e2, subst)
             }
@@ -237,10 +232,10 @@ impl UnificationEngine {
                         if *m2 { "mut" } else { "const" }
                     ));
                 }
-                
+
                 // Lifetime unification: proper Rust lifetime rules
                 self.unify_lifetimes(lt1, lt2)?;
-                
+
                 // Unify inner types (covariant in the inner type for references)
                 self.unify(i1, i2, subst)
             }
@@ -268,8 +263,14 @@ impl UnificationEngine {
 
             // Function type unification: parameter count and types must match
             (
-                Type::Function { params: p1, ret: r1 },
-                Type::Function { params: p2, ret: r2 },
+                Type::Function {
+                    params: p1,
+                    ret: r1,
+                },
+                Type::Function {
+                    params: p2,
+                    ret: r2,
+                },
             ) => {
                 if p1.len() != p2.len() {
                     return Err(format!(
@@ -364,13 +365,13 @@ mod tests {
 
         // Test various widening scenarios
         assert!(engine.unify(&Type::I8, &Type::I32, &mut subst).is_ok());
-        
+
         let mut subst = Substitution::new();
         assert!(engine.unify(&Type::I16, &Type::I64, &mut subst).is_ok());
-        
+
         let mut subst = Substitution::new();
         assert!(engine.unify(&Type::U32, &Type::U64, &mut subst).is_ok());
-        
+
         let mut subst = Substitution::new();
         assert!(engine.unify(&Type::F32, &Type::F64, &mut subst).is_ok());
     }
@@ -383,11 +384,11 @@ mod tests {
         // Cross-category conversions should still fail
         let result = engine.unify(&Type::I32, &Type::U32, &mut subst);
         assert!(result.is_err());
-        
+
         let mut subst = Substitution::new();
         let result = engine.unify(&Type::F32, &Type::I32, &mut subst);
         assert!(result.is_err());
-        
+
         let mut subst = Substitution::new();
         let result = engine.unify(&Type::Bool, &Type::I32, &mut subst);
         assert!(result.is_err());
@@ -403,10 +404,7 @@ mod tests {
             .unify(&Type::Variable(var), &Type::I32, &mut subst)
             .unwrap();
 
-        assert_eq!(
-            subst.apply(&Type::Variable(var)),
-            Type::I32
-        );
+        assert_eq!(subst.apply(&Type::Variable(var)), Type::I32);
     }
 
     #[test]
@@ -419,10 +417,7 @@ mod tests {
             .unify(&Type::I32, &Type::Variable(var), &mut subst)
             .unwrap();
 
-        assert_eq!(
-            subst.apply(&Type::Variable(var)),
-            Type::I32
-        );
+        assert_eq!(subst.apply(&Type::Variable(var)), Type::I32);
     }
 
     #[test]
@@ -508,10 +503,7 @@ mod tests {
         engine.unify(&tuple1, &tuple2, &mut subst).unwrap();
 
         // X should be bound to i32
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(0))),
-            Type::I32
-        );
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::I32);
     }
 
     #[test]
@@ -566,10 +558,7 @@ mod tests {
 
         engine.unify(&array1, &array2, &mut subst).unwrap();
 
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(0))),
-            Type::I32
-        );
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::I32);
     }
 
     #[test]
@@ -630,10 +619,7 @@ mod tests {
 
         engine.unify(&ref1, &ref2, &mut subst).unwrap();
 
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(0))),
-            Type::Bool
-        );
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::Bool);
     }
 
     #[test]
@@ -724,14 +710,8 @@ mod tests {
 
         engine.unify(&func1, &func2, &mut subst).unwrap();
 
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(0))),
-            Type::I32
-        );
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(1))),
-            Type::Str
-        );
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::I32);
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(1))), Type::Str);
     }
 
     #[test]
@@ -747,14 +727,8 @@ mod tests {
         let result = engine.unify_constraints(&constraints, &mut subst);
         assert!(result.is_ok());
 
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(0))),
-            Type::I32
-        );
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(1))),
-            Type::Bool
-        );
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::I32);
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(1))), Type::Bool);
     }
 
     #[test]
@@ -780,10 +754,7 @@ mod tests {
             element: Box::new(Type::Reference {
                 lifetime: None,
                 mutable: false,
-                inner: Box::new(Type::Tuple(vec![
-                    Type::Variable(TypeVar(0)),
-                    Type::Bool,
-                ])),
+                inner: Box::new(Type::Tuple(vec![Type::Variable(TypeVar(0)), Type::Bool])),
             }),
             size: 5,
         };
@@ -799,10 +770,7 @@ mod tests {
 
         engine.unify(&complex1, &complex2, &mut subst).unwrap();
 
-        assert_eq!(
-            subst.apply(&Type::Variable(TypeVar(0))),
-            Type::I32
-        );
+        assert_eq!(subst.apply(&Type::Variable(TypeVar(0))), Type::I32);
     }
 
     #[test]

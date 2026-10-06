@@ -28,40 +28,40 @@ type ObjectResult<T> = Result<T, ObjectError>;
 /// ELF file header
 #[derive(Debug, Clone)]
 pub struct ElfHeader {
-    pub magic: [u8; 4],           // 0x7f, 'E', 'L', 'F'
-    pub class: u8,                 // 1 = 32-bit, 2 = 64-bit
-    pub data: u8,                  // 1 = little-endian, 2 = big-endian
-    pub version: u8,               // 1 = current version
-    pub os_abi: u8,                // 0 = System V ABI
-    pub abi_version: u8,           // 0
-    pub padding: [u8; 7],          // Unused
-    pub e_type: u16,               // 1 = relocatable, 2 = executable, 3 = shared
-    pub e_machine: u16,            // 62 = x86-64
-    pub e_version: u32,            // 1
-    pub e_entry: u64,              // Entry point (0 for .o files)
-    pub e_phoff: u64,              // Program header offset (0 for .o files)
-    pub e_shoff: u64,              // Section header offset
-    pub e_flags: u32,              // Flags (0 for x86-64)
-    pub e_ehsize: u16,             // ELF header size
-    pub e_phentsize: u16,          // Program header entry size (0 for .o files)
-    pub e_phnum: u16,              // Program header count (0 for .o files)
-    pub e_shentsize: u16,          // Section header entry size
-    pub e_shnum: u16,              // Section header count
-    pub e_shstrndx: u16,           // String table section index
+    pub magic: [u8; 4],   // 0x7f, 'E', 'L', 'F'
+    pub class: u8,        // 1 = 32-bit, 2 = 64-bit
+    pub data: u8,         // 1 = little-endian, 2 = big-endian
+    pub version: u8,      // 1 = current version
+    pub os_abi: u8,       // 0 = System V ABI
+    pub abi_version: u8,  // 0
+    pub padding: [u8; 7], // Unused
+    pub e_type: u16,      // 1 = relocatable, 2 = executable, 3 = shared
+    pub e_machine: u16,   // 62 = x86-64
+    pub e_version: u32,   // 1
+    pub e_entry: u64,     // Entry point (0 for .o files)
+    pub e_phoff: u64,     // Program header offset (0 for .o files)
+    pub e_shoff: u64,     // Section header offset
+    pub e_flags: u32,     // Flags (0 for x86-64)
+    pub e_ehsize: u16,    // ELF header size
+    pub e_phentsize: u16, // Program header entry size (0 for .o files)
+    pub e_phnum: u16,     // Program header count (0 for .o files)
+    pub e_shentsize: u16, // Section header entry size
+    pub e_shnum: u16,     // Section header count
+    pub e_shstrndx: u16,  // String table section index
 }
 
 impl Default for ElfHeader {
     fn default() -> Self {
         ElfHeader {
             magic: [0x7f, b'E', b'L', b'F'],
-            class: 2,              // 64-bit
-            data: 1,               // Little-endian
+            class: 2, // 64-bit
+            data: 1,  // Little-endian
             version: 1,
-            os_abi: 0,             // System V ABI
+            os_abi: 0, // System V ABI
             abi_version: 0,
             padding: [0; 7],
-            e_type: 1,             // Relocatable
-            e_machine: 62,         // x86-64
+            e_type: 1,     // Relocatable
+            e_machine: 62, // x86-64
             e_version: 1,
             e_entry: 0,
             e_phoff: 0,
@@ -81,7 +81,7 @@ impl ElfHeader {
     /// Serialize header to bytes
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(64);
-        
+
         // e_ident (16 bytes)
         bytes.extend_from_slice(&self.magic);
         bytes.push(self.class);
@@ -90,44 +90,44 @@ impl ElfHeader {
         bytes.push(self.os_abi);
         bytes.push(self.abi_version);
         bytes.extend_from_slice(&self.padding);
-        
+
         // e_type, e_machine (4 bytes)
         bytes.extend_from_slice(&self.e_type.to_le_bytes());
         bytes.extend_from_slice(&self.e_machine.to_le_bytes());
-        
+
         // e_version (4 bytes)
         bytes.extend_from_slice(&self.e_version.to_le_bytes());
-        
+
         // e_entry (8 bytes)
         bytes.extend_from_slice(&self.e_entry.to_le_bytes());
-        
+
         // e_phoff (8 bytes)
         bytes.extend_from_slice(&self.e_phoff.to_le_bytes());
-        
+
         // e_shoff (8 bytes)
         bytes.extend_from_slice(&self.e_shoff.to_le_bytes());
-        
+
         // e_flags (4 bytes)
         bytes.extend_from_slice(&self.e_flags.to_le_bytes());
-        
+
         // e_ehsize (2 bytes)
         bytes.extend_from_slice(&self.e_ehsize.to_le_bytes());
-        
+
         // e_phentsize (2 bytes)
         bytes.extend_from_slice(&self.e_phentsize.to_le_bytes());
-        
+
         // e_phnum (2 bytes)
         bytes.extend_from_slice(&self.e_phnum.to_le_bytes());
-        
+
         // e_shentsize (2 bytes)
         bytes.extend_from_slice(&self.e_shentsize.to_le_bytes());
-        
+
         // e_shnum (2 bytes)
         bytes.extend_from_slice(&self.e_shnum.to_le_bytes());
-        
+
         // e_shstrndx (2 bytes)
         bytes.extend_from_slice(&self.e_shstrndx.to_le_bytes());
-        
+
         bytes
     }
 }
@@ -138,9 +138,9 @@ pub struct Symbol {
     pub name: String,
     pub value: u64,
     pub size: u64,
-    pub bind: u8,  // 0 = local, 1 = global, 2 = weak
+    pub bind: u8,     // 0 = local, 1 = global, 2 = weak
     pub sym_type: u8, // 0 = notype, 1 = object, 2 = func, 3 = section
-    pub shndx: u16,  // Section index
+    pub shndx: u16,   // Section index
 }
 
 /// Object file builder
@@ -166,7 +166,15 @@ impl ObjectBuilder {
     }
 
     /// Add a symbol
-    pub fn add_symbol(&mut self, name: String, value: u64, size: u64, bind: u8, sym_type: u8, shndx: u16) {
+    pub fn add_symbol(
+        &mut self,
+        name: String,
+        value: u64,
+        size: u64,
+        bind: u8,
+        sym_type: u8,
+        shndx: u16,
+    ) {
         self.symbols.push(Symbol {
             name,
             value,
@@ -199,12 +207,12 @@ pub fn generate_assembly_file(assembly: &str) -> ObjectResult<String> {
 
 /// Link assembly file using system assembler and linker
 pub fn link_assembly(asm_file: &str, output: &str) -> ObjectResult<()> {
-    use std::process::Command;
     use std::path::Path;
+    use std::process::Command;
 
     // Step 1: Assemble .s file to .o file
     let obj_file = asm_file.replace(".s", ".o");
-    
+
     let assemble_status = Command::new("as")
         .arg("-o")
         .arg(&obj_file)
@@ -213,7 +221,7 @@ pub fn link_assembly(asm_file: &str, output: &str) -> ObjectResult<()> {
         .map_err(|e| ObjectError {
             message: format!("Failed to run assembler (as): {}", e),
         })?;
-    
+
     if !assemble_status.success() {
         return Err(ObjectError {
             message: format!("Assembly failed with status: {}", assemble_status),
@@ -225,13 +233,13 @@ pub fn link_assembly(asm_file: &str, output: &str) -> ObjectResult<()> {
         .arg("-o")
         .arg(output)
         .arg(&obj_file)
-        .arg("-lc")      // Link with C library
-        .arg("-lm")      // Link with math library (must come after object file)
+        .arg("-lc") // Link with C library
+        .arg("-lm") // Link with math library (must come after object file)
         .status()
         .map_err(|e| ObjectError {
             message: format!("Failed to run linker (gcc): {}", e),
         })?;
-    
+
     if !link_status.success() {
         return Err(ObjectError {
             message: format!("Linking failed with status: {}", link_status),
@@ -270,7 +278,7 @@ mod tests {
             name: "main".to_string(),
             value: 0,
             size: 100,
-            bind: 1, // global
+            bind: 1,     // global
             sym_type: 2, // function
             shndx: 1,
         };

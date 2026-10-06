@@ -89,40 +89,38 @@ impl ConstantFolder {
         right: &ConstValue,
     ) -> Result<Option<ConstValue>, OptimizationError> {
         match (left, right) {
-            (ConstValue::Integer(l), ConstValue::Integer(r)) => {
-                match op {
-                    "+" => Ok(Some(ConstValue::Integer(l + r))),
-                    "-" => Ok(Some(ConstValue::Integer(l - r))),
-                    "*" => Ok(Some(ConstValue::Integer(l * r))),
-                    "/" => {
-                        if *r == 0 {
-                            Ok(None)
-                        } else {
-                            Ok(Some(ConstValue::Integer(l / r)))
-                        }
+            (ConstValue::Integer(l), ConstValue::Integer(r)) => match op {
+                "+" => Ok(Some(ConstValue::Integer(l + r))),
+                "-" => Ok(Some(ConstValue::Integer(l - r))),
+                "*" => Ok(Some(ConstValue::Integer(l * r))),
+                "/" => {
+                    if *r == 0 {
+                        Ok(None)
+                    } else {
+                        Ok(Some(ConstValue::Integer(l / r)))
                     }
-                    "%" => {
-                        if *r == 0 {
-                            Ok(None)
-                        } else {
-                            Ok(Some(ConstValue::Integer(l % r)))
-                        }
-                    }
-                    "==" => Ok(Some(ConstValue::Boolean(l == r))),
-                    "!=" => Ok(Some(ConstValue::Boolean(l != r))),
-                    "<" => Ok(Some(ConstValue::Boolean(l < r))),
-                    "<=" => Ok(Some(ConstValue::Boolean(l <= r))),
-                    ">" => Ok(Some(ConstValue::Boolean(l > r))),
-                    ">=" => Ok(Some(ConstValue::Boolean(l >= r))),
-                    "&" => Ok(Some(ConstValue::Integer(l & r))),
-                    "|" => Ok(Some(ConstValue::Integer(l | r))),
-                    "^" => Ok(Some(ConstValue::Integer(l ^ r))),
-                    _ => Err(OptimizationError::InvalidOptimization(format!(
-                        "Unknown operator: {}",
-                        op
-                    ))),
                 }
-            }
+                "%" => {
+                    if *r == 0 {
+                        Ok(None)
+                    } else {
+                        Ok(Some(ConstValue::Integer(l % r)))
+                    }
+                }
+                "==" => Ok(Some(ConstValue::Boolean(l == r))),
+                "!=" => Ok(Some(ConstValue::Boolean(l != r))),
+                "<" => Ok(Some(ConstValue::Boolean(l < r))),
+                "<=" => Ok(Some(ConstValue::Boolean(l <= r))),
+                ">" => Ok(Some(ConstValue::Boolean(l > r))),
+                ">=" => Ok(Some(ConstValue::Boolean(l >= r))),
+                "&" => Ok(Some(ConstValue::Integer(l & r))),
+                "|" => Ok(Some(ConstValue::Integer(l | r))),
+                "^" => Ok(Some(ConstValue::Integer(l ^ r))),
+                _ => Err(OptimizationError::InvalidOptimization(format!(
+                    "Unknown operator: {}",
+                    op
+                ))),
+            },
             (ConstValue::Float(l), ConstValue::Float(r)) => match op {
                 "+" => Ok(Some(ConstValue::Float(l + r))),
                 "-" => Ok(Some(ConstValue::Float(l - r))),
@@ -350,10 +348,7 @@ impl Optimizer {
         self.stats
     }
 
-    pub fn optimize_expression(
-        &mut self,
-        expr: &str,
-    ) -> Result<(String, bool), OptimizationError> {
+    pub fn optimize_expression(&mut self, expr: &str) -> Result<(String, bool), OptimizationError> {
         let mut optimized = expr.to_string();
         let mut changed = false;
 
@@ -483,9 +478,7 @@ mod tests {
     #[test]
     fn test_fold_unary_negation() {
         let folder = ConstantFolder::new();
-        let result = folder
-            .fold_unary_op("-", &ConstValue::Integer(5))
-            .unwrap();
+        let result = folder.fold_unary_op("-", &ConstValue::Integer(5)).unwrap();
         assert_eq!(result, Some(ConstValue::Integer(-5)));
     }
 
@@ -526,22 +519,14 @@ mod tests {
     #[test]
     fn test_function_inliner() {
         let mut inliner = FunctionInliner::new(100);
-        inliner.register_function(
-            "small_func".to_string(),
-            50,
-            "x + 1".to_string(),
-        );
+        inliner.register_function("small_func".to_string(), 50, "x + 1".to_string());
         assert!(inliner.should_inline("small_func"));
     }
 
     #[test]
     fn test_function_inliner_large() {
         let mut inliner = FunctionInliner::new(100);
-        inliner.register_function(
-            "large_func".to_string(),
-            200,
-            "complex code".to_string(),
-        );
+        inliner.register_function("large_func".to_string(), 200, "complex code".to_string());
         assert!(!inliner.should_inline("large_func"));
     }
 

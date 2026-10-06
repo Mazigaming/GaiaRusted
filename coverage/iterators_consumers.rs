@@ -1,0 +1,37 @@
+use std::collections::HashMap;
+fn main() {
+    let v = vec![4, 8, 15, 16, 23, 42];
+    println!("{} {} {}", v.iter().sum::<i32>(), v.iter().product::<i32>() % 1000, v.iter().count());
+    println!("{:?} {:?}", v.iter().min(), v.iter().max());
+    println!("{}", v.iter().fold(0, |acc, x| acc * 2 + x));
+    println!("{} {}", v.iter().any(|&x| x > 40), v.iter().all(|&x| x > 0));
+    println!("{:?} {:?}", v.iter().position(|&x| x == 16), v.iter().find(|&&x| x > 10));
+    println!("{:?} {:?}", v.iter().last(), v.iter().nth(2));
+    let words = ["apple", "fig", "banana", "kiwi"];
+    println!("{:?} {:?}", words.iter().min_by_key(|w| w.len()), words.iter().max_by_key(|w| w.len()));
+    println!("{:?}", words.iter().max_by(|a, b| a.cmp(b)));
+    let (even, odd): (Vec<i32>, Vec<i32>) = v.iter().partition(|&&x| x % 2 == 0);
+    println!("{:?} {:?}", even, odd);
+    let (a, b): (Vec<i32>, Vec<char>) = vec![(1, 'a'), (2, 'b')].into_iter().unzip();
+    println!("{:?} {:?}", a, b);
+    let m: HashMap<&str, usize> = words.iter().map(|w| (*w, w.len())).collect();
+    println!("{}", m["banana"]);
+    let s: String = words.iter().map(|w| &w[..1]).collect();
+    println!("{}", s);
+    println!("{:?}", v.iter().reduce(|a, b| if a > b { a } else { b }));
+    println!("{}", (1..=10).filter(|x| x % 2 == 0).map(|x| x * x).sum::<u64>());
+    let floats = [2.5, 1.5, 3.0];
+    println!("{:?}", floats.iter().cloned().fold(f64::MIN, f64::max));
+    println!("{}", floats.iter().sum::<f64>());
+    println!("{:?}", v.iter().rposition(|&x| x < 20));
+    println!("{}", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().concat());
+    let mut sorted = words.to_vec(); sorted.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+    println!("{:?}", sorted);
+    println!("{}", (1..=5).rev().map(|x| x.to_string()).collect::<String>());
+    println!("{:?}", v.iter().skip(1).step_by(2).copied().collect::<Vec<_>>());
+    println!("{}", v.iter().filter(|&&x| x > 10).count());
+    println!("{:?}", v.iter().min_by(|a, b| (*a % 5).cmp(&(*b % 5))));
+    println!("{}", v.iter().eq([4, 8, 15, 16, 23, 42].iter()));
+    println!("{:?}", "a b c".split(' ').collect::<Vec<_>>().len());
+    println!("{:?}", v.iter().sum::<i32>() as f64 / v.len() as f64);
+}

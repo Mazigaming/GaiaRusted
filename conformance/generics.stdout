@@ -1,0 +1,11 @@
+1 two 3.5
+Pair { first: 1, second: "one" } Pair { first: "one", second: 1 }
+true
+[1, 2, 3, 5, 8, 9] depth 3
+Some("c") 3
+18
+hi!!
+2 1
+7 none
+Some(None)
+Ok([1])

@@ -1,0 +1,69 @@
+-- scope order
+end of block
+drop y
+drop x
+-- moves
+consuming a
+drop a
+moved b to c: b
+-- temporaries
+drop temp
+after temp statement
+drop temp-len
+len 8
+drop underscore
+after underscore
+-- reassignment
+drop old
+reassigned to new
+-- struct fields
+drop wrapper w
+drop inner
+drop first
+drop second
+-- early return
+drop early-b
+drop early-a
+1
+drop early-c
+drop early-a
+2
+-- conditional move
+consuming cond
+drop cond
+end of iteration
+end of iteration
+drop cond
+-- options
+drop maybe
+true true
+unwrapped maybe
+drop maybe
+-- collections
+popped true
+drop v0
+removed
+leaving vec scope
+drop v2
+drop v1
+drop v3
+in box: boxed
+drop boxed
+visited iter0
+drop iter0
+drop iter1
+drop iter2
+after loop
+-- explicit drop and forget
+drop explicit
+after drop
+-- loop with break
+drop each
+drop each
+-- replace
+taken true
+end of main
+drop held
+drop refilled
+drop new
+drop b

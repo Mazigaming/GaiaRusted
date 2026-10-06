@@ -140,10 +140,7 @@ impl StringValue {
 
     /// Split the string by delimiter and return parts
     pub fn split(&self, delimiter: char) -> Vec<String> {
-        self.data
-            .split(delimiter)
-            .map(|s| s.to_string())
-            .collect()
+        self.data.split(delimiter).map(|s| s.to_string()).collect()
     }
 
     /// Replace all occurrences of a pattern with replacement
@@ -216,24 +213,39 @@ impl StringMethodRegistry {
 
         // Search methods
         methods.insert("contains".to_string(), "(&self, &str) -> bool".to_string());
-        methods.insert("starts_with".to_string(), "(&self, &str) -> bool".to_string());
+        methods.insert(
+            "starts_with".to_string(),
+            "(&self, &str) -> bool".to_string(),
+        );
         methods.insert("ends_with".to_string(), "(&self, &str) -> bool".to_string());
-        methods.insert("find".to_string(), "(&self, &str) -> Option<usize>".to_string());
+        methods.insert(
+            "find".to_string(),
+            "(&self, &str) -> Option<usize>".to_string(),
+        );
 
         // Transformation methods
         methods.insert("to_uppercase".to_string(), "(&self) -> String".to_string());
         methods.insert("to_lowercase".to_string(), "(&self) -> String".to_string());
         methods.insert("trim".to_string(), "(&self) -> String".to_string());
         methods.insert("reverse".to_string(), "(&self) -> String".to_string());
-        methods.insert("replace".to_string(), "(&self, &str, &str) -> String".to_string());
+        methods.insert(
+            "replace".to_string(),
+            "(&self, &str, &str) -> String".to_string(),
+        );
 
         // Splitting methods
-        methods.insert("split".to_string(), "(&self, char) -> Vec<String>".to_string());
+        methods.insert(
+            "split".to_string(),
+            "(&self, char) -> Vec<String>".to_string(),
+        );
 
         // Utility methods
         methods.insert("as_str".to_string(), "(&self) -> &str".to_string());
         methods.insert("is_whitespace".to_string(), "(&self) -> bool".to_string());
-        methods.insert("substring".to_string(), "(&self, usize, usize) -> Option<String>".to_string());
+        methods.insert(
+            "substring".to_string(),
+            "(&self, usize, usize) -> Option<String>".to_string(),
+        );
 
         methods
     }

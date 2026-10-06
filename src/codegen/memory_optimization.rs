@@ -1,13 +1,12 @@
+use crate::mir::{BasicBlock, Place, Statement, Terminator};
 /// Memory Optimization Module for GaiaRusted v0.12.0
-/// 
+///
 /// Implements advanced memory optimization techniques:
 /// - Escape analysis for stack vs heap allocation decisions
 /// - Reference counting optimization
 /// - Lifetime-based memory pool allocation
 /// - Data structure layout optimization
-
 use std::collections::{HashMap, HashSet};
-use crate::mir::{BasicBlock, Statement, Place, Terminator};
 
 /// Escape Analysis: Determines whether values can be safely stack-allocated
 #[derive(Debug, Clone)]
@@ -103,7 +102,7 @@ impl EscapeAnalysis {
                 }
             }
         }
-        
+
         // Analyze each found local
         for local_name in local_names {
             self.analyze_local(local_name, blocks);
@@ -320,7 +319,10 @@ impl RefCountOptimizer {
 
     /// Add a refcount operation to a chain
     pub fn add_operation(&mut self, local_idx: usize, op: RefCountOp) {
-        self.refcount_chains.entry(local_idx).or_insert_with(Vec::new).push(op);
+        self.refcount_chains
+            .entry(local_idx)
+            .or_insert_with(Vec::new)
+            .push(op);
     }
 
     /// Check if we can use move semantics instead of refcount
@@ -418,7 +420,10 @@ impl MemoryPoolAllocator {
                     offset: 0,
                 })
             } else {
-                Err(format!("Allocation {} exceeds pool size {}", size, pool.initial_size))
+                Err(format!(
+                    "Allocation {} exceeds pool size {}",
+                    size, pool.initial_size
+                ))
             }
         } else {
             Err(format!("Pool for scope {:?} not initialized", scope))
@@ -488,7 +493,7 @@ impl LayoutOptimizer {
     pub fn analyze_struct(&mut self, name: String, fields: Vec<FieldLayout>) {
         let current_size = fields.iter().map(|f| f.size).sum();
         let mut optimized_fields = fields.clone();
-        
+
         // Sort by alignment (largest first) for better packing
         optimized_fields.sort_by_key(|f| std::cmp::Reverse(f.alignment));
 
@@ -540,10 +545,12 @@ impl LayoutOptimizer {
         let total_saved: usize = self
             .layouts
             .values()
-            .map(|l| if l.current_size > l.optimized_size {
-                l.current_size - l.optimized_size
-            } else {
-                0
+            .map(|l| {
+                if l.current_size > l.optimized_size {
+                    l.current_size - l.optimized_size
+                } else {
+                    0
+                }
             })
             .sum();
 
@@ -576,8 +583,12 @@ mod tests {
     #[test]
     fn test_escape_status_transitions() {
         let mut ea = EscapeAnalysis::new(EscapeAnalysisConfig::default());
-        ea.escapes.insert("var".to_string(), EscapeStatus::DoesNotEscape);
-        assert_eq!(ea.get_escape_status("var"), Some(EscapeStatus::DoesNotEscape));
+        ea.escapes
+            .insert("var".to_string(), EscapeStatus::DoesNotEscape);
+        assert_eq!(
+            ea.get_escape_status("var"),
+            Some(EscapeStatus::DoesNotEscape)
+        );
         assert!(!ea.requires_heap("var"));
     }
 
@@ -586,7 +597,7 @@ mod tests {
         let mut opt = RefCountOptimizer::new(RefCountConfig::default());
         opt.add_operation(0, RefCountOp::Increment);
         opt.add_operation(0, RefCountOp::Decrement);
-        
+
         let result = opt.optimize_chains();
         assert_eq!(result.pairs_eliminated, 1);
     }
@@ -596,7 +607,7 @@ mod tests {
         let config = PoolConfig::default();
         let mut allocator = MemoryPoolAllocator::new(config);
         allocator.init_pool(LifetimeScope::Function);
-        
+
         let result = allocator.allocate(LifetimeScope::Function, 1024);
         assert!(result.is_ok());
     }
@@ -620,7 +631,7 @@ mod tests {
                 offset: 8,
             },
         ];
-        
+
         optimizer.analyze_struct("TestStruct".to_string(), fields);
         assert_eq!(optimizer.get_all_layouts().len(), 1);
     }
@@ -629,9 +640,11 @@ mod tests {
     fn test_allocation_report() {
         let config = EscapeAnalysisConfig::default();
         let mut ea = EscapeAnalysis::new(config);
-        ea.escapes.insert("stack_var".to_string(), EscapeStatus::DoesNotEscape);
-        ea.escapes.insert("heap_var".to_string(), EscapeStatus::EscapesToMemory);
-        
+        ea.escapes
+            .insert("stack_var".to_string(), EscapeStatus::DoesNotEscape);
+        ea.escapes
+            .insert("heap_var".to_string(), EscapeStatus::EscapesToMemory);
+
         let report = ea.report_allocations();
         assert_eq!(report.stack_candidates.len(), 1);
         assert_eq!(report.heap_required.len(), 1);

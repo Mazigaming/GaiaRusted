@@ -7,12 +7,12 @@ use std::collections::HashMap;
 /// SIMD vector type
 #[derive(Debug, Clone, PartialEq)]
 pub enum SIMDType {
-    Int8x16,  // 16x i8
-    Int16x8,  // 8x i16
-    Int32x4,  // 4x i32
-    Int64x2,  // 2x i64
-    Float32x4,  // 4x f32
-    Float64x2,  // 2x f64
+    Int8x16,   // 16x i8
+    Int16x8,   // 8x i16
+    Int32x4,   // 4x i32
+    Int64x2,   // 2x i64
+    Float32x4, // 4x f32
+    Float64x2, // 2x f64
 }
 
 impl std::fmt::Display for SIMDType {

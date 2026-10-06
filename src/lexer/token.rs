@@ -11,80 +11,80 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // Literals
-    Integer(i64, Option<String>),  // 42, 0xFF, 0b1010, 42u32, 100i64
-    Float(f64, Option<String>),    // 3.14, 3.14f64, 1.0f32
-    String(String),         // "hello"
-    RawString(String),      // r"hello" or r#"hello"#
-    Char(char),             // 'a'
-    ByteString(Vec<u8>),    // b"hello"
-    ByteChar(u8),           // b'a'
-    Lifetime(String),       // 'a, 'static, '_
+    Integer(i64, Option<String>), // 42, 0xFF, 0b1010, 42u32, 100i64
+    Float(f64, Option<String>),   // 3.14, 3.14f64, 1.0f32
+    String(String),               // "hello"
+    RawString(String),            // r"hello" or r#"hello"#
+    Char(char),                   // 'a'
+    ByteString(Vec<u8>),          // b"hello"
+    ByteChar(u8),                 // b'a'
+    Lifetime(String),             // 'a, 'static, '_
 
     // Keywords
     Keyword(Keyword),
 
     // Identifiers
     Identifier(String),
-    Metavariable(String),   // $x, $expr, $ty (for macros)
+    Metavariable(String), // $x, $expr, $ty (for macros)
 
     // Operators and Punctuation
-    Plus,                   // +
-    Minus,                  // -
-    Star,                   // *
-    Slash,                  // /
-    Percent,                // %
-    Equal,                  // =
-    EqualEqual,             // ==
-    NotEqual,               // !=
-    Less,                   // <
-    LessEqual,              // <=
-    Greater,                // >
-    GreaterEqual,           // >=
-    Ampersand,              // &
-    Pipe,                   // |
-    Caret,                  // ^
-    Bang,                   // !
-    Tilde,                  // ~
-    LeftShift,              // <<
-    RightShift,             // >>
-    AndAnd,                 // &&
-    OrOr,                   // ||
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Percent,      // %
+    Equal,        // =
+    EqualEqual,   // ==
+    NotEqual,     // !=
+    Less,         // <
+    LessEqual,    // <=
+    Greater,      // >
+    GreaterEqual, // >=
+    Ampersand,    // &
+    Pipe,         // |
+    Caret,        // ^
+    Bang,         // !
+    Tilde,        // ~
+    LeftShift,    // <<
+    RightShift,   // >>
+    AndAnd,       // &&
+    OrOr,         // ||
 
     // Compound assignment operators
-    PlusEqual,              // +=
-    MinusEqual,             // -=
-    StarEqual,              // *=
-    SlashEqual,             // /=
-    PercentEqual,           // %=
-    AmpersandEqual,         // &=
-    PipeEqual,              // |=
-    CaretEqual,             // ^=
-    LeftShiftEqual,         // <<=
-    RightShiftEqual,        // >>=
+    PlusEqual,       // +=
+    MinusEqual,      // -=
+    StarEqual,       // *=
+    SlashEqual,      // /=
+    PercentEqual,    // %=
+    AmpersandEqual,  // &=
+    PipeEqual,       // |=
+    CaretEqual,      // ^=
+    LeftShiftEqual,  // <<=
+    RightShiftEqual, // >>=
 
     // Delimiters
-    LeftParen,              // (
-    RightParen,             // )
-    LeftBrace,              // {
-    RightBrace,             // }
-    LeftBracket,            // [
-    RightBracket,           // ]
-    Semicolon,              // ;
-    Comma,                  // ,
-    Dot,                    // .
-    DotDot,                 // ..
-    DotDotEqual,            // ..=
-    DotDotDot,              // ...
-    Colon,                  // :
-    DoubleColon,            // ::
-    Arrow,                  // ->
-    FatArrow,               // =>
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+    Semicolon,    // ;
+    Comma,        // ,
+    Dot,          // .
+    DotDot,       // ..
+    DotDotEqual,  // ..=
+    DotDotDot,    // ...
+    Colon,        // :
+    DoubleColon,  // ::
+    Arrow,        // ->
+    FatArrow,     // =>
 
     // Special
-    At,                     // @
-    Hash,                   // #
-    Question,               // ?
-    Dollar,                 // $ (for macros)
+    At,       // @
+    Hash,     // #
+    Question, // ?
+    Dollar,   // $ (for macros)
 
     // End of file
     Eof,
@@ -136,7 +136,7 @@ pub enum Keyword {
     Extern,
 
     // Rust-specific
-    Self_,          // self (keyword, different from identifier)
+    Self_, // self (keyword, different from identifier)
     True,
     False,
     Null,
@@ -228,7 +228,9 @@ impl fmt::Display for Token {
             Token::String(s) => write!(f, "String(\"{}\")", s),
             Token::RawString(s) => write!(f, "RawString(r\"{}\")", s),
             Token::Char(c) => write!(f, "Char('{}')", c),
-            Token::ByteString(bytes) => write!(f, "ByteString(b\"{}\")", String::from_utf8_lossy(bytes)),
+            Token::ByteString(bytes) => {
+                write!(f, "ByteString(b\"{}\")", String::from_utf8_lossy(bytes))
+            }
             Token::ByteChar(b) => write!(f, "ByteChar(b'{}')", *b as char),
             Token::Lifetime(lt) => write!(f, "Lifetime('{}')", lt),
             Token::Keyword(kw) => write!(f, "Keyword({:?})", kw),

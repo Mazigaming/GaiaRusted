@@ -24,8 +24,8 @@
 //! - Resolution of Self::AssociatedType
 //! - Integration with generics and where clauses
 
+use crate::typesystem::types::{StructId, TraitId, Type};
 use std::collections::{HashMap, HashSet};
-use crate::typesystem::types::{Type, StructId, TraitId};
 
 /// Configuration for associated type analysis
 #[derive(Debug, Clone)]
@@ -167,8 +167,7 @@ impl AssociatedTypeAnalyzer {
         // If implementing a trait, validate all required associated types are provided
         if let Some(ref trait_name) = trait_name {
             if let Some(trait_info) = self.trait_types.get(trait_name) {
-                let provided_names: HashSet<_> =
-                    assignments.iter().map(|a| &a.name).collect();
+                let provided_names: HashSet<_> = assignments.iter().map(|a| &a.name).collect();
                 let required_names: HashSet<_> = trait_info
                     .associated_types
                     .iter()
@@ -280,10 +279,7 @@ impl AssociatedTypeAnalyzer {
     }
 
     /// Validate type bounds on associated types
-    pub fn validate_type_bounds(
-        &mut self,
-        impl_name: &str,
-    ) -> Result<(), String> {
+    pub fn validate_type_bounds(&mut self, impl_name: &str) -> Result<(), String> {
         if let Some(impl_info) = self.impl_assignments.get(impl_name) {
             if let Some(trait_name) = &impl_info.impl_trait_name {
                 if let Some(trait_info) = self.trait_types.get(trait_name) {
@@ -520,8 +516,7 @@ mod tests {
             )
             .unwrap();
 
-        let result =
-            analyzer.resolve_self_type("impl_Iterator_for_Vec", "Item");
+        let result = analyzer.resolve_self_type("impl_Iterator_for_Vec", "Item");
         assert!(result.is_ok());
 
         let resolved = result.unwrap();

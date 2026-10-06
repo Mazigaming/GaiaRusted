@@ -139,7 +139,7 @@ impl ScopeStack {
                 return;
             }
         };
-        
+
         let current_depth = self.scopes[&parent].depth + 1;
         let new_id = ScopeId(self.next_id);
         self.next_id += 1;
@@ -196,12 +196,8 @@ impl ScopeStack {
 
     /// Get all bindings in current scope
     pub fn current_bindings(&self) -> Option<Vec<&ScopeBinding>> {
-        self.current().map(|scope| {
-            scope
-                .bindings
-                .values()
-                .collect::<Vec<_>>()
-        })
+        self.current()
+            .map(|scope| scope.bindings.values().collect::<Vec<_>>())
     }
 
     /// Get current scope depth
@@ -250,12 +246,7 @@ mod tests {
     fn test_binding_addition() {
         let mut stack = ScopeStack::new();
         stack
-            .add_binding(
-                "x".to_string(),
-                HirType::Int32,
-                false,
-                None,
-            )
+            .add_binding("x".to_string(), HirType::Int32, false, None)
             .unwrap();
         assert!(stack.contains("x"));
     }
@@ -264,12 +255,7 @@ mod tests {
     fn test_binding_lookup_with_parent() {
         let mut stack = ScopeStack::new();
         stack
-            .add_binding(
-                "x".to_string(),
-                HirType::Int32,
-                false,
-                None,
-            )
+            .add_binding("x".to_string(), HirType::Int32, false, None)
             .unwrap();
 
         stack.push_scope();
@@ -277,12 +263,7 @@ mod tests {
         assert!(stack.contains("x"));
 
         stack
-            .add_binding(
-                "y".to_string(),
-                HirType::Bool,
-                true,
-                None,
-            )
+            .add_binding("y".to_string(), HirType::Bool, true, None)
             .unwrap();
         assert!(stack.contains("y"));
         assert!(stack.contains("x"));
@@ -293,12 +274,7 @@ mod tests {
         let mut stack = ScopeStack::new();
         stack.push_scope();
         stack
-            .add_binding(
-                "x".to_string(),
-                HirType::Int32,
-                false,
-                None,
-            )
+            .add_binding("x".to_string(), HirType::Int32, false, None)
             .unwrap();
 
         stack.pop_scope();
@@ -312,12 +288,7 @@ mod tests {
     fn test_mutable_binding_tracking() {
         let mut stack = ScopeStack::new();
         stack
-            .add_binding(
-                "x".to_string(),
-                HirType::Int32,
-                true,
-                None,
-            )
+            .add_binding("x".to_string(), HirType::Int32, true, None)
             .unwrap();
 
         let binding = stack.lookup("x").unwrap();
@@ -329,12 +300,7 @@ mod tests {
         let mut stack = ScopeStack::new();
         let lifetime = Some(Lifetime::Static);
         stack
-            .add_binding(
-                "s".to_string(),
-                HirType::String,
-                false,
-                lifetime.clone(),
-            )
+            .add_binding("s".to_string(), HirType::String, false, lifetime.clone())
             .unwrap();
 
         let binding = stack.lookup("s").unwrap();

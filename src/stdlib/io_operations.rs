@@ -1,7 +1,7 @@
-use std::fs::{File, OpenOptions, metadata, create_dir, remove_file, remove_dir};
-use std::io::{Read, Write, BufReader, BufWriter, Result as IoResult};
-use std::path::Path;
 use std::collections::HashMap;
+use std::fs::{create_dir, metadata, remove_dir, remove_file, File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Result as IoResult, Write};
+use std::path::Path;
 
 pub struct FileHandle {
     file: File,
@@ -24,13 +24,11 @@ impl FileHandle {
             FileMode::Read => File::open(path)?,
             FileMode::Write => File::create(path)?,
             FileMode::Append => OpenOptions::new().append(true).open(path)?,
-            FileMode::ReadWrite => {
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .open(path)?
-            }
+            FileMode::ReadWrite => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)?,
         };
 
         Ok(FileHandle {
@@ -106,10 +104,7 @@ impl FileSystem {
     }
 
     pub fn append_file<P: AsRef<Path>>(path: P, contents: &str) -> IoResult<()> {
-        let mut file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(path)?;
+        let mut file = OpenOptions::new().append(true).create(true).open(path)?;
         file.write_all(contents.as_bytes())?;
         Ok(())
     }
@@ -507,9 +502,10 @@ mod tests {
     fn test_async_file_operations() {
         let test_file = "test_async_ops.txt";
         FileSystem::write_file(test_file, "async content").ok();
-        
+
         let _async_read = async_io::AsyncFileRead::new(test_file.to_string());
-        let _async_write = async_io::AsyncFileWrite::new(test_file.to_string(), "new content".to_string());
+        let _async_write =
+            async_io::AsyncFileWrite::new(test_file.to_string(), "new content".to_string());
 
         assert!(FileSystem::file_exists(test_file));
 

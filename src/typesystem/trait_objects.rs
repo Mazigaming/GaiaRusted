@@ -42,7 +42,7 @@ impl DynTraitObject {
 /// Fat pointer for trait objects: [data_ptr: *const T, vtable_ptr: *const VTable]
 #[derive(Debug, Clone)]
 pub struct FatPointer {
-    pub data_type: String,      // The concrete type
+    pub data_type: String, // The concrete type
     pub trait_obj: DynTraitObject,
     pub is_mutable: bool,
 }

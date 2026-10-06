@@ -1,7 +1,7 @@
 //! Display source code context for errors (rustc style)
 //!
 //! Shows the actual source line with error pointers, matching rustc's error format:
-//! ```
+//! ```text
 //! error[E0308]: mismatched types
 //!   |
 //! 5 | let x: i32 = "hello";

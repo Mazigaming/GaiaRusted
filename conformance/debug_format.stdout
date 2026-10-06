@@ -1,0 +1,56 @@
+Outer { name: "o", inner: Inner { id: 1, tags: ["a", "b"] }, pair: (3, 1.5), maybe: Some(9), empty: [] }
+Outer {
+    name: "o",
+    inner: Inner {
+        id: 1,
+        tags: [
+            "a",
+            "b",
+        ],
+    },
+    pair: (
+        3,
+        1.5,
+    ),
+    maybe: Some(
+        9,
+    ),
+    empty: [],
+}
+[Dot, Circle(2.5), Rect { w: 2, h: 3 }, Group([Dot])]
+[
+    Dot,
+    Circle(
+        2.5,
+    ),
+    Rect {
+        w: 2,
+        h: 3,
+    },
+    Group(
+        [
+            Dot,
+        ],
+    ),
+]
+Unit Wrapper(4, "x") Wrapper(
+    5,
+    "y",
+)
+(
+    1,
+    "two",
+)
+(7,) Some(Some(()))
+{"key": [1, 2]}
+{
+    "key": [
+        1,
+        2,
+    ],
+}
+None Ok(
+    3,
+)
+[$0.05] [$12.34] [$0.99]
+[Some(     1)] ["ab"]

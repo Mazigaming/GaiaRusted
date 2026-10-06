@@ -3,7 +3,7 @@
 //! Tracks live ranges and calculates register needs for better allocation decisions.
 //! Determines when spilling is necessary and selects optimal spill candidates.
 
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A live range for a variable
 #[derive(Debug, Clone)]
@@ -145,7 +145,8 @@ impl RegisterPressureAnalyzer {
 
     /// Get variables live at a given instruction
     pub fn live_at(&self, instr: usize) -> Vec<String> {
-        self.live_ranges.iter()
+        self.live_ranges
+            .iter()
             .filter(|(_, range)| range.is_alive_at(instr))
             .map(|(name, _)| name.clone())
             .collect()
@@ -158,10 +159,7 @@ impl RegisterPressureAnalyzer {
 
     /// Get peak register pressure
     pub fn peak_pressure(&self) -> usize {
-        let max_instr = self.live_ranges.values()
-            .map(|r| r.end)
-            .max()
-            .unwrap_or(0);
+        let max_instr = self.live_ranges.values().map(|r| r.end).max().unwrap_or(0);
 
         (0..=max_instr)
             .map(|i| self.pressure_at(i))
@@ -224,11 +222,20 @@ impl RegisterPressureAnalyzer {
         let mut report = String::new();
         report.push_str(&format!("Register Pressure Analysis\n"));
         report.push_str(&format!("=========================\n"));
-        report.push_str(&format!("Peak pressure: {} registers\n", self.peak_pressure()));
+        report.push_str(&format!(
+            "Peak pressure: {} registers\n",
+            self.peak_pressure()
+        ));
         report.push_str(&format!("Available: {} registers\n", self.registers.len()));
-        report.push_str(&format!("Live ranges: {} variables\n", self.live_ranges.len()));
+        report.push_str(&format!(
+            "Live ranges: {} variables\n",
+            self.live_ranges.len()
+        ));
         report.push_str(&format!("Spilled: {} variables\n", self.stack_slots.len()));
-        report.push_str(&format!("Estimated spill code size: {} bytes\n", self.estimate_spill_code()));
+        report.push_str(&format!(
+            "Estimated spill code size: {} bytes\n",
+            self.estimate_spill_code()
+        ));
 
         report
     }
@@ -256,14 +263,16 @@ impl LiveRangeCalculator {
 
     /// Record a definition
     pub fn add_definition(&mut self, var: &str, instr_idx: usize) {
-        self.definitions.entry(var.to_string())
+        self.definitions
+            .entry(var.to_string())
             .or_insert_with(Vec::new)
             .push(instr_idx);
     }
 
     /// Record a use
     pub fn add_use(&mut self, var: &str, instr_idx: usize) {
-        self.uses.entry(var.to_string())
+        self.uses
+            .entry(var.to_string())
             .or_insert_with(Vec::new)
             .push(instr_idx);
     }
@@ -272,7 +281,9 @@ impl LiveRangeCalculator {
     pub fn calculate(&self) -> HashMap<String, LiveRange> {
         let mut ranges = HashMap::new();
 
-        let all_vars: HashSet<_> = self.definitions.keys()
+        let all_vars: HashSet<_> = self
+            .definitions
+            .keys()
             .chain(self.uses.keys())
             .cloned()
             .collect();
@@ -282,11 +293,15 @@ impl LiveRangeCalculator {
             let use_indices = self.uses.get(&var).cloned().unwrap_or_default();
 
             if !def_indices.is_empty() || !use_indices.is_empty() {
-                let start = def_indices.iter().chain(use_indices.iter())
+                let start = def_indices
+                    .iter()
+                    .chain(use_indices.iter())
                     .min()
                     .copied()
                     .unwrap_or(0);
-                let end = def_indices.iter().chain(use_indices.iter())
+                let end = def_indices
+                    .iter()
+                    .chain(use_indices.iter())
                     .max()
                     .copied()
                     .unwrap_or(0);

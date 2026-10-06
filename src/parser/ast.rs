@@ -173,17 +173,14 @@ pub enum GenericParam {
     /// Lifetime parameter: `'a`
     Lifetime(String),
     /// Const parameter: `const N: usize`
-    Const {
-        name: String,
-        ty: Type,
-    },
+    Const { name: String, ty: Type },
 }
 
 /// Macro rule for macro_rules!
 #[derive(Debug, Clone, PartialEq)]
 pub struct MacroRule {
-    pub pattern: String,  // Macro pattern (simplified)
-    pub body: String,     // Macro body (simplified)
+    pub pattern: String, // Macro pattern (simplified)
+    pub body: String,    // Macro body (simplified)
     // PHASE 5.2: Store actual macro rules for expansion if available
     pub actual_rule: Option<Box<crate::macros::MacroRule>>,
 }
@@ -216,7 +213,7 @@ pub enum EnumVariant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub statements: Vec<Statement>,
-    pub expression: Option<Box<Expression>>,  // Last expression (return value)
+    pub expression: Option<Box<Expression>>, // Last expression (return value)
 }
 
 /// A statement is an instruction that doesn't return a value (usually ends with ;)
@@ -238,7 +235,6 @@ pub enum Statement {
     /// Break statement: `break;` (in loops) - can optionally break with value
     Break(Option<Box<Expression>>),
     /// Continue statement: `continue;` (in loops)
-    
     // Macro invocation: `name!(args)` or `name!(a, b, c)`
     MacroInvocation {
         name: String,
@@ -465,7 +461,7 @@ pub enum Expression {
     Break(Option<Box<Expression>>),
 
     // Continue expression
-    
+
     // Macro invocation: `name!(args)` or `name!(a, b, c)`
     MacroInvocation {
         name: String,
@@ -533,32 +529,26 @@ pub enum Pattern {
 pub enum Type {
     /// Basic types: i32, i64, f64, bool, char, str
     Named(String),
-    
+
     /// Generic type: `Vec<T>`, `HashMap<K, V>`, etc.
-    Generic {
-        name: String,
-        type_args: Vec<Type>,
-    },
-    
+    Generic { name: String, type_args: Vec<Type> },
+
     /// Reference: `&T` or `&mut T` with optional lifetime `&'a T`
     Reference {
         lifetime: Option<String>,
         mutable: bool,
         inner: Box<Type>,
     },
-    
+
     /// Pointer: `*const T` or `*mut T` (for unsafe)
-    Pointer {
-        mutable: bool,
-        inner: Box<Type>,
-    },
-    
+    Pointer { mutable: bool, inner: Box<Type> },
+
     /// Array: `[T; size]`
     Array {
         element: Box<Type>,
         size: Option<Box<Expression>>, // None means slice
     },
-    
+
     /// Function type: `fn(T1, T2) -> R` or `unsafe fn()` or `extern "C" fn()`
     Function {
         params: Vec<Type>,
@@ -566,43 +556,38 @@ pub enum Type {
         is_unsafe: bool,
         abi: Option<String>, // "C", "Rust", etc.
     },
-    
+
     /// Tuple type: `(T1, T2)`
     Tuple(Vec<Type>),
-    
+
     /// Trait object: `dyn Trait` or `dyn Trait + 'a`
     TraitObject {
         bounds: Vec<String>,
         lifetime: Option<String>,
     },
-    
+
     /// Impl trait: `impl Trait` for return types
-    ImplTrait {
-        bounds: Vec<String>,
-    },
-    
+    ImplTrait { bounds: Vec<String> },
+
     /// Associated type: `T::AssocType`
-    AssociatedType {
-        ty: Box<Type>,
-        name: String,
-    },
-    
+    AssociatedType { ty: Box<Type>, name: String },
+
     /// Qualified path type: `<T as Trait>::Type`
     QualifiedPath {
         ty: Box<Type>,
         trait_name: String,
         name: String,
     },
-    
+
     /// Closure type (simplified)
     Closure {
         params: Vec<Type>,
         return_type: Box<Type>,
     },
-    
+
     /// Type parameter/variable: `T`, `U`, etc.
     TypeVar(String),
-    
+
     /// Never type: `!`
     Never,
 }
@@ -614,17 +599,25 @@ impl fmt::Display for Type {
             Type::Generic { name, type_args } => {
                 write!(f, "{}<", name)?;
                 for (i, arg) in type_args.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", arg)?;
                 }
                 write!(f, ">")
             }
-            Type::Reference { lifetime, mutable, inner } => {
+            Type::Reference {
+                lifetime,
+                mutable,
+                inner,
+            } => {
                 write!(f, "&")?;
                 if let Some(lt) = lifetime {
                     write!(f, "{} ", lt)?;
                 }
-                if *mutable { write!(f, "mut ")?; }
+                if *mutable {
+                    write!(f, "mut ")?;
+                }
                 write!(f, "{}", inner)
             }
             Type::Pointer { mutable, inner } => {
@@ -637,14 +630,23 @@ impl fmt::Display for Type {
                     write!(f, "[{}]", element)
                 }
             }
-            Type::Function { params, return_type, is_unsafe, abi } => {
-                if *is_unsafe { write!(f, "unsafe ")?; }
+            Type::Function {
+                params,
+                return_type,
+                is_unsafe,
+                abi,
+            } => {
+                if *is_unsafe {
+                    write!(f, "unsafe ")?;
+                }
                 if let Some(a) = abi {
                     write!(f, "extern \"{}\" ", a)?;
                 }
                 write!(f, "fn(")?;
                 for (i, param) in params.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", param)?;
                 }
                 write!(f, ") -> {}", return_type)
@@ -652,7 +654,9 @@ impl fmt::Display for Type {
             Type::Tuple(types) => {
                 write!(f, "(")?;
                 for (i, ty) in types.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", ty)?;
                 }
                 write!(f, ")")
@@ -665,7 +669,9 @@ impl fmt::Display for Type {
                     write!(f, " ")?;
                 }
                 for (i, bound) in bounds.iter().enumerate() {
-                    if i > 0 { write!(f, " +")?; }
+                    if i > 0 {
+                        write!(f, " +")?;
+                    }
                     write!(f, " {}", bound)?;
                 }
                 Ok(())
@@ -680,13 +686,22 @@ impl fmt::Display for Type {
             Type::AssociatedType { ty, name } => {
                 write!(f, "{}::{}", ty, name)
             }
-            Type::QualifiedPath { ty, trait_name, name } => {
+            Type::QualifiedPath {
+                ty,
+                trait_name,
+                name,
+            } => {
                 write!(f, "<{} as {}>::{}", ty, trait_name, name)
             }
-            Type::Closure { params, return_type } => {
+            Type::Closure {
+                params,
+                return_type,
+            } => {
                 write!(f, "fn(")?;
                 for (i, param) in params.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", param)?;
                 }
                 write!(f, ") -> {}", return_type)
@@ -709,23 +724,23 @@ pub struct Attribute {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     // Arithmetic
-    Add,        // +
-    Subtract,   // -
-    Multiply,   // *
-    Divide,     // /
-    Modulo,     // %
+    Add,      // +
+    Subtract, // -
+    Multiply, // *
+    Divide,   // /
+    Modulo,   // %
 
     // Comparison
-    Equal,      // ==
-    NotEqual,   // !=
-    Less,       // <
-    LessEq,     // <=
-    Greater,    // >
-    GreaterEq,  // >=
+    Equal,     // ==
+    NotEqual,  // !=
+    Less,      // <
+    LessEq,    // <=
+    Greater,   // >
+    GreaterEq, // >=
 
     // Logical
-    And,        // &&
-    Or,         // ||
+    And, // &&
+    Or,  // ||
 
     // Bitwise
     BitwiseAnd, // &
@@ -787,16 +802,16 @@ impl fmt::Display for UnaryOp {
 /// Compound assignment operators: `+=`, `-=`, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundOp {
-    AddAssign,       // +=
-    SubtractAssign,  // -=
-    MultiplyAssign,  // *=
-    DivideAssign,    // /=
-    ModuloAssign,    // %=
-    AndAssign,       // &=
-    OrAssign,        // |=
-    XorAssign,       // ^=
-    LeftShiftAssign, // <<=
-    RightShiftAssign,// >>=
+    AddAssign,        // +=
+    SubtractAssign,   // -=
+    MultiplyAssign,   // *=
+    DivideAssign,     // /=
+    ModuloAssign,     // %=
+    AndAssign,        // &=
+    OrAssign,         // |=
+    XorAssign,        // ^=
+    LeftShiftAssign,  // <<=
+    RightShiftAssign, // >>=
 }
 
 impl fmt::Display for CompoundOp {

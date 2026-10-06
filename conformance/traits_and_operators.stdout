@@ -1,0 +1,15 @@
+(2, 0) (1, 2) (-3, -2) Some(Greater) false
+7 1 [1, 0, 0, 0, 0, 7, 0, 0, 0]
+square with area 4.00
+shape with area 3.14
+<square> true
+["hello", "big", "world"] Some("hello")
+9 1.5 x
+Some(1)|None
+(3, 1)
+[1, 2, 3, 4, 5] 120
+12 12 -4
+[2, 2, 11]
+[Low, Mid, High] 5 High
+6
+["b", "a"] ["a", "b"]
